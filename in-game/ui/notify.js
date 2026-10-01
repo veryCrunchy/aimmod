@@ -162,7 +162,7 @@
   // client pixels) and the left button as AimModPointer(x, y, down, width, height). The button
   // under it gets a hover state and is pressed on release, like a click, unless Gameface's own
   // mouse events are arriving (then they do the clicking). Both are counted for the log.
-  var pointerState={hover:null,pressed:null,down:false},counts={gfMove:0,gfDown:0,gfClick:0,amMove:0,amDown:0,amClick:0},nativeDownAt=0,buying=false,debugNode=null,reportedAt=0,reported='';
+  var pointerState={hover:null,pressed:null,down:false},counts={gfMove:0,gfDown:0,gfClick:0,amMove:0,amDown:0,amClick:0,fileMove:0,fileClick:0},nativeDownAt=0,buying=false,debugNode=null,reportedAt=0,reported='';
   function hasClass(el,c){return (' '+el.className+' ').indexOf(' '+c+' ')>=0;}
   function addClass(el,c){if(!hasClass(el,c))el.className=(el.className?el.className+' ':'')+c;}
   function dropClass(el,c){el.className=(' '+el.className+' ').replace(' '+c+' ',' ').replace(/^\s+|\s+$/g,'');}
@@ -186,8 +186,36 @@
     }
     pointerState.down=!!down;debug();
   }
+  // The same pointer through the service (AimModCore's overlay-pointer.tsv), polled every 50 ms while
+  // buying, for when the direct event doesn't reach the page: the cursor for hover, and each new
+  // click by where it went down and up (a click between two polls isn't lost).
+  var pointerTimer=null,clickSeen=null;
+  function keyOf(el){return el?el.className.replace(' hover','')+'|'+el.textContent:null;}
+  function filePointer(text){
+    var lines=String(text||'').split('\n'),head=lines[0].split('\t');
+    if(head[0]!=='AIMMOD_POINTER_1'||head[1]!=='on'||counts.amMove>0)return;
+    var w=+head[5]||1,h=+head[6]||1,sx=(root.innerWidth||w)/w,sy=(root.innerHeight||h)/h;
+    counts.fileMove++;
+    var el=buttonAt(+head[2]*sx,+head[3]*sy);
+    if(el!==pointerState.hover){if(pointerState.hover)dropClass(pointerState.hover,'hover');pointerState.hover=el;if(el)addClass(el,'hover');}
+    var newest=clickSeen;
+    for(var i=1;i<lines.length;i++){
+      var c=lines[i].split('\t');if(c[0]!=='click')continue;var id=+c[1];
+      if(clickSeen===null){newest=Math.max(newest||0,id);continue;} // clicks from before the menu opened
+      if(id<=clickSeen)continue;newest=Math.max(newest,id);
+      var down=buttonAt(+c[2]*sx,+c[3]*sy),up=buttonAt(+c[4]*sx,+c[5]*sy);
+      if(down&&up&&keyOf(down)===keyOf(up)&&!up.disabled&&Date.now()-nativeDownAt>800&&typeof up.onclick==='function'){counts.fileClick++;up.onclick();}
+    }
+    clickSeen=newest===null?0:newest;debug();
+  }
+  function pointerPoll(){
+    pointerTimer=null;if(!buying||!root.setTimeout)return;
+    var x=new root.XMLHttpRequest();x.open('GET',base()+'/multiplayer-pointer',true);x.timeout=1000;
+    x.onreadystatechange=function(){if(x.readyState!==4)return;if(x.status===200)filePointer(x.responseText);if(buying&&!pointerTimer)pointerTimer=root.setTimeout(pointerPoll,50);};
+    x.send(null);
+  }
   function debug(){
-    var line='Gameface mouse '+counts.gfMove+' moves, '+counts.gfDown+' downs, '+counts.gfClick+' clicks; AimMod pointer '+counts.amMove+' updates, '+counts.amDown+' downs, '+counts.amClick+' presses';
+    var line='Gameface mouse '+counts.gfMove+' moves, '+counts.gfDown+' downs, '+counts.gfClick+' clicks; AimMod pointer '+counts.amMove+' updates, '+counts.amDown+' downs, '+counts.amClick+' presses; via service '+counts.fileMove+' updates, '+counts.fileClick+' presses';
     if(debugNode)debugNode.textContent=line;
     // Into the service log every few seconds while the buy menu is open, when it changed.
     if(buying&&line!==reported&&Date.now()-reportedAt>3000){reported=line;reportedAt=Date.now();
@@ -196,6 +224,7 @@
   function showDebug(on){
     buying=on;var body=root.document.body;
     if(on&&!debugNode&&body){debugNode=node('div','pointer-debug');body.appendChild(debugNode);debug();}
+    if(on&&!pointerTimer&&root.setTimeout){clickSeen=null;pointerTimer=root.setTimeout(pointerPoll,50);}
     if(!on&&debugNode){if(debugNode.parentNode)debugNode.parentNode.removeChild(debugNode);debugNode=null;}
   }
   if(root.engine&&root.engine.on)root.engine.on('AimModPointer',pointer);
@@ -212,5 +241,5 @@
     clearTimeout(timer);timer=setTimeout(poll,250);
   }
   poll();
-  root.AimModNotify={render:render,pointer:pointer};
+  root.AimModNotify={render:render,pointer:pointer,filePointer:filePointer};
 })(window);

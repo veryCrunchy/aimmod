@@ -58,7 +58,7 @@ function live(){
   vm.runInNewContext(fs.readFileSync(path.join(__dirname,'notify.js'),'utf8'),{window,setTimeout:f=>{next=f;return 1;},clearTimeout:()=>{}});
   // Answers the oldest poll, then lets the next one go out.
   const reply=(status,n)=>{const x=polls.shift();x.readyState=4;x.status=status;x.responseText=n?JSON.stringify(n):'';x.onreadystatechange();if(!polls.length&&next)next();};
-  return {render:window.AimModNotify.render,box,body,html,posts,reply,listeners,engineOn,buttons:()=>box.all().filter(e=>/\bbutton\b/.test(e.className))};
+  return {render:window.AimModNotify.render,filePointer:window.AimModNotify.filePointer,box,body,html,posts,reply,listeners,engineOn,buttons:()=>box.all().filter(e=>/\bbutton\b/.test(e.className))};
 }
 const failed={version:1,active:true,id:'lf-m1-1',kind:'invite',eyebrow:'AimMod · Match',title:'Couldn’t load the match (1/2)',body:'Synthetic Two: still loading.',layout:'toast',interactive:true,
   actions:[{label:'Retry',action:'retry-load',id:'m1'},{label:'Abort',action:'end',id:'m1'}]};
@@ -136,4 +136,20 @@ test('AimModCore\'s pointer fallback hovers and presses the button under the cur
   // Gameface's own click arrived: the fallback doesn't press a second time.
   n.listeners.mousedown();pointer(120,210,true,1920,1080);pointer(120,210,false,1920,1080);
   assert.equal(n.posts.filter(p=>p.action==='retry-load').length,1,'no double press');
+});
+test('the pointer relayed through the service hovers, replays new clicks once, and never replays clicks from before',()=>{
+  const n=live();n.render(failed);
+  const [retry]=n.buttons();retry.rect={left:100,top:200,right:180,bottom:232};
+  const fp=n.filePointer;
+  fp('AIMMOD_POINTER_1\ton\t120\t210\t0\t1920\t1080\nclick\t4\t120\t210\t120\t210\n');
+  assert.ok(/\bhover\b/.test(retry.className),'hover from the relayed cursor');
+  assert.equal(n.posts.filter(p=>p.action==='retry-load').length,0,'a click from before the menu opened is not replayed');
+  fp('AIMMOD_POINTER_1\ton\t120\t210\t0\t1920\t1080\nclick\t4\t120\t210\t120\t210\nclick\t5\t110\t205\t150\t220\n');
+  assert.equal(n.posts.filter(p=>p.action==='retry-load').length,1,'a new click down and up on Retry presses it');
+  fp('AIMMOD_POINTER_1\ton\t120\t210\t0\t1920\t1080\nclick\t5\t110\t205\t150\t220\n');
+  assert.equal(n.posts.filter(p=>p.action==='retry-load').length,1,'each click once');
+  fp('AIMMOD_POINTER_1\ton\t10\t10\t0\t1920\t1080\nclick\t6\t110\t205\t10\t10\n');
+  assert.equal(n.posts.filter(p=>p.action==='retry-load').length,1,'released elsewhere: nothing');
+  fp('AIMMOD_POINTER_1\toff\t0\t0\t0\t0\t0\nclick\t7\t110\t205\t150\t220\n');
+  assert.equal(n.posts.filter(p=>p.action==='retry-load').length,1,'off: ignored');
 });

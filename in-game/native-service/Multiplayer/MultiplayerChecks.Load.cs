@@ -353,6 +353,10 @@ static partial class MultiplayerChecks
             "Escape closes the buy menu (no cursor) and asks AimModNativeUI to close the pause menu it opened");
         Run(1600);
         Check(!Swallow(Notice()), "Only for a moment: a later Escape opens KovaaK's menu as usual");
+        File.WriteAllText(Path.Combine(output, "overlay-pointer.tsv"), "AIMMOD_POINTER_1\ton\t12\t34\t1\t1920\t1080\nclick\t1\t12\t34\t12\t34\n");
+        Check(service.PointerText().StartsWith("AIMMOD_POINTER_1\ton\t12\t34", StringComparison.Ordinal), "AimModCore's pointer file is relayed to the notify page");
+        File.WriteAllText(Path.Combine(output, "overlay-pointer.tsv"), "not a pointer file");
+        Check(service.PointerText() == "", "Anything else is not");
         service.Act("leave", default);
         Run(300);
         Check(!File.Exists(Path.Combine(game, "Saved", "SaveGames", "Scenarios", name + ".sce")) && File.Exists(Path.Combine(output, "match-debug", name + ".sce")),

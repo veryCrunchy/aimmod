@@ -1012,6 +1012,18 @@ sealed partial class MultiplayerService : IDisposable
         if (m.Phase is not (MatchPhases.Countdown or MatchPhases.Live) || m.Round > 1) return null;
         return new PlayView("play-" + key, playFlow.Value.Since);
     }
+    internal string PointerText()
+    {
+        if (outputFolder is null) return "";
+        try
+        {
+            var path = Path.Combine(outputFolder, "overlay-pointer.tsv");
+            if (!File.Exists(path) || new FileInfo(path).Length > 2048) return "";
+            var text = File.ReadAllText(path);
+            return text.StartsWith("AIMMOD_POINTER_1\t", StringComparison.Ordinal) ? text : "";
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return ""; }
+    }
     string NoticeJson(GameNotice? notice = null)
     {
         lock (gate)
@@ -2196,6 +2208,8 @@ sealed partial class MultiplayerService : IDisposable
         Developer.DeveloperEndpoints.Map(routes, prefix, new Developer.DeveloperMode(outputFolder), this, DevTools);
         // Read-only notice for the always-on in-game layer (notify.html).
         routes.MapGet(prefix + "/multiplayer-notify", () => Results.Content(NoticeJson(), "application/json"));
+        // AimModCore's overlay-pointer.tsv (the buy menu's mouse), relayed for the notify page.
+        routes.MapGet(prefix + "/multiplayer-pointer", () => Results.Content(PointerText(), "text/plain"));
         routes.MapPost(prefix + "/multiplayer", async (HttpRequest request, CancellationToken token) =>
         {
             if (request.Headers["X-AimMod-UI"] != "1") return Results.StatusCode(403);
