@@ -31,7 +31,7 @@ test('toggling patches one option with the UI header',()=>{
 test('failed save keeps previous values and allows retry',()=>{
   const s=setup();s.api.render(s.container);s.requests[0].finish(200,{settings:all,status:null});
   s.buttons()[0].onclick();s.requests[1].finish(500,{});
-  assert.equal(s.buttons()[0].textContent,'On');assert.ok(!s.buttons()[0].disabled);assert.match(s.container.text(),/Could not save/);
+  assert.equal(s.buttons()[0].textContent,'On');assert.ok(!s.buttons()[0].disabled);assert.match(s.container.text(),/Couldn’t save/);
 });
 test('malformed response and late responses are ignored',()=>{
   const s=setup();s.api.render(s.container);s.requests[0].finish(200,{settings:{discordPresenceEnabled:'yes'}});

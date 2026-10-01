@@ -39,7 +39,7 @@
     var p=settingsCard;if(!p)return;while(p.firstChild)p.removeChild(p.firstChild);
     p.appendChild(node('h2','','Developer mode'));
     var row=node('div','settings-row'),info=node('div','settings-info');
-    add(info,node('h3','','Developer tools'),node('p','subtle','Adds a Developer page to test multiplayer and in-game notices on your own, with simulated players. Never touches ranked runs.'));row.appendChild(info);
+    add(info,node('h3','','Developer tools'),node('p','subtle','Test multiplayer and notices with simulated players. Never touches ranked runs.'));row.appendChild(info);
     var on=!!(state&&state.enabled);row.appendChild(node('span','switch-state',on?'On':'Off'));
     row.appendChild(toggleSwitch(on,'Developer tools',function(){act({action:'enable',on:!on},function(){drawSettings();});}));
     p.appendChild(row);
@@ -73,7 +73,7 @@
     var st=state.status||{};var lobby=st.lobby;
     var row=node('div','dev-row');page.appendChild(row);var left=node('div','dev-col dev-main'),right=node('div','dev-col dev-side');row.appendChild(left);row.appendChild(right);
     // Simulated lobby
-    var sim=section('Simulated lobby','Play every lobby and match screen with simulated players. They ready up, chat, post scores and vote by themselves.');left.appendChild(sim.panel);
+    var sim=section('Simulated lobby','Simulated players ready up, chat, post scores and vote by themselves.');left.appendChild(sim.panel);
     var counts=[];for(var i=1;i<=7;i++)counts.push({id:i,label:String(i)});
     add(sim.body,add(node('div','dev-line'),node('span','dev-label','Simulated players'),segmented(counts,members,function(n){members=n;render();},'simulated players')));
     add(sim.body,add(node('div','dev-line'),node('span','dev-label','Mode'),segmented(MODES,mode,function(id){mode=id;render();},'mode')));
@@ -86,15 +86,15 @@
       sim.body.appendChild(actions([button('Open the lobby',openMultiplayer,'compact primary'),button('Leave the lobby',function(){act({action:'leave'});},'compact quiet danger')]));
     }
     // Notifications
-    var tr=section('Simulated tournament','A pretend AimMod Hub with an 8-player bracket and simulated opponents. Play it on the Tournaments page; nothing is sent to the Hub.');left.appendChild(tr.panel);
+    var tr=section('Simulated tournament','An 8-player bracket with simulated opponents, on the Tournaments page. Nothing is sent to the Hub.');left.appendChild(tr.panel);
     var tsim=state.tournament&&state.tournament.simulating;
     tr.body.appendChild(actions(tsim?[button('Advance the bracket',function(){act({action:'tournament',op:'sim-advance'});},'compact'),button('Opponent reports',function(){act({action:'tournament',op:'sim-opponent-reports'});},'compact'),button('End simulation',function(){act({action:'tournament',op:'sim-stop'});},'compact')]
       :[button('Simulate a tournament',function(){act({action:'tournament',op:'simulate'},function(ok){if(ok)toast('Open Tournaments to play your first match.');});},'compact')]));
-    var nt=section('In-game notices','Shows each notice in game, outside the AimMod panel, exactly like the real one.');left.appendChild(nt.panel);
+    var nt=section('In-game notices');left.appendChild(nt.panel);
     nt.body.appendChild(actions((state.notices||[]).map(function(k){return button(NOTICES[k]||k,function(){act({action:'notice',kind:k},function(ok){if(ok)toast('Sent. Close the AimMod panel to see it.');});},'compact');})));
     var tools=state.tools||{},replays=tools.replays||[],cam=state.camera;
     // Avatars
-    var av=section('Avatars','The bridge’s test avatar: circling you, or walking a recorded run’s path. Shoot it to test hits.');left.appendChild(av.panel);
+    var av=section('Avatars','Circles you or walks a recorded run’s path. Shoot it to test hits.');left.appendChild(av.panel);
     // One request per click: the button waits for the answer, and the service drops repeats.
     var av0=st.avatar;
     av.body.appendChild(node('p','dev-note',av0&&av0.on?'Test avatar on, '+(av0.mode==='path'?'walking a run’s path':'circling you')+(av0.look?', wearing '+av0.look:'')+'.':'Test avatar off.'+(drafts.scenario?' It spawns in '+drafts.scenario+'.':'')));
@@ -102,7 +102,7 @@
     if(tools.avatarPath)av.body.appendChild(node('p','dev-note','Path ready from a run of '+tools.avatarPath+'. Load that scenario in freeplay to see the avatar walk it.'));
     if(st.looks)add(av.body,add(node('div','dev-line'),node('span','dev-label','Your look'),segmented(st.looks.map(function(l){return {id:l.id,label:l.label};}),st.look,function(id){other('POST','/multiplayer',{action:'avatar',avatar:id},function(ok){if(ok)refreshSoon();});},'look')));
     // Replays: pick runs for the tools below.
-    var rp=section('Replays','Pick runs for run vs run, the avatar path and spectating a replay as if live.');left.appendChild(rp.panel);
+    var rp=section('Replays');left.appendChild(rp.panel);
     if(!replays.length)rp.body.appendChild(node('p','subtle','No recorded runs yet. Play a scenario with replay recording on.'));
     replays.slice(0,8).forEach(function(r){var line=node('div','dev-replay'+(r.id===replayA||r.id===replayB?' on':''));
       add(line,add(node('div','dev-replay-text'),node('strong','',r.scenario),node('span','',(F?F.relative(r.recordedAt):r.recordedAt)+' · '+r.seconds+' s')),
@@ -114,7 +114,7 @@
     if(rr.length)rp.body.appendChild(actions(rr));
     add(rp.body,add(node('div','dev-line'),input('importPath','Full path of a .amreplay file','dev-field dev-wide'),actions([button('Import',function(){act({action:'import',path:drafts.importPath},function(ok){if(ok){toast('Imported.');drafts.importPath='';}});},'compact')])));
     // Spectate loopback
-    var lp=section('Spectate yourself','Your own view, delayed, or a replay played as a live stream. Tests the spectator view, follow the leader and the HUD alone.');left.appendChild(lp.panel);
+    var lp=section('Spectate yourself','Your own view, delayed, or a replay as a live stream.');left.appendChild(lp.panel);
     add(lp.body,add(node('div','dev-line'),node('span','dev-label','Delay'),segmented([{id:1,label:'1 s'},{id:2,label:'2 s'},{id:3,label:'3 s'}],delay,function(d){delay=d;render();},'delay')));
     var lb=[button('Spectate yourself',function(){act({action:'loopback',source:'self',delay:delay});},'compact')];
     if(replayA)lb.push(button('Replay A as live',function(){act({action:'loopback',source:'replay',replay:replayA,delay:delay});},'compact'));
@@ -133,7 +133,7 @@
       button('Capture thumbnail',function(){if(!cam){toast('No camera yet: load a scenario first.');return;}gameCommand({action:'capture-thumbnail',scenario:drafts.scenario,width:1920,height:1080,out:'dev-capture.png',views:[{x:cam[0],y:cam[1],z:cam[2],pitch:cam[3],yaw:cam[4],fov:cam[6]||90}]},'Capture');},'compact quiet')]));
     if(game)gc.body.appendChild(node('p','dev-note','Capabilities: '+((game.capabilities||[]).join(', ')||'none')+(game.result?' · Last: '+game.result.state+' '+game.result.code+(game.result.message?' ('+String(game.result.message).slice(0,120)+')':''):'')));
     // Content and Workshop
-    var ct=section('Content transfer','Receive a scenario from a pretend host through the real transfer, into a scratch folder, with hash checks.');right.appendChild(ct.panel);
+    var ct=section('Content transfer','From a pretend host through the real transfer, into a scratch folder.');right.appendChild(ct.panel);
     add(ct.body,add(node('div','dev-line'),input('contentScenario','Scenario from your library','dev-field dev-wide')));
     ct.body.appendChild(actions([button('Receive it',function(){act({action:'content',scenario:drafts.contentScenario});},'compact primary'),button('Receive and fail on purpose',function(){act({action:'content',scenario:drafts.contentScenario,fail:true});},'compact')]));
     if(tools.content){var c=tools.content;ct.body.appendChild(node('p','dev-note',c.state+(c.total?' · '+Math.round(c.done*100/c.total)+'%':'')+(c.error?' · '+c.error:'')+(c.files&&c.files.length?' · '+c.files.map(function(f){return f.name;}).join(', '):'')));}
@@ -141,7 +141,7 @@
     add(ws.body,add(node('div','dev-line'),input('workshop','Title text','dev-field dev-wide'),actions([button('Search',function(){act({action:'workshop',text:drafts.workshop},function(ok){if(ok)toast('Asked. Results show in a moment.');});},'compact')])));
     (state.workshop||[]).slice(0,10).forEach(function(w){ws.body.appendChild(add(node('div','dev-status'),node('span','dev-label',w.port?'Port':'Other'),node('span','dev-value',w.title+' · '+Math.round(w.bytes/1048576)+' MB'+(w.installed?' · installed':'')+(w.needsUpdate?' · update':''))));});
     // Status
-    var sp=section('Status','What AimMod can reach right now.');right.appendChild(sp.panel);
+    var sp=section('Status');right.appendChild(sp.panel);
     function line(label,value,good){add(sp.body,add(node('div','dev-status'),node('span','dev-label',label),node('span','dev-value'+(good===true?' ok':good===false?' warn':''),value)));}
     line('Steam bridge',st.online?'Connected'+(st.bridge?' · '+st.bridge:''):'Not connected',!!st.online);
     line('Transport',st.transport||'none');

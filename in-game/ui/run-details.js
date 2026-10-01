@@ -72,7 +72,7 @@
     if(W&&W.openScenario&&run.Scenario){add(links,button('Scenario statistics',function(){W.openScenario(run.Scenario)}));linkCount++}
     if(linkCount)add(identity,links);
     var score=add(head,node('div',undefined,'run-score'));add(score,node('span','Score','metric-label'));add(score,node('strong',n(run.Score)));
-    if(data.MissingTelemetry)add(host,node('p','This score is saved in your history. Detailed telemetry was not recorded for this run.','notice run-notice'));
+    if(data.MissingTelemetry)add(host,node('p','No detailed telemetry was recorded for this run.','notice run-notice'));
     var tabs=add(host,node('div',undefined,'segmented run-tabbar'));tabs.setAttribute('role','tablist');[['summary','Summary'],['responses','Target responses'],['shots','Shots']].forEach(function(item){var b=add(tabs,button(item[1],function(){tab=item[0];render()},tab===item[0]));b.setAttribute('role','tab');b.setAttribute('aria-selected',String(tab===item[0]))});
     if(tab==='windows')tab='summary';
     if(tab==='summary'){
@@ -96,7 +96,7 @@
     }else if(tab==='shots'){
       var shots=data.Shots||[];text(host,n(data.ShotCount,0)+' recorded shot events. Times count from the first shot. A nearby target does not mean a hit.');
       if(!shots.length){add(host,node('div','No shot telemetry was recorded for this run.','empty'));return}
-      var sp=add(host,panel('Aim error at each shot'));legend(sp,[['Hit','#27e4a1'],['Other shot',COLORS.cyan]]);text(sp,'Horizontal distance from the nearest target in degrees. Closer to the middle line is closer to the target.');var sc=add(sp,node('canvas',undefined,'run-chart'));setTimeout(function(){shotChart(sc,shots)},0);
+      var sp=add(host,panel('Aim error at each shot'));legend(sp,[['Hit','#27e4a1'],['Other shot',COLORS.cyan]]);text(sp,'Horizontal distance from the nearest target, in degrees.');var sc=add(sp,node('canvas',undefined,'run-chart'));setTimeout(function(){shotChart(sc,shots)},0);
       table(host,[['Time',13,1],['Event',18],['Count',10,1],['Nearest target',25],['Distance',12,1],['Yaw error',11,1],['Pitch error',11,1]],shots.map(function(s){var target=(s.Targets||[]).filter(function(t){return t.Nearest})[0]||{};return [seconds(s.TimestampMs-(typeof data.FirstShotTimestampMs==='number'?data.FirstShotTimestampMs:s.TimestampMs)),label(s.Kind),n(s.Count,0),target.Label||'—',n(target.Distance),unit(target.YawErrorDegrees,'°'),unit(target.PitchErrorDegrees,'°')]}));
       var pages=Math.max(1,data.ShotPages||1);if(pages>1){var paging=add(host,node('div',undefined,'run-tabs run-pager'));var previous=add(paging,button('Previous',function(){page--;load()}));previous.disabled=data.ShotPage<=0;add(paging,node('span','Page '+((data.ShotPage||0)+1)+' of '+pages,'run-muted'));var next=add(paging,button('Next',function(){page++;load()}));next.disabled=(data.ShotPage||0)+1>=pages}
     }

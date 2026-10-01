@@ -30,7 +30,7 @@
   function draw(panel,message){
     while(panel.firstChild)panel.removeChild(panel.firstChild);
     panel.appendChild(node('h2','','Discord'));
-    panel.appendChild(node('p','subtle','Show your AimMod session on your Discord profile in place of KovaaK’s own status.'));
+    panel.appendChild(node('p','subtle','Replaces KovaaK’s own Discord status.'));
     if(message)panel.appendChild(node('p',message==='Saved.'?'saved-note':'notice warn',message));
     if(!value){var retryRow=node('div','actions'),retry=node('button','button primary','Try again');retry.type='button';retry.onclick=function(){load(panel);};retryRow.appendChild(retry);panel.appendChild(retryRow);return;}
     if(status&&states[status])panel.appendChild(node('p','subtle',states[status]));
@@ -41,17 +41,17 @@
       var row=node('div','settings-row'+(inactive?' disabled':'')),info=node('div','settings-info');info.appendChild(node('h3','',title));info.appendChild(node('p','subtle',description));row.appendChild(info);
       var on=value[key];row.appendChild(node('span','switch-state',on?'On':'Off'));
       var control=node('button','switch'+(on?' on':''),on?'On':'Off');control.type='button';control.setAttribute('role','switch');control.setAttribute('aria-checked',String(on));control.setAttribute('aria-label',title);control.appendChild(node('span','knob'));control.disabled=inactive;
-      control.onclick=function(){if(request||inactive)return;var patch={};patch[key]=!value[key];var controls=panel.querySelectorAll('button');for(var i=0;i<controls.length;i++)controls[i].disabled=true;send(patch,function(ok,data){if(ok)accept(data);draw(panel,ok?'Saved.':'Could not save your settings. Please try again.');});};
+      control.onclick=function(){if(request||inactive)return;var patch={};patch[key]=!value[key];var controls=panel.querySelectorAll('button');for(var i=0;i<controls.length;i++)controls[i].disabled=true;send(patch,function(ok,data){if(ok)accept(data);draw(panel,ok?'Saved.':'Couldn’t save. Try again.');});};
       row.appendChild(control);panel.appendChild(row);
     }
-    toggle('discordPresenceEnabled','Show AimMod on Discord','Your scenario, run timer and session progress. Turn this off to show KovaaK’s own status again.');
-    toggle('discordShowScore','Score and accuracy','Your live score and accuracy, and your last score after each run.');
-    toggle('discordShowPersonalBest','Personal best','Your PB for the scenario, your pace against it and a note when you beat it.');
-    toggle('discordShowHubButton','Hub profile button','A button to your AimMod Hub profile, shown while your account is linked.');
-    toggle('discordShowLobby','Lobby and match','Your lobby size and mode, and in a match the round and whether you’re leading.');
-    toggle('discordShowJoin','Join from Discord','Lets your Steam friends join your lobby from Discord. Shown while the lobby has room and isn’t invite only.');
+    toggle('discordPresenceEnabled','Show AimMod on Discord','Your scenario, run timer and session progress.');
+    toggle('discordShowScore','Score and accuracy','Your live score, and your last one after each run.');
+    toggle('discordShowPersonalBest','Personal best','Your PB, your pace against it, and when you beat it.');
+    toggle('discordShowHubButton','Hub profile button','Shown while your account is linked.');
+    toggle('discordShowLobby','Lobby and match','Lobby size and mode; in a match, the round and whether you lead.');
+    toggle('discordShowJoin','Join from Discord','Steam friends can join while your lobby has room and isn’t invite only.');
   }
-  function load(panel){send(null,function(ok,data){if(ok)accept(data);draw(panel,ok?'':'Could not load your Discord settings. Please try again.');});}
+  function load(panel){send(null,function(ok,data){if(ok)accept(data);draw(panel,ok?'':'Couldn’t load your Discord settings.');});}
   function render(container){
     leave();target=container;value=null;status=null;
     var panel=node('div','panel settings-card');panel.appendChild(node('p','subtle','Loading Discord settings…'));container.appendChild(panel);load(panel);

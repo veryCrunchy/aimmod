@@ -45,7 +45,7 @@
         metric(cards,m[1],measurementText(m,value.Average),number(value.Samples,0)+(value.Samples===1?' measured run':' measured runs')+(m[0]==='AverageSpeed'?' · 800 DPI baseline':''));});
     });
     if(!count)empty(container,'No movement or timing measurements in this selection yet. Try another scenario or a longer period.');
-    else empty(container,'Averages per run. Time to kill measures how long targets take to clear. Shot-to-hit intervals can include earlier misses, so they are not input latency.');
+    else empty(container,'Averages per run. Shot-to-hit intervals include earlier misses, so they aren’t input latency.');
     setTimeout(function(){var width=widthOf(container)-((container.className||'').indexOf('stats-panel')>=0?44:0);if(width<=0)return;var cols=width>=1050?4:width>=720?3:width>=430?2:1;
       grids.forEach(function(cards){var columns=width>=1400&&cards.children.length===5?5:cols;cards.style.width=width+'px';for(var i=0;i<cards.children.length;i++){var card=cards.children[i];card.style.width=Math.floor((width-(columns-1)*12)/columns)+'px';card.style.flex='none';card.style.marginRight=(i%columns===columns-1?'0':'12px');}});
     },0);
@@ -112,7 +112,7 @@
   function draw() {
     if (!root || !report || !report.Periods) return; root.textContent = '';
     var period = report.Periods.filter(function (p) { return p.Key === periodKey; })[0] || report.Periods[0];
-    if (!period) { var none = append(root, node('div', undefined, 'panel empty')); append(none, node('h3', 'No practice to show yet')); append(none, node('p', 'Complete a few runs and your trends will appear here, or import the runs already in your KovaaK’s stats folder.')); if (global.AimModWorkspace && global.AimModWorkspace.openImport) append(append(none, node('div', undefined, 'actions center')), button('Import past runs', function () { global.AimModWorkspace.openImport(); })); return; }
+    if (!period) { var none = append(root, node('div', undefined, 'panel empty')); append(none, node('h3', 'No practice to show yet')); append(none, node('p', 'Complete a few runs, or import your past runs.')); if (global.AimModWorkspace && global.AimModWorkspace.openImport) append(append(none, node('div', undefined, 'actions center')), button('Import past runs', function () { global.AimModWorkspace.openImport(); })); return; }
     var selected = runFilter==='warmup'&&period.Warmup?period.Warmup:runFilter==='settled'&&period.Settled?period.Settled:period.Selected;
     var toolbar = append(root, node('div', undefined, 'toolbar stats-toolbar'));
     var heading = append(toolbar, node('div', undefined, 'stats-heading')); append(heading, node('h2', selected && selected.Name || 'Choose a scenario'));
@@ -120,7 +120,7 @@
     if(period.Warmup&&period.Settled){var filters=append(toolbar,node('div',undefined,'segmented stats-filter'));[['all','All runs'],['warmup','Warm-up ('+period.Warmup.Runs+')'],['settled','Other runs ('+period.Settled.Runs+')']].forEach(function(f){var b=append(filters,button(f[1],function(){runFilter=f[0];draw();},runFilter===f[0]));b.setAttribute('aria-pressed',String(runFilter===f[0]));});}
     var periods = append(toolbar, node('div', undefined, 'segmented'));
     report.Periods.forEach(function (p) { var b = append(periods, button(p.Days ? p.Days + ' days' : 'All time', function () { periodKey = p.Key; draw(); }, p.Key === period.Key)); b.setAttribute('aria-pressed', String(p.Key === period.Key)); });
-    if(runFilter!=='all'&&period.Warmup)empty(root,'Warm-up runs are early, lower scores that recover later in the same session. This filter applies to this scenario’s analysis.');
+    if(runFilter!=='all'&&period.Warmup)empty(root,'Warm-up runs are early, lower scores that recover later in the same session.');
     if (!selected) { empty(root, 'Choose a scenario to see its score trend.'); return; }
     var availableMetrics=[['Score','Score'],['Accuracy','Accuracy'],['Smoothness','Control'],['Efficiency','Path'],['Jitter','Jitter'],['Correction','Correction']].concat(measures).filter(function(item){return (selected.Points||[]).some(function(p){return pointValue(p,item[0])!==null;});});
     if(!availableMetrics.some(function(item){return item[0]===chartMetric;}))chartMetric=availableMetrics.length?availableMetrics[0][0]:'Score';
@@ -157,14 +157,14 @@
     if(detailKey==='practice'){
     var calendar = period.Calendar || [], blockList = period.Blocks || [];
     var practice = append(details, panel('Practice days'));
-    if (!calendar.length) empty(practice, 'Your practice days will appear here after your first run.');
+    if (!calendar.length) empty(practice, 'No practice days yet.');
     else {
-      empty(practice, 'Each bar is one day you practised; taller bars mean more minutes. Shows up to your latest 366 active days.');
+      empty(practice, 'One bar per practice day; taller means more minutes.');
       var days = append(practice, node('div', undefined, 'stats-days')); var max = Math.max.apply(null, calendar.map(function (d) { return d.Minutes; })) || 1;
       calendar.forEach(function (d) { var bar = append(days, node('div', undefined, 'stats-day')); bar.style.height = Math.max(4, d.Minutes / max * 76) + 'px'; bar.title = F().date(d.Date) + ' · ' + number(d.Minutes, 0) + ' min · ' + number(d.Runs, 0) + (d.Runs === 1 ? ' run' : ' runs'); });
       var range = append(practice, node('div', undefined, 'stats-day-range')); append(range, node('span', F().date(calendar[0].Date))); append(range, node('span', F().date(calendar[calendar.length - 1].Date)));
     }
-    var blocks = append(details, panel('Practice blocks')); empty(blocks, 'A break of more than 30 minutes starts a new block. Showing your latest 100 blocks.');
+    var blocks = append(details, panel('Practice blocks')); empty(blocks, 'A break over 30 minutes starts a new block. Latest 100 shown.');
     if (!blockList.length) empty(blocks, 'No practice blocks in this period.');
     blockList.forEach(function (b) { var item = append(blocks, node('div', undefined, 'stats-block')); append(item, node('strong', F().dateTime(b.Start))); append(item, node('span', number(b.Runs, 0) + (b.Runs === 1 ? ' run' : ' runs') + ' · ' + number(b.Minutes, 0) + ' min')); append(item, node('small', (b.Scenarios || []).join(' · '))); });
     }

@@ -27,7 +27,7 @@
       case 'up-to-date':return 'AimMod is up to date.';
       case 'disabled':return 'Automatic updates are off.';
       case 'needs-newer-game':return u.message||'This update needs a newer KovaaK’s.';
-      case 'failed':return u.message||'Could not check for updates. AimMod will try again later.';
+      case 'failed':return u.message||'Couldn’t check for updates. AimMod tries again later.';
       case 'unmanaged':return u.message||'Updates are not available for this install.';
       default:return 'AimMod checks for updates when the game starts and every few hours.';
     }
@@ -80,7 +80,7 @@
       var auto=!!s.settings.autoUpdate,toggle=node('div','lifecycle-switch');toggle.appendChild(node('span','switch-state',auto?'On':'Off'));
       var control=button(auto?'On':'Off',false,function(){save({autoUpdate:!auto});});control.className='switch'+(auto?' on':'');control.appendChild(node('span','knob'));
       control.setAttribute('role','switch');control.setAttribute('aria-checked',String(auto));control.setAttribute('aria-label','Automatic updates');toggle.appendChild(control);
-      row('Automatic updates','Download updates in the background, check every file and install them when you close KovaaK’s. Your history, replays and settings are kept.',toggle);
+      row('Automatic updates','Updates install when you close KovaaK’s.',toggle);
       var channels=node('div','segmented lifecycle-channels');channels.setAttribute('role','radiogroup');channels.setAttribute('aria-label','Update channel');
       ['stable','beta'].forEach(function(name){var b=button(name==='stable'?'Stable':'Beta',s.settings.channel===name,function(){if(s.settings.channel!==name)save({channel:name});});b.setAttribute('role','radio');b.setAttribute('aria-checked',String(s.settings.channel===name));channels.appendChild(b);});
       row('Update channel','Beta gets new features first and may be less stable.',channels);
@@ -90,9 +90,9 @@
       panel.appendChild(actions);
       if(u.state==='ready'&&u.notes){panel.appendChild(node('h3','lifecycle-heading','What’s new in '+u.version));panel.appendChild(node('p','lifecycle-notes',plain(u.notes)));}
     }
-    var repairText=s.repair.requested?'A repair is scheduled for when you close KovaaK’s.':s.repair.needed?'Something is wrong with the install: '+s.repair.problems.join(' '):'Your AimMod install is complete.';
+    var repairText=s.repair.requested?'A repair is scheduled for when you close KovaaK’s.':s.repair.needed?'Something is wrong with the install: '+s.repair.problems.join(' '):'No problems found.';
     var repairButton=s.repair.requested?button('Cancel repair',false,function(){act('cancel-repair');}):s.repair.available?button('Repair when I close KovaaK’s',s.repair.needed,function(){act('repair');}):null;
-    row('Repair',repairText+' If AimMod does not load at all after a KovaaK’s update, run Repair-AimMod.cmd from %LOCALAPPDATA%\\AimMod with the game closed.',repairButton);
+    row('Repair',repairText+' If AimMod doesn’t load after a KovaaK’s update, close the game and run Repair-AimMod.cmd from %LOCALAPPDATA%\\AimMod.',repairButton);
     if(s.rollback.available)row('Previous version','AimMod '+s.rollback.version+' is kept. To go back, close KovaaK’s and run Repair-AimMod.cmd -Rollback.',null);
     if(s.game.steamBuildId)row('Game build',s.game.tested?'KovaaK’s '+s.game.testedVersion+' (Steam build '+s.game.steamBuildId+'), tested with this AimMod release.':(s.game.warning||'Steam build '+s.game.steamBuildId+'.'),null);
   }
