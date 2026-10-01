@@ -15,9 +15,10 @@
     {id:'tracking-duel',label:'Tracking duel',short:'Tracking',text:'One against one: take turns tracking each other. Most time on target wins.'},
     {id:'deathmatch',label:'Deathmatch',short:'DM',text:'Everyone against everyone. First to the frag limit wins.'},
     {id:'vampiric',label:'Vampiric 1v1',short:'Vampiric',text:'One against one. Damage you deal heals you; health slowly drains.'},
-    {id:'instagib',label:'Instagib',short:'Instagib',text:'Railguns only: every hit kills. First to the frag limit wins.'}
+    {id:'instagib',label:'Instagib',short:'Instagib',text:'Railguns only: every hit kills. First to the frag limit wins.'},
+    {id:'team-deathmatch',label:'Team deathmatch',short:'TDM',text:'Two teams by join order. First team to the frag limit wins. No friendly fire.'}
   ];
-  function combat(m){return m==='deathmatch'||m==='vampiric'||m==='instagib';}
+  function combat(m){return m==='deathmatch'||m==='vampiric'||m==='instagib'||m==='team-deathmatch';}
   var PRIVACY={friends:'Friends only',invite:'Invite only',public:'Public (room code)'};
   var PRESETS=[{id:'default',label:'Scenario default'},{id:'cs',label:'Counter-Strike-like'},{id:'valorant',label:'Valorant-like'},{id:'apex',label:'Apex-like'},{id:'quake',label:'Quake-like'},{id:'custom',label:'Custom'}];
   var AVATAR=['mint','cyan','amber','violet','rose'];
@@ -819,7 +820,7 @@
     var rd=section('Rounds and time');
     if(s.mode==='duel')rd.appendChild(settingRow('First to','Rounds a player must win.',stepper(s.firstTo,1,7,1,function(v){return F.number(v,0)+(v===1?' win':' wins');},function(v){setting('firstTo',v);},false,'first to')));
     else if(combat(s.mode)){
-      var fragDefault=s.mode==='vampiric'?10:s.mode==='instagib'?25:20;
+      var fragDefault=s.mode==='vampiric'?10:s.mode==='instagib'?25:s.mode==='team-deathmatch'?50:20;
       rd.appendChild(settingRow('Frag limit','First to this many kills wins.',stepper(s.fragLimit||fragDefault,1,100,1,function(v){return F.number(v,0);},function(v){setting('fragLimit',v);},false,'frag limit')));
       if(s.mode==='vampiric')rd.appendChild(settingRow('Lifesteal','Share of the damage you deal that heals you.',stepper(typeof s.lifesteal==='number'?s.lifesteal:50,0,200,5,function(v){return F.number(v,0)+' %';},function(v){setting('lifesteal',v);},false,'lifesteal')));
     }
@@ -1021,7 +1022,9 @@
     var match=lobby.match,top=match.standings[0];
     connectionBanners(page,lobby);
     var hero=node('div','panel mp-final');var practice=match.mode==='practice';
-    var title=practice?'Session complete':match.winnerId===lobby.self?'You win!':match.winnerId?nameOf(match.winnerId)+' wins':'It’s a draw';
+    var winTeam=match.mode==='team-deathmatch'&&match.combat?match.combat.winnerTeam||(match.combat.teamFrags&&match.combat.teamFrags[0]!==match.combat.teamFrags[1]?(match.combat.teamFrags[0]>match.combat.teamFrags[1]?1:2):null):null;
+    var myTeam=null;if(match.combat)match.combat.players.forEach(function(p){if(p.member===lobby.self)myTeam=p.team;});
+    var title=practice?'Session complete':winTeam?(winTeam===myTeam?'Your team wins!':'Team '+winTeam+' wins'):match.winnerId===lobby.self?'You win!':match.winnerId?nameOf(match.winnerId)+' wins':'It’s a draw';
     var crownBox=node('div','mp-final-mark');if(match.winnerId)crownBox.appendChild(crown());
     var me=null;match.standings.forEach(function(s){if(s.memberId===lobby.self)me=s;});
     add(hero,crownBox,node('div','eyebrow',mode(match.mode).label+' · '+safe(match.scenario,'Scenario')),node('h2','',title),node('p','subtle',practice?'Your best runs are below.':me&&me.place?'You finished '+ordinal(me.place)+' of '+match.standings.length+'.':'Final standings below.'));

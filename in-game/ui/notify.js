@@ -9,10 +9,11 @@
   function render(n){
     var key=n?JSON.stringify(n):'';if(key===last)return;last=key;
     while(box.firstChild)box.removeChild(box.firstChild);
-    if(!n||(!n.active&&!n.badge&&!n.duel)){box.className='';return;}
-    var extra=n.duel?' duel-on':'';
+    if(!n||(!n.active&&!n.badge&&!n.duel&&!n.combat)){box.className='';return;}
+    var extra=n.duel||n.combat?' duel-on':'';
     box.className='show'+extra;
     if(n.duel)box.appendChild(duel(n.duel));
+    if(n.combat)box.appendChild(combat(n.combat));
     if(n.badge){var b=node('div','badge');b.appendChild(node('span','eye'));b.appendChild(node('span','',n.badge));box.appendChild(b);}
     if(!n.active)return;
     box.className='show '+(n.kind||'info')+extra;
@@ -40,6 +41,27 @@
     bar.appendChild(fill);mid.appendChild(bar);strip.appendChild(mid);
     strip.appendChild(node('div','duel-time',typeof d.left==='number'?d.left+' s':'R'+d.round+'/'+d.rounds));
     return strip;
+  }
+  // Combat strip on the top edge: health (or the respawn wait), frags against the limit with
+  // the leader or the team score, time left, and up to three recent kills underneath.
+  function combat(c){
+    var wrap=node('div','combat');
+    var strip=node('div','duel combat-strip'+(c.alive?'':' down'));
+    var hp=node('div','hp');
+    if(c.alive){
+      hp.appendChild(node('div','hp-num',String(Math.max(0,Math.round(c.health)))));
+      var bar=node('div','hp-bar');var fill=node('div','hp-fill'+(c.health<30?' low':''));fill.style.width=Math.max(0,Math.min(100,c.health*100/(c.max||100)))+'%';bar.appendChild(fill);hp.appendChild(bar);
+    }else hp.appendChild(node('div','hp-num down',typeof c.respawnIn==='number'?'Back in '+c.respawnIn:'Down'));
+    strip.appendChild(hp);
+    var mid=node('div','duel-mid');
+    mid.appendChild(node('div','duel-line',c.frags+' / '+c.fragLimit+' frags'+(c.protected?' · protected':'')));
+    var other=typeof c.team==='number'?'Team '+c.team+' '+c.teamFrags+' · '+c.otherFrags+' them':(c.leader?'Best: '+c.leader+' '+c.leaderFrags:'');
+    if(other)mid.appendChild(node('div','duel-sub',other));
+    strip.appendChild(mid);
+    strip.appendChild(node('div','duel-time',typeof c.left==='number'?Math.floor(c.left/60)+':'+(c.left%60<10?'0':'')+(c.left%60):''));
+    wrap.appendChild(strip);
+    (c.feed||[]).forEach(function(f){var line=node('div','feed'+(f.you?' '+f.you:''),f.killer+' fragged '+f.victim+(f.head?' · headshot':''));wrap.appendChild(line);});
+    return wrap;
   }
   function button(label,css,action){var b=node('button','button'+(css?' '+css:''),label);b.type='button';b.onclick=action;return b;}
   function answer(action,id){

@@ -27,6 +27,7 @@ static class Protocol
         new("score", false, "client>host", "{match, round, t, score, shots, hits, kills, remaining}: live frame, 10 Hz"),
         new("finish", true, "client>host", "{match, round, t, score, shots, hits, kills, replay}: final run result"),
         new("hit", true, "client>host", "{match, round, seq, t, o:[x,y,z], r:[pitch,yaw], head, target?:[x,y,z,radius,halfHeight]}: a hit the shooter's game registered (combat modes), host clock"),
+        new("combat", true, "host>all", "{match, round, events:[...]}: combat events (damage, death, respawn) the moment the host decides them"),
         new("track", true, "client>host", "{match, round, s:[[t,x,y,z,pitch,yaw]], v:[[t,id,x,y,z,radius,halfHeight]]}: tracking duel camera samples and drawn avatars, host clock, every 100 ms"),
         new("ping", false, "any", "{t0}: clock sync request"),
         new("pong", false, "any", "{t0, t1}: clock sync reply"),
