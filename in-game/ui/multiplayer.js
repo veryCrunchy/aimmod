@@ -59,10 +59,26 @@
   function actions(){var row=node('div','actions');for(var i=0;i<arguments.length;i++)if(arguments[i])row.appendChild(arguments[i]);return row;}
   function mode(id){for(var i=0;i<MODES.length;i++)if(MODES[i].id===id)return MODES[i];return MODES[0];}
   function preset(id){for(var i=0;i<PRESETS.length;i++)if(PRESETS[i].id===id)return PRESETS[i];return PRESETS[0];}
-  function safe(text,fallback){return F.safeText(typeof text==='string'?text:'',fallback||'Player');}
-  function initials(name){var parts=safe(name,'?').replace(/[_.()\[\]-]+/g,' ').trim().split(/\s+/);var a=(parts[0]||'?').charAt(0),b=parts.length>1?parts[parts.length-1].charAt(0):(parts[0]||'').charAt(1);return (a+(b||'')).toUpperCase();}
+  // Names partly in a script the game font lacks (emoji, CJK) keep the part it can draw; only names with
+  // nothing drawable fall back (a Steam name of only such characters showed as "Friend" / "?").
+  function safe(text,fallback){var t=typeof text==='string'?text:'',out=F.safeText(t,'');if(out)return out;
+    var part=t.replace(/[^\u0000-\u024F\u0370-\u03FF\u0400-\u04FF\u1E00-\u1EFF\u2010-\u2027\u2030-\u205E]/g,'').replace(/[\u0000-\u001F\u007F]/g,'').replace(/\s+/g,' ').trim();
+    // Letters left: drop the decoration around them. Only punctuation left (like "-.-"): keep it as it is.
+    if(/[0-9A-Za-z\u00C0-\u024F\u0370-\u03FF\u0400-\u04FF]/.test(part))return part.replace(/^[\s_.\-|()\[\]]+|[\s_.\-|()\[\]]+$/g,'');
+    return part||fallback||'Player';}
+  // Up to two initials; a name of only punctuation ("-.-") shows its first two characters instead of "?".
+  function initials(name){var clean=safe(name,'?'),parts=clean.replace(/[_.()\[\]-]+/g,' ').trim().split(/\s+/);if(!parts[0])return clean.replace(/\s+/g,'').slice(0,2)||'?';var a=(parts[0]||'?').charAt(0),b=parts.length>1?parts[parts.length-1].charAt(0):(parts[0]||'').charAt(1);return (a+(b||'')).toUpperCase();}
   function tone(name){var h=0,s=String(name||'');for(var i=0;i<s.length;i++)h=(h*31+s.charCodeAt(i))%9973;return AVATAR[h%AVATAR.length];}
-  function avatar(name,small){var a=node('div','mp-avatar '+tone(name)+(small?' small':''),initials(name));a.setAttribute('aria-hidden','true');return a;}
+  // Initials in a coloured circle; with a Steam picture link (the service's /avatar/<id>.png) the picture
+  // covers them once it loads, at the same size. Pictures seen before show at once, so re-renders don't flash.
+  var pictures={};
+  function avatar(name,small,url){var a=node('div','mp-avatar '+tone(name)+(small?' small':''),initials(name));a.setAttribute('aria-hidden','true');if(picture(url))photo(a,url);return a;}
+  function picture(url){return typeof url==='string'&&/^\/avatar\/[0-9]{16,20}\.png(\?v=[0-9a-f]{8})?$/.test(url)&&pictures[url]!==false;}
+  function photo(a,url){var img=node('img','mp-avatar-img');img.setAttribute('alt','');img.draggable=false;var base=a.className;if(pictures[url])a.className=base+' pic';
+    img.onload=function(){pictures[url]=true;a.className=base+' pic';};img.onerror=function(){pictures[url]=false;a.className=base;if(img.parentNode)img.parentNode.removeChild(img);};
+    img.src=path()+url;a.appendChild(img);}
+  // A member's, player's or friend's picture link by id.
+  function pic(id){var l=view&&view.lobby;if(l&&l.avatars&&l.avatars[id])return l.avatars[id];var f=view&&view.friends&&view.friends.items||[];for(var i=0;i<f.length;i++)if(f[i].id===id)return f[i].avatar;return null;}
   function chip(text,kind){return node('span','mp-chip'+(kind?' '+kind:''),text);}
   // A small crown for the host, drawn on canvas with solid colours.
   function crown(){var c=node('canvas','mp-crown');c.width=28;c.height=22;var x=c.getContext&&c.getContext('2d');if(x){x.scale(2,2);x.fillStyle='#f0b45a';x.beginPath();x.moveTo(1,10);x.lineTo(1,3);x.lineTo(4.5,6);x.lineTo(7,1);x.lineTo(9.5,6);x.lineTo(13,3);x.lineTo(13,10);x.closePath();x.fill();}c.setAttribute('aria-label','Host');return c;}
@@ -229,7 +245,7 @@
     var list=(lobby.replays||[]).filter(function(r){return (!round||r.round===round)&&r.mine&&r.others.length;});
     if(!list.length)return null;
     var p=node('div','panel mp-runs');var head=node('div','panel-head');var text=node('div','head-text');add(text,node('h2','','Watch run vs run'));head.appendChild(text);p.appendChild(head);
-    list.forEach(function(r){r.others.forEach(function(o){var row=node('div','mp-friend');add(row,avatar(o.name,true),add(node('div','mp-friend-info'),node('strong','',safe(o.name)),node('span','','Round '+r.round)));row.appendChild(actions(button('You vs '+safe(o.name),function(){watch(r.mine,o.id);},'compact')));p.appendChild(row);});});
+    list.forEach(function(r){r.others.forEach(function(o){var row=node('div','mp-friend');add(row,avatar(o.name,true,pic(o.id)),add(node('div','mp-friend-info'),node('strong','',safe(o.name)),node('span','','Round '+r.round)));row.appendChild(actions(button('You vs '+safe(o.name),function(){watch(r.mine,o.id);},'compact')));p.appendChild(row);});});
     return p;
   }
   // Share one of your clips (F8 marks) with the lobby.
@@ -257,7 +273,7 @@
     var keys=match.players.indexOf(lobby.self)>=0?bindsNote(lobby):null;if(keys)stage.appendChild(keys);
     var who=node('div','mp-stage-players');match.players.forEach(function(id){
       var ok=loaded.indexOf(id)>=0,issue=typeof issues[id]==='string'?issues[id]:null;
-      var row=add(node('div','mp-stage-player'+(ok?' ok':'')),avatar(nameOf(id),true),node('span','',nameOf(id)),chip(ok?'Ready':issue?'Not loaded':'Loading…',ok?'mint':issue?'amber':''));
+      var row=add(node('div','mp-stage-player'+(ok?' ok':'')),avatar(nameOf(id),true,pic(id)),node('span','',nameOf(id)),chip(ok?'Ready':issue?'Not loaded':'Loading…',ok?'mint':issue?'amber':''));
       if(!ok&&issue)row.title=issue;
       add(who,row);
       if(!ok&&issue)add(who,node('p','mp-note',nameOf(id)+': '+issue));
@@ -308,7 +324,7 @@
   }
   function watchPanel(){
     var w=view.watch;var p=node('div','panel mp-watch '+(w.state==='ended'||w.state==='missing'?'warn':''));
-    var head=node('div','mp-watch-head');add(head,avatar(w.name),add(node('div','mp-watch-text'),node('div','eyebrow',w.state==='watching'?'Spectating':'Spectate'),node('h2','',safe(w.name,'Friend')),node('p','subtle',(w.scenario?safe(w.scenario,'')+' · ':'')+safe(w.message,''))));
+    var head=node('div','mp-watch-head');add(head,avatar(w.name,false,w.avatar),add(node('div','mp-watch-text'),node('div','eyebrow',w.state==='watching'?'Spectating':'Spectate'),node('h2','',safe(w.name,'Friend')),node('p','subtle',(w.scenario?safe(w.scenario,'')+' · ':'')+safe(w.message,''))));
     p.appendChild(head);
     if(w.download){var dp=downloadPanel({download:{view:w.download,conflicts:[]}},'watch-');if(dp)p.appendChild(dp);}
     if(w.state!=='ended'&&w.state!=='missing'&&w.state!=='downloading'){
@@ -324,8 +340,8 @@
   function watchersPanel(){
     var p=node('div','panel mp-watchers');var head=node('div','panel-head');var text=node('div','head-text');
     add(text,node('h2','','Watching you'));head.appendChild(text);p.appendChild(head);
-    (view.watchAsks||[]).forEach(function(a){var row=node('div','mp-friend');add(row,avatar(a.name,true),add(node('div','mp-friend-info'),node('strong','',safe(a.name,'Friend')),node('span','','Wants to watch you')));row.appendChild(actions(button('Allow',function(){act('spectate-allow',{id:a.peer});},'compact primary'),button('Deny',function(){act('spectate-deny',{id:a.peer});},'compact')));p.appendChild(row);});
-    (view.watchers||[]).forEach(function(w){var row=node('div','mp-friend');add(row,avatar(w.name,true),add(node('div','mp-friend-info'),node('strong','',safe(w.name,'Friend')),node('span','','Watching')));row.appendChild(actions(button('Remove',function(){act('spectator-remove',{id:w.peer});},'compact quiet danger')));p.appendChild(row);});
+    (view.watchAsks||[]).forEach(function(a){var row=node('div','mp-friend');add(row,avatar(a.name,true,a.avatar),add(node('div','mp-friend-info'),node('strong','',safe(a.name,'Friend')),node('span','','Wants to watch you')));row.appendChild(actions(button('Allow',function(){act('spectate-allow',{id:a.peer});},'compact primary'),button('Deny',function(){act('spectate-deny',{id:a.peer});},'compact')));p.appendChild(row);});
+    (view.watchers||[]).forEach(function(w){var row=node('div','mp-friend');add(row,avatar(w.name,true,w.avatar),add(node('div','mp-friend-info'),node('strong','',safe(w.name,'Friend')),node('span','','Watching')));row.appendChild(actions(button('Remove',function(){act('spectator-remove',{id:w.peer});},'compact quiet danger')));p.appendChild(row);});
     return p;
   }
   // How you appear in the other players' games.
@@ -370,7 +386,7 @@
     add(st,node('h2','',me?'You’re spectating':'Spectate'),node('p','',watching?(s.follow?'Following whoever leads, now ':'Watching ')+safe(s.name)+'. Their view is in the pause menu.':'Watch from the pause menu in the same scenario.'));sh.appendChild(st);sp.appendChild(sh);
     if(watching){var line=match.live.filter(function(l){return l.memberId===s.member;})[0];sp.appendChild(add(node('div','mp-watch-hud'),node('span','',line?statLine({active:true,score:line.score,accuracy:line.shots?line.hits*100/line.shots:null,remaining:line.remaining}):'Waiting for their run…')));}
     sp.appendChild(settingRow('Follow the leader','',toggleSwitch(!!(s&&s.follow),'Follow the leader',function(){followLeader(!(s&&s.follow));})));
-    others.forEach(function(id){var on=watching&&s.member===id;var row=node('div','mp-friend'+(on?' on':''));add(row,avatar(nameOf(id),true),add(node('div','mp-friend-info'),node('strong','',nameOf(id)),node('span','',on?'Watching':'Player')));row.appendChild(actions(button(on?'Watching':'Spectate',function(){if(!on)spectate(id);},on?'compact primary':'compact')));sp.appendChild(row);});
+    others.forEach(function(id){var on=watching&&s.member===id;var row=node('div','mp-friend'+(on?' on':''));add(row,avatar(nameOf(id),true,pic(id)),add(node('div','mp-friend-info'),node('strong','',nameOf(id)),node('span','',on?'Watching':'Player')));row.appendChild(actions(button(on?'Watching':'Spectate',function(){if(!on)spectate(id);},on?'compact primary':'compact')));sp.appendChild(row);});
     if(watching)sp.appendChild(actions(button('Stop spectating',stopSpectate,'compact quiet danger')));
     return sp;
   }
@@ -479,7 +495,7 @@
     items.slice(0,inLobby?8:12).forEach(function(f){
       var row=node('div','mp-friend');var info=node('div','mp-friend-info');
       add(info,node('strong','',safe(f.name,'Friend')),node('span','',safe(f.detail,'')));
-      add(row,avatar(f.name,true),info,friendStatus(f));
+      add(row,avatar(f.name,true,f.avatar),info,friendStatus(f));
       var b=null;
       if(inLobby&&f.status!=='aimmod-lobby')b=button('Invite',function(){act('invite-friend',{friend:f.id},function(ok){if(ok)toast('Invite sent to '+safe(f.name,'your friend')+'.');});},'compact');
       else if(!inLobby&&f.joinable)b=button('Join',function(){act('join-friend',{friend:f.id});},'compact primary');
@@ -872,7 +888,7 @@
     var who=safe(inv.fromName,'A friend');
     var title=inv.kind==='launch'?'Join from Steam':inv.kind==='request'?who+' wants to join':who+' invited you';
     var line=inv.kind==='launch'?'Join the lobby from your Steam invite?':inv.kind==='request'?'Let them into your lobby?':'Join their AimMod lobby?';
-    add(card,node('div','eyebrow',inv.kind==='request'?'Join request':'Steam invite'),add(node('div','mp-modal-head'),avatar(who),add(node('div',''),node('h2','',title),node('p','subtle',line))));
+    add(card,node('div','eyebrow',inv.kind==='request'?'Join request':'Steam invite'),add(node('div','mp-modal-head'),avatar(who,false,inv.avatar),add(node('div',''),node('h2','',title),node('p','subtle',line))));
     if(inv.summary){var s=inv.summary;var sum=node('div','mp-modal-summary');add(sum,chip(mode(s.mode).label,'mint'),node('span','',safe(s.scenario,'Scenario to be chosen')),node('span','mp-muted',s.players+' / '+s.maxPlayers+' players'));card.appendChild(sum);}
     // A different AimMod version can't join (the service refuses), so don't offer Accept.
     if(inv.compatible===false){card.appendChild(node('p','mp-warn-text',who+' has a different AimMod version. Both of you need the latest AimMod.'));card.appendChild(actions(button('Close',function(){act('decline-invite',{id:inv.id});},'primary')));return shade;}
@@ -985,7 +1001,7 @@
     var c=contentState(m,lobby);var sub=node('div','mp-member-sub');
     add(sub,node('span','mp-content '+c.kind,c.text),node('span','mp-link'+(m.connection==='reconnecting'?' warn':''),linkText(m,lobby)));
     add(info,name,sub);
-    add(row,avatar(m.name),info);
+    add(row,avatar(m.name,false,pic(m.id)),info);
     var state=m.role==='spectator'?null:m.id===lobby.hostId?node('span','mp-ready host','Host'):m.away?node('span','mp-ready away','Away'):m.ready?node('span','mp-ready on','Ready'):node('span','mp-ready','Not ready');
     if(state)row.appendChild(state);
     if(m.id!==lobby.self&&!m.simulated&&lobby.match&&lobby.match.phase==='live'&&m.role==='player'){var watch=actions(button(lobby.spectate&&lobby.spectate.member===m.id?'Watching':'Spectate',function(){spectate(m.id);},'compact quiet'));watch.className='actions mp-member-tools';row.appendChild(watch);}
@@ -1272,7 +1288,7 @@
   }
   function contentTable(lobby){
     var box=node('div','mp-content-table');
-    lobby.members.filter(function(m){return m.role==='player';}).forEach(function(m){var c=contentState(m,lobby);var r=node('div','mp-content-row');add(r,avatar(m.name,true),node('span','mp-content-name',safe(m.name)),node('span','mp-content '+c.kind,c.text));box.appendChild(r);});
+    lobby.members.filter(function(m){return m.role==='player';}).forEach(function(m){var c=contentState(m,lobby);var r=node('div','mp-content-row');add(r,avatar(m.name,true,pic(m.id)),node('span','mp-content-name',safe(m.name)),node('span','mp-content '+c.kind,c.text));box.appendChild(r);});
     return box;
   }
 
@@ -1302,7 +1318,7 @@
     add(stage,node('div','eyebrow',mode(match.mode).label+' · '+roundLabel(match)),ring,node('h2','',safe(match.scenario,'Scenario')),match.players.indexOf(lobby.self)>=0?null:node('p','subtle','You’re spectating this round.'));
     var plan=planBox(lobby);if(plan)stage.appendChild(plan);
     var keys=match.players.indexOf(lobby.self)>=0?bindsNote(lobby):null;if(keys)stage.appendChild(keys);
-    var who=node('div','mp-stage-players');match.players.forEach(function(id){var m=member(id);add(who,add(node('div','mp-stage-player'),avatar(nameOf(id),true),node('span','',nameOf(id)),m&&m.connection==='reconnecting'?chip('Reconnecting','amber'):null));});
+    var who=node('div','mp-stage-players');match.players.forEach(function(id){var m=member(id);add(who,add(node('div','mp-stage-player'),avatar(nameOf(id),true,pic(id)),node('span','',nameOf(id)),m&&m.connection==='reconnecting'?chip('Reconnecting','amber'):null));});
     stage.appendChild(who);
     if(lobby.isHost)stage.appendChild(actions(button('Cancel match',function(){act('end');},'compact quiet danger')));
   }
@@ -1345,7 +1361,7 @@
     var t=node('div','mp-table');var head=node('div','mp-tr head');add(head,node('span','mp-td place',''),node('span','mp-td name','Player'),node('span','mp-td num','Score'),node('span','mp-td num','Accuracy'),showPoints?node('span','mp-td num',mode==='duel'?'Win':'Points'):null);t.appendChild(head);
     results.forEach(function(r){var row=node('div','mp-tr'+(r.memberId===(view.lobby&&view.lobby.self)?' self':''));
       var place=node('span','mp-td place');if(r.place)place.appendChild(node('span','mp-medal p'+Math.min(r.place,4),String(r.place)));
-      var name=node('span','mp-td name');add(name,avatar(r.name,true),node('span','',safe(r.name)),r.status==='dnf'?chip('Did not finish','amber'):r.status==='left'?chip('Left','amber'):null,r.disputed?chip('Disputed','rose'):null);
+      var name=node('span','mp-td name');add(name,avatar(r.name,true,pic(r.memberId)),node('span','',safe(r.name)),r.status==='dnf'?chip('Did not finish','amber'):r.status==='left'?chip('Left','amber'):null,r.disputed?chip('Disputed','rose'):null);
       add(row,place,name,node('span','mp-td num',r.score===null?'—':F.number(r.score,0)),node('span','mp-td num',F.percent(r.accuracy)),showPoints?node('span','mp-td num',mode==='duel'?(r.points?'+1':''):'+'+F.number(r.points,0)):null);t.appendChild(row);});
     return t;
   }
@@ -1353,7 +1369,7 @@
     var t=node('div','mp-table');var duel=match.mode==='duel',ffa=match.mode==='ffa-rounds';
     var head=node('div','mp-tr head');add(head,node('span','mp-td place',''),node('span','mp-td name','Player'),node('span','mp-td num',duel?'Wins':ffa?'Points':'Best'),node('span','mp-td num',duel||ffa?'Best':'Total'));t.appendChild(head);
     match.standings.forEach(function(s){var row=node('div','mp-tr'+(s.memberId===view.lobby.self?' self':''));var place=node('span','mp-td place');if(s.place)place.appendChild(node('span','mp-medal p'+Math.min(s.place,4),String(s.place)));
-      var name=node('span','mp-td name');name.title=safe(s.name);add(name,avatar(s.name,true),node('span','',safe(s.name)));
+      var name=node('span','mp-td name');name.title=safe(s.name);add(name,avatar(s.name,true,pic(s.memberId)),node('span','',safe(s.name)));
       add(row,place,name,node('span','mp-td num strong',duel?F.number(s.wins,0):ffa?F.number(s.points,0):(s.best===null?'—':F.number(s.best,0))),node('span','mp-td num',duel||ffa?(s.best===null?'—':F.number(s.best,0)):F.number(s.total,0)));t.appendChild(row);});
     return t;
   }
@@ -1390,7 +1406,7 @@
     var st=node('div','panel');var sh=node('div','panel-head');var shText=node('div','head-text');add(shText,node('h2','','Final standings'),node('p','','KovaaK’s leaderboards are never changed.'));sh.appendChild(shText);st.appendChild(sh);var sb=node('div','panel-body');sb.appendChild(standingsTable(match));st.appendChild(sb);main.appendChild(st);
     var rounds=node('div','panel');var rh=node('div','panel-head');add(rh,node('h2','','Rounds'));rounds.appendChild(rh);var list=node('div','mp-list');
     match.rounds.forEach(function(r){var best=r.results[0];var line=node('div','mp-round-line');
-      add(line,node('span','mp-round-no','R'+r.round),avatar(r.winnerId?nameOf(r.winnerId):best?best.name:'?',true),node('span','mp-round-win',r.winnerId?nameOf(r.winnerId):practice&&best?safe(best.name)+' (best run)':'Draw'),node('span','mp-round-score',best&&best.score!==null?F.number(best.score,0):'—'));list.appendChild(line);});
+      add(line,node('span','mp-round-no','R'+r.round),avatar(r.winnerId?nameOf(r.winnerId):best?best.name:'?',true,pic(r.winnerId||best&&best.memberId)),node('span','mp-round-win',r.winnerId?nameOf(r.winnerId):practice&&best?safe(best.name)+' (best run)':'Draw'),node('span','mp-round-score',best&&best.score!==null?F.number(best.score,0):'—'));list.appendChild(line);});
     rounds.appendChild(list);side.appendChild(rounds);
     var rv=runVsRun(lobby);if(rv)side.appendChild(rv);
     if(top&&!top.name)return;

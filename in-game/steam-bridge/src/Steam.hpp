@@ -31,6 +31,11 @@ namespace bridge
     constexpr int CbItemInstalled = 3405;              // k_iClientUGCCallbacks + 5
     constexpr int CbDownloadItemResult = 3406;         // k_iClientUGCCallbacks + 6
     constexpr int CbRemoteStorageSubscribe = 1313;     // RemoteStorageSubscribePublishedFileResult_t (SubscribeItem call result)
+    constexpr int CbPersonaStateChange = 304;          // k_iSteamFriendsCallbacks + 4
+    constexpr int CbAvatarImageLoaded = 334;           // k_iSteamFriendsCallbacks + 34
+
+    // EPersonaChange bits the bridge reacts to.
+    constexpr int PersonaChangeName = 0x0001, PersonaChangeAvatar = 0x0040, PersonaChangeNameFirstSet = 0x0400, PersonaChangeNickname = 0x1000;
 
     // EItemState
     constexpr std::uint32_t ItemSubscribed = 1, ItemInstalled = 4, ItemNeedsUpdate = 8, ItemDownloading = 16, ItemDownloadPending = 32;
@@ -78,6 +83,18 @@ namespace bridge
         int m_eResult;
         std::uint64_t m_nPublishedFileId;
     };
+    struct PersonaStateChange_t
+    {
+        std::uint64_t m_ulSteamID;
+        int m_nChangeFlags;
+    };
+    struct AvatarImageLoaded_t
+    {
+        std::uint64_t m_steamID;
+        int m_iImage;
+        int m_iWide;
+        int m_iTall;
+    };
     struct GameRichPresenceJoinRequested_t
     {
         std::uint64_t m_steamIDFriend;
@@ -90,6 +107,8 @@ namespace bridge
     static_assert(sizeof(GameRichPresenceJoinRequested_t) == 264);
     static_assert(sizeof(ItemInstalled_t) == 16);
     static_assert(sizeof(LobbyInvite_t) == 24);
+    static_assert(sizeof(PersonaStateChange_t) == 16);
+    static_assert(sizeof(AvatarImageLoaded_t) == 24);
 
     // SteamUGCDetails_t as STEAMUGC_INTERFACE_VERSION014 writes it (SDK 1.47).
 #pragma pack(push, 8)
@@ -181,6 +200,7 @@ namespace bridge
         int (*F_GetFriendPersonaState)(std::intptr_t, std::uint64_t) = nullptr;
         bool (*F_GetFriendGamePlayed)(std::intptr_t, std::uint64_t, FriendGameInfo_t*) = nullptr;
         int (*F_GetSmallFriendAvatar)(std::intptr_t, std::uint64_t) = nullptr;
+        int (*F_GetMediumFriendAvatar)(std::intptr_t, std::uint64_t) = nullptr; // 64x64; 0 none, -1 loading
         bool (*F_RequestUserInformation)(std::intptr_t, std::uint64_t, bool) = nullptr;
         bool (*F_SetRichPresence)(std::intptr_t, const char*, const char*) = nullptr;
         void (*F_ClearRichPresence)(std::intptr_t) = nullptr;

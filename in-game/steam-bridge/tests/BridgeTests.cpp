@@ -1,6 +1,7 @@
 // Tests for the Steam-independent parts of AimModSteam: JSON, base64, ids,
 // lobby keys, join strings, launch command lines and the AMP1 wire format.
 // Synthetic ids only.
+#include "AvatarImage.hpp"
 #include "AvatarPath.hpp"
 #include "AvatarState.hpp"
 #include "Codec.hpp"
@@ -10,6 +11,9 @@
 #include "Walker.hpp"
 
 #include <cstdio>
+#include <cstdlib>
+#include <optional>
+#include <vector>
 #include <cmath>
 #include <limits>
 #include <string>
@@ -31,6 +35,142 @@ namespace
     // Synthetic ids with the right universe/type bits.
     constexpr std::uint64_t Person = (1ull << 56) | (1ull << 52) | (1ull << 32) | 1234567ull;
     constexpr std::uint64_t Lobby = (1ull << 56) | (8ull << 52) | (0x40000ull << 32) | 7654321ull;
+
+    // Independent decoder for the PNG the bridge writes: zlib with stored or
+    // fixed-Huffman deflate blocks, then the five scanline filters.
+    struct BitReader
+    {
+        const std::vector<std::uint8_t>& in;
+        std::size_t pos;
+        int bit = 0;
+        bool bad = false;
+        int Bit()
+        {
+            if (pos >= in.size()) return bad = true, 0;
+            const int b = (in[pos] >> bit) & 1;
+            if (++bit == 8) bit = 0, ++pos;
+            return b;
+        }
+        std::uint32_t Get(int n)
+        {
+            std::uint32_t v = 0;
+            for (int i = 0; i < n; ++i) v |= static_cast<std::uint32_t>(Bit()) << i;
+            return v;
+        }
+        std::uint32_t Rev(int n) // Huffman code bits, MSB first
+        {
+            std::uint32_t v = 0;
+            for (int i = 0; i < n; ++i) v = (v << 1) | static_cast<std::uint32_t>(Bit());
+            return v;
+        }
+    };
+    std::optional<std::vector<std::uint8_t>> Inflate(const std::vector<std::uint8_t>& z)
+    {
+        static const int lb[] = {3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258};
+        static const int le[] = {0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0};
+        static const int db[] = {1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513, 769, 1025, 1537, 2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577};
+        static const int de[] = {0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13};
+        if (z.size() < 6 || ((z[0] << 8) | z[1]) % 31 != 0 || (z[0] & 0x0F) != 8) return std::nullopt;
+        BitReader r{z, 2};
+        std::vector<std::uint8_t> out;
+        for (bool last = false; !last;)
+        {
+            last = r.Get(1) != 0;
+            const auto type = r.Get(2);
+            if (type == 0)
+            {
+                if (r.bit) r.bit = 0, ++r.pos;
+                if (r.pos + 4 > z.size()) return std::nullopt;
+                const std::size_t len = z[r.pos] | (z[r.pos + 1] << 8);
+                r.pos += 4;
+                if (r.pos + len > z.size()) return std::nullopt;
+                out.insert(out.end(), z.begin() + static_cast<long long>(r.pos), z.begin() + static_cast<long long>(r.pos + len));
+                r.pos += len;
+                continue;
+            }
+            if (type != 1) return std::nullopt;
+            for (;;)
+            {
+                int sym;
+                std::uint32_t c = r.Rev(7);
+                if (c <= 23) sym = 256 + static_cast<int>(c);
+                else
+                {
+                    c = (c << 1) | static_cast<std::uint32_t>(r.Bit());
+                    if (c >= 0x30 && c <= 0xBF) sym = static_cast<int>(c - 0x30);
+                    else if (c >= 0xC0 && c <= 0xC7) sym = 280 + static_cast<int>(c - 0xC0);
+                    else sym = 144 + static_cast<int>(((c << 1) | static_cast<std::uint32_t>(r.Bit())) - 0x190);
+                }
+                if (r.bad || sym > 285) return std::nullopt;
+                if (sym < 256) out.push_back(static_cast<std::uint8_t>(sym));
+                else if (sym == 256) break;
+                else
+                {
+                    const int li = sym - 257, len = lb[li] + static_cast<int>(r.Get(le[li]));
+                    const int di = static_cast<int>(r.Rev(5));
+                    if (di > 29) return std::nullopt;
+                    const std::size_t dist = static_cast<std::size_t>(db[di] + static_cast<int>(r.Get(de[di])));
+                    if (dist > out.size()) return std::nullopt;
+                    for (int k = 0; k < len; ++k) out.push_back(out[out.size() - dist]);
+                }
+            }
+        }
+        if (r.bit) ++r.pos;
+        if (r.bad || r.pos + 4 != z.size()) return std::nullopt;
+        const std::uint32_t adler = (std::uint32_t(z[r.pos]) << 24) | (z[r.pos + 1] << 16) | (z[r.pos + 2] << 8) | z[r.pos + 3];
+        if (adler != bridge::avatar::Adler32(out.data(), out.size())) return std::nullopt;
+        return out;
+    }
+    std::uint32_t Be(const std::vector<std::uint8_t>& b, std::size_t i) { return (std::uint32_t(b[i]) << 24) | (b[i + 1] << 16) | (b[i + 2] << 8) | b[i + 3]; }
+    // Returns the RGBA pixels, or nullopt for anything malformed (signature, CRCs, sizes).
+    std::optional<std::vector<std::uint8_t>> DecodePng(const std::vector<std::uint8_t>& png, std::uint32_t& w, std::uint32_t& h)
+    {
+        static const std::uint8_t sig[] = {0x89, 'P', 'N', 'G', '\r', '\n', 0x1A, '\n'};
+        if (png.size() < 8 || !std::equal(sig, sig + 8, png.begin())) return std::nullopt;
+        std::vector<std::uint8_t> idat;
+        bool ended = false;
+        for (std::size_t i = 8; i + 12 <= png.size();)
+        {
+            const std::uint32_t len = Be(png, i);
+            if (i + 12 + len > png.size()) return std::nullopt;
+            const std::string type(png.begin() + static_cast<long long>(i + 4), png.begin() + static_cast<long long>(i + 8));
+            if (Be(png, i + 8 + len) != bridge::avatar::Crc32(png.data() + i + 4, len + 4)) return std::nullopt;
+            if (type == "IHDR")
+            {
+                if (len != 13 || png[i + 16] != 8 || png[i + 17] != 6 || png[i + 20] != 0) return std::nullopt;
+                w = Be(png, i + 8);
+                h = Be(png, i + 12);
+            }
+            else if (type == "IDAT") idat.insert(idat.end(), png.begin() + static_cast<long long>(i + 8), png.begin() + static_cast<long long>(i + 8 + len));
+            else if (type == "IEND") ended = true;
+            i += 12 + len;
+        }
+        if (!ended || w == 0 || h == 0) return std::nullopt;
+        const auto raw = Inflate(idat);
+        const std::size_t stride = static_cast<std::size_t>(w) * 4;
+        if (!raw || raw->size() != (stride + 1) * h) return std::nullopt;
+        std::vector<std::uint8_t> px(stride * h);
+        for (std::uint32_t y = 0; y < h; ++y)
+        {
+            const std::uint8_t f = (*raw)[y * (stride + 1)];
+            for (std::size_t x = 0; x < stride; ++x)
+            {
+                const int a = x >= 4 ? px[y * stride + x - 4] : 0, b = y ? px[(y - 1) * stride + x] : 0, c = y && x >= 4 ? px[(y - 1) * stride + x - 4] : 0;
+                int p = 0;
+                if (f == 1) p = a;
+                else if (f == 2) p = b;
+                else if (f == 3) p = (a + b) / 2;
+                else if (f == 4)
+                {
+                    const int q = a + b - c, pa = std::abs(q - a), pb = std::abs(q - b), pc = std::abs(q - c);
+                    p = pa <= pb && pa <= pc ? a : pb <= pc ? b : c;
+                }
+                else if (f != 0) return std::nullopt;
+                px[y * stride + x] = static_cast<std::uint8_t>((*raw)[y * (stride + 1) + 1 + x] + p);
+            }
+        }
+        return px;
+    }
 } // namespace
 
 int main()
@@ -59,6 +199,26 @@ int main()
         const auto out = json::Object().Str("a", "x\"y\n").Int("b", -3).Bool("c", true).Null("d").Done();
         Check(out == R"({"a":"x\"y\n","b":-3,"c":true,"d":null})", "builds escaped objects");
         Check(json::Parse(out).has_value(), "round-trips builder output");
+        // Friends lists are sent in parts that each fit the pipe frame.
+        {
+            std::vector<std::string> friends;
+            for (int i = 0; i < 500; ++i)
+                friends.push_back(json::Object().Str("peer", std::to_string(Person + static_cast<std::uint64_t>(i))).Str("name", "Synthetic Friend " + std::to_string(i)).Str("detail", std::string(120, 'x')).Done());
+            std::size_t skipped = 99, total = 0;
+            const auto parts = json::Chunks(friends, 48 * 1024, skipped);
+            bool fit = parts.size() > 1 && skipped == 0;
+            for (const auto& part : parts)
+            {
+                const auto parsed = json::Parse("{\"f\":" + part + "}", json::Limits{64 * 1024, 8, 32 * 1024, 4096});
+                fit = fit && part.size() <= 48 * 1024 && parsed && parsed->Get("f")->type == json::Value::Type::Array;
+                if (parsed) total += parsed->Get("f")->array.size();
+            }
+            Check(fit && total == friends.size(), "a long friends list splits into valid parts under the frame, keeping every entry");
+            const auto one = json::Chunks({R"({"a":1})", std::string(200, 'y'), R"({"b":2})"}, 100, skipped);
+            Check(one.size() == 1 && one[0] == R"([{"a":1},{"b":2}])" && skipped == 1, "an entry too large on its own is counted, not sent");
+            const auto none = json::Chunks({}, 100, skipped);
+            Check(none.size() == 1 && none[0] == "[]" && skipped == 0, "no friends still sends one empty part");
+        }
     }
 
     // Base64
@@ -555,6 +715,58 @@ int main()
         cam.camera.yaw = 10;
         const auto ce = Encode(cam);
         Check(!ce.empty() && Decode(ce.data(), ce.size()), "a valid camera frame still round-trips");
+    }
+    // Avatar PNGs (feature "avatar"): synthetic pictures only.
+    {
+        Check(avatar::Crc32(reinterpret_cast<const std::uint8_t*>("123456789"), 9) == 0xCBF43926u, "CRC-32 matches the standard check value");
+        Check(avatar::Adler32(reinterpret_cast<const std::uint8_t*>("Wikipedia"), 9) == 0x11E60398u, "Adler-32 matches the standard check value");
+        // A gradient with a ring and noise, like a real profile picture, and a flat one.
+        std::vector<std::uint8_t> picture(64 * 64 * 4), flat(64 * 64 * 4, 0);
+        std::uint32_t seed = 12345;
+        for (std::uint32_t y = 0; y < 64; ++y)
+            for (std::uint32_t x = 0; x < 64; ++x)
+            {
+                seed = seed * 1103515245u + 12345u;
+                const int dx = static_cast<int>(x) - 32, dy = static_cast<int>(y) - 32;
+                const bool ring = dx * dx + dy * dy > 600 && dx * dx + dy * dy < 800;
+                auto* p = &picture[(y * 64 + x) * 4];
+                p[0] = static_cast<std::uint8_t>(ring ? 240 : x * 4);
+                p[1] = static_cast<std::uint8_t>(ring ? 200 : y * 4);
+                p[2] = static_cast<std::uint8_t>(((seed >> 16) & 15) + 100);
+                p[3] = 255;
+                flat[(y * 64 + x) * 4 + 1] = 0x80;
+                flat[(y * 64 + x) * 4 + 3] = 255;
+            }
+        for (const auto* source : {&picture, &flat})
+        {
+            const auto png = avatar::EncodePng(source->data(), source->size(), 64, 64);
+            std::uint32_t w = 0, h = 0;
+            const auto back = DecodePng(png, w, h);
+            Check(back && w == 64 && h == 64 && *back == *source, "PNG round-trips pixel for pixel");
+            Check(!png.empty() && png.size() < avatar::MaxPngBytes && png.size() < source->size(), "PNG is smaller than the raw pixels and fits the pipe");
+        }
+        Check(avatar::EncodePng(flat.data(), flat.size(), 64, 64).size() < 600, "Flat pictures compress to almost nothing");
+        std::vector<std::uint8_t> tiny = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12};
+        std::uint32_t tw = 0, th = 0;
+        const auto small = DecodePng(avatar::EncodePng(tiny.data(), tiny.size(), 3, 1), tw, th);
+        Check(small && tw == 3 && th == 1 && *small == tiny, "Odd sizes encode too");
+        Check(avatar::EncodePng(picture.data(), picture.size(), 65, 64).empty() && avatar::EncodePng(picture.data(), 100, 64, 64).empty() && avatar::EncodePng(nullptr, 0, 0, 0).empty(),
+              "Oversized, short or empty pictures are refused");
+        const auto hash = avatar::Hash(picture.data(), 64, 64);
+        Check(hash.size() == 16 && hash.find_first_not_of("0123456789abcdef") == std::string::npos, "The hash is 16 lowercase hex digits");
+        Check(hash == avatar::Hash(picture.data(), 64, 64) && hash != avatar::Hash(flat.data(), 64, 64) && hash != avatar::Hash(picture.data(), 32, 128), "The hash follows pixels and size");
+        auto broken = avatar::EncodePng(picture.data(), picture.size(), 64, 64);
+        broken[broken.size() / 2] ^= 0x40;
+        std::uint32_t bw = 0, bh = 0;
+        Check(!DecodePng(broken, bw, bh), "The test decoder notices a damaged PNG");
+        // Repetitive data exercises long matches and distances.
+        std::vector<std::uint8_t> repeat;
+        for (int i = 0; i < 20000; ++i) repeat.push_back(static_cast<std::uint8_t>((i % 7) * 31 + (i / 997)));
+        const auto z = avatar::Zlib(repeat.data(), repeat.size());
+        const auto inflated = Inflate(z);
+        Check(inflated && *inflated == repeat && z.size() < repeat.size() / 4, "zlib streams round-trip and use back-references");
+        const auto empty = Inflate(avatar::Zlib(nullptr, 0));
+        Check(empty && empty->empty(), "An empty zlib stream is valid");
     }
     std::printf("%d/%d checks passed\n", checks - failures, checks);
     return failures == 0 ? 0 : 1;

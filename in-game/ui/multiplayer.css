@@ -12,8 +12,12 @@
 /* Chips, avatars, crown */
 .mp-chip{display:block;flex-shrink:0;height:20px;line-height:20px;padding:0 8px;margin-left:8px;border-radius:10px;background:#1d2b26;color:#a7bab0;font-size:11px;font-weight:600;white-space:nowrap}
 .mp-chip.mint{background:#173b2f;color:#27e4a1}.mp-chip.cyan{background:#15303d;color:#66ccff}.mp-chip.amber{background:#3a2c17;color:#f0b45a}.mp-chip.violet{background:#272040;color:#b9a3ff}.mp-chip.rose{background:#3a1d25;color:#ff8fa3}
-.mp-avatar{display:block;flex-shrink:0;width:40px;height:40px;line-height:40px;border-radius:20px;text-align:center;font-size:14px;font-weight:700;letter-spacing:.3px;overflow:hidden}
+.mp-avatar{display:block;position:relative;flex-shrink:0;width:40px;height:40px;line-height:40px;border-radius:20px;text-align:center;font-size:14px;font-weight:700;letter-spacing:.3px;overflow:hidden}
 .mp-avatar.small{width:28px;height:28px;line-height:28px;border-radius:14px;font-size:11px}
+/* Steam picture over the initials: same box, round crop, a subtle 1px ring; hidden until it loads. */
+.mp-avatar-img{position:absolute;left:0;top:0;width:40px;height:40px;border-radius:20px;border:1px solid rgba(238,245,241,.16);box-sizing:border-box;opacity:0}
+.mp-avatar.small .mp-avatar-img{width:28px;height:28px;border-radius:14px}
+.mp-avatar.pic{background:#0d1512;color:#0d1512}.mp-avatar.pic .mp-avatar-img{opacity:1}
 .mp-avatar.mint{background:#173b2f;color:#27e4a1}.mp-avatar.cyan{background:#15303d;color:#66ccff}.mp-avatar.amber{background:#3a2c17;color:#f0b45a}.mp-avatar.violet{background:#272040;color:#b9a3ff}.mp-avatar.rose{background:#3a1d25;color:#ff8fa3}
 .mp-avatar.empty{display:block;height:40px;padding:0;background:#101916;border:1px dashed #30433a;color:#7f968a;font-weight:400;font-size:18px;line-height:38px}
 .mp-crown{display:block;flex-shrink:0;width:14px;height:11px;margin-left:8px}

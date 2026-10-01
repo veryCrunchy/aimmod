@@ -64,4 +64,9 @@ namespace bridge::json
 
     // Builds a JSON array from already-encoded values.
     std::string Array(const std::vector<std::string>& items);
+
+    // Splits already-encoded values into JSON arrays of at most maxBytes each, in order.
+    // A value that can't fit an array on its own is left out and counted in `skipped`.
+    // Always returns at least one (possibly empty) array.
+    std::vector<std::string> Chunks(const std::vector<std::string>& items, std::size_t maxBytes, std::size_t& skipped);
 } // namespace bridge::json

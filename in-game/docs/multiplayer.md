@@ -752,7 +752,8 @@ be merged into it later. The stage-3 kit remains the fallback test tool.
   lobby callbacks. Each member carries:
   - a persona name and initials;
   - avatars on request (32×32 RGBA from `GetSmallFriendAvatar` and
-    `GetImageRGBA`);
+    `GetImageRGBA`, or a 64×64 PNG with feature `avatar`, see "Steam profile
+    pictures" below);
   - P2P connected state and RTT.
 - **Host actions.**
   - **Kick:** an AMP1 `Kick` frame to that member. Their bridge leaves the
@@ -856,7 +857,7 @@ be merged into it later. The stage-3 kit remains the fallback test tool.
 | `lobby.kick` | `peer` | Host only. |
 | `lobby.transfer` | `peer` | Host only; calls `SetLobbyOwner`. |
 | `join.dismiss` | — | Drops the pending join request. |
-| `friends.list` | — | Replies `friends`. |
+| `friends.list` | `offline`? (default false) | Replies `friends`: online friends only unless `offline` is true. |
 | `avatar.get` | `peer` | Replies `avatar`, after up to 5 s while Steam loads it. |
 | `presence.set` | `status` ≤ 64 bytes | The rich presence `status` key. |
 | `p2p.send` | `peer`, `reliable` (default true), `data` base64 (1–16384 bytes) | Fails `not-connected` without a ready connection. A client can only reach the host. |
@@ -873,7 +874,7 @@ be merged into it later. The stage-3 kit remains the fallback test tool.
 | `p2p.connected` / `p2p.disconnected` | `peer`, `host` (true when that peer is our host) / `peer`, `reason` |
 | `p2p.message` | `peer`, `reliable`, `data` base64 (one service frame) |
 | `p2p.ping` | `peer`, `rtt` ms |
-| `friends` | `friends` [{peer, name, initials, state, playing, aimmod, lobby?}] |
+| `friends` | `friends` [{peer, name, initials, state, playing, aimmod, lobby?}], `part`, `parts`, `seq`, `total`. A list larger than 48 KiB comes as several events with the same `seq` (`part` 0 to `parts`-1); the service replaces its list only once every part has arrived. An entry that can't fit on its own is logged and left out. |
 | `avatar` | `peer`, then either `w`, `h`, `rgba` (base64, w·h·4 bytes) or `missing` true |
 | `error` | `code`, `message`: for example `rejected` (a host refused us) or `p2p` |
 
@@ -1215,6 +1216,80 @@ they simply play KovaaK's, and the watched player sees who is watching.
   (`Saved\SaveGames\Scenarios`), an unknown one, or with `hide_scenario=1`.
   `friends` entries carry it as `workshop`, so the spectator's UI can try
   `ugc.download` first.
+Any event larger than the 64 KiB pipe frame is never sent; the bridge logs its name and size instead
+of dropping it silently.
+
+### Contract addition: Steam profile pictures (still version 1)
+
+`ready.features` includes `avatar` when the bridge can send 64×64 pictures as
+PNG. The older `avatar.get {peer}` (32×32 RGBA) is unchanged.
+
+| Command | Fields | Result / events |
+| --- | --- | --- |
+| `avatar.get` | `peer`, `format` `"png"`, `have`? (16 lowercase hex: the hash the service holds) | `result` straight away (`busy` above 128 waiting), then one `avatar` event within 15 s. |
+
+| Event | Fields |
+| --- | --- |
+| `avatar` (PNG) | `peer`, `format` `"png"`, then one of: `w`, `h`, `hash`, `png` (base64); `hash`, `unchanged` true (it matches `have`); or `missing` true with `reason` `none`, `timeout` or `size`. |
+| `persona` | `peer`, `name`, `initials`, `avatar` (true when the picture changed): a friend's or lobby member's name or picture arrived or changed. |
+
+Example:
+
+```json
+{"v":1,"cmd":"avatar.get","id":12,"peer":"<SteamID64>","format":"png","have":"<hash>"}
+{"v":1,"ev":"avatar","peer":"<SteamID64>","format":"png","w":64,"h":64,"hash":"<16 hex>","png":"iVBORw0KGgo..."}
+```
+
+- **Source.** `GetMediumFriendAvatar` (64×64), `GetImageSize` and
+  `GetImageRGBA`. A handle of 0 means Steam doesn't have the user's
+  information yet: the bridge calls `RequestUserInformation(peer, false)`,
+  which also loads the persona name. If that returns false, Steam already
+  has the information and the user has no picture (`missing`, `none`). A
+  handle of -1 means the image is still loading: the bridge waits for
+  `AvatarImageLoaded_t` (334), and looks again every 250 ms until the 15 s
+  deadline (`missing`, `timeout`).
+- **Lobby members.** Steam sends pictures and names of non-friends who share
+  a lobby, so every machine asks its own Steam for every member. Nothing
+  about pictures travels between peers.
+- **Encoding.** One PNG: 8-bit RGBA, adaptive scanline filters and one IDAT,
+  zlib with a fixed-Huffman deflate and LZ77 matches (`AvatarImage.cpp`).
+  A picture is usually 6 to 18 KB. Above 40 KB the bridge answers
+  `size`. `hash` is FNV-1a 64 over width, height and the RGBA pixels.
+- **Rate.** At most 8 `avatar` events a second, from a queue of at most 128
+  peers.
+- **Names.** `PersonaStateChange_t` (304) is folded per SteamID before it
+  reaches the worker. Name, nickname and picture changes of lobby members
+  re-send `lobby.updated`. Friends and members also get a `persona` event,
+  at most 64 per tick. Friends whose name is still empty or `[unknown]` in
+  `friends.list` get `RequestUserInformation(friend, true)`, at most once a
+  minute each.
+
+**Service side** (`native-service/Multiplayer/SteamAvatars.cs`):
+
+- It asks for the people it shows: lobby members and match players (never
+  simulated ones), friends, spectators, watch requests and invite senders.
+  At most 6 requests wait for the bridge at once. A picture is re-checked
+  after 6 hours with `have`. Users without a picture are retried after
+  10 minutes. A `persona` event with `avatar: true` re-fetches straight away.
+- Every PNG is checked before it's kept: signature, CRCs, an IHDR of at most
+  64×64, and an IDAT that inflates to exactly the scanlines.
+- Pictures live in memory and in `<output>\steam-avatars\<hash>.png`, with
+  `index.json` mapping ids to hashes. At most 300 are kept, for 30 days. Files
+  nothing points at are deleted.
+- `GET <prefix>/avatar/<SteamID64>.png` serves a picture only for an id seen
+  in the last 30 minutes. It sends `Cache-Control: private, max-age=86400`,
+  an `ETag` of the hash (304 on a match) and `nosniff`. Anything else is a 404
+  with `no-store`.
+- The view links pictures as `/avatar/<id>.png?v=<hash prefix>`:
+  `lobby.avatars` (member id → link), `friends.items[].avatar`,
+  `watchers[]` / `watchAsks[]`, `watch`, `invites[]` and `self`. The notice
+  layer gets `person {name, avatar}` for invites, watch requests and friend
+  toasts. Lobby members sent to peers don't change.
+- **UI.** The initials circle stays as it is. A picture goes over it in the
+  same box (round crop, 1 px ring) once it has loaded, so the layout never
+  shifts. A picture that fails to load leaves the initials and isn't asked
+  for again.
+
 ### Mapping to the service's `IMultiplayerTransport`
 
 This is the lobby UI agent's model on `feat/kovaaks-multiplayer-ui`

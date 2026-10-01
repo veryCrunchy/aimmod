@@ -160,6 +160,9 @@ interface IMultiplayerTransport : IDisposable
     // avatar-test-path.tsv (dev.avatar). False when the bridge can't ("dev-avatar" feature).
     // profile: the AimMod look the test avatar wears (an AvatarProfiles character profile name).
     bool DevAvatar(bool on, string mode, string? profile = null) => false;
+    // Ask for a Steam profile picture (avatar.get {format:"png"}, feature "avatar"). have: the hash
+    // already held, so an unchanged picture isn't sent again. The answer is an Avatar event.
+    bool RequestAvatar(string peer, string? have) => false;
     // mode walk: the test avatar walks between these spawn points (x, y, z; at most 32).
     bool DevAvatar(bool on, string mode, string? profile, IReadOnlyList<double[]>? spawns) => spawns is null && DevAvatar(on, mode, profile);
     // Bulk file lane (bridge xfer.*): low-priority, in-order chunks of BulkChunkBytes, with a
@@ -172,19 +175,25 @@ interface IMultiplayerTransport : IDisposable
 // Disconnected (for the lobby itself: left, kicked, closed or shutdown) or an Error.
 // Bulk events carry Transfer and Index (BulkData: the chunk in Frame; BulkEnd: Reason).
 // Stream (SpectateStarted): the bridge's pose stream id for that peer, passed to AimModCore's spectator view.
-sealed record TransportEvent(string Peer, string Kind, byte[]? Frame = null, IncomingInvite? Invite = null, bool Host = false, string? Reason = null, WorkshopProgress? Workshop = null, int Transfer = 0, int Index = 0, string? Stream = null)
+// Picture (Avatar): the peer's Steam picture; null when they have none. Persona: Reason is the new name, Host
+// is true when their picture changed.
+sealed record TransportEvent(string Peer, string Kind, byte[]? Frame = null, IncomingInvite? Invite = null, bool Host = false, string? Reason = null, WorkshopProgress? Workshop = null, int Transfer = 0, int Index = 0, string? Stream = null, AvatarPicture? Picture = null)
 {
+    public const string Avatar = "avatar", Persona = "persona";
     public const string Connected = "connected", Disconnected = "disconnected", Left = "left", Message = "message", InviteReceived = "invite", Error = "error", WorkshopUpdate = "workshop", BulkData = "bulk-chunk", BulkAck = "bulk-ack", BulkEnd = "bulk-end",
         SpectateAsked = "spectate-asked", SpectateStarted = "spectate-started", SpectateEnded = "spectate-ended", SpectatorJoined = "spectator-joined", SpectatorLeft = "spectator-left", SpectateScore = "spectate-score";
 }
 // Sent, the window is full (try again after an ack), or the lane is unavailable.
 enum BulkSend { Sent, WindowFull, Unavailable }
+// A Steam picture from the bridge: the PNG and its hash, or Unchanged with the hash the service sent.
+sealed record AvatarPicture(string Hash, byte[]? Png, bool Unchanged);
 // Steam Workshop download state from the bridge: queued, downloading, installed or failed.
 sealed record WorkshopProgress(string Item, string State, long Done, long Total);
 // An invite or join request from Steam. Token is opaque (the connect string
 // payload); Summary is what the host advertised, shown before accepting.
 // Kind is invite (they invite you), request (they ask to join yours) or launch.
-sealed record IncomingInvite(string Id, string FromName, string Kind, string Token, LobbySummary? Summary, long At, bool Compatible = true);
+// From: the sender's peer id, when the transport knows it (for their picture).
+sealed record IncomingInvite(string Id, string FromName, string Kind, string Token, LobbySummary? Summary, long At, bool Compatible = true, string? From = null);
 sealed record LobbySummary(string Mode, string? Scenario, int Players, int MaxPlayers);
 sealed record RejoinPoint(string Token, string HostName, long AgeSeconds);
 // State is connecting or connected; Route is relay, direct or local.

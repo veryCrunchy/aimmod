@@ -60,6 +60,7 @@ namespace bridge
         Bind(module, F_GetFriendPersonaState, "SteamAPI_ISteamFriends_GetFriendPersonaState", missing);
         Bind(module, F_GetFriendGamePlayed, "SteamAPI_ISteamFriends_GetFriendGamePlayed", missing);
         Bind(module, F_GetSmallFriendAvatar, "SteamAPI_ISteamFriends_GetSmallFriendAvatar", missing);
+        Bind(module, F_GetMediumFriendAvatar, "SteamAPI_ISteamFriends_GetMediumFriendAvatar", missing);
         Bind(module, F_RequestUserInformation, "SteamAPI_ISteamFriends_RequestUserInformation", missing);
         Bind(module, F_SetRichPresence, "SteamAPI_ISteamFriends_SetRichPresence", missing);
         Bind(module, F_ClearRichPresence, "SteamAPI_ISteamFriends_ClearRichPresence", missing);

@@ -351,4 +351,31 @@ namespace bridge::json
         out.push_back(']');
         return out;
     }
+
+    std::vector<std::string> Chunks(const std::vector<std::string>& items, std::size_t maxBytes, std::size_t& skipped)
+    {
+        skipped = 0;
+        std::vector<std::string> out;
+        std::string current = "[";
+        for (const auto& item : items)
+        {
+            if (item.size() + 2 > maxBytes)
+            {
+                ++skipped;
+                continue;
+            }
+            const std::size_t needed = current.size() + (current.size() > 1 ? 1 : 0) + item.size() + 1;
+            if (needed > maxBytes && current.size() > 1)
+            {
+                current.push_back(']');
+                out.push_back(std::move(current));
+                current = "[";
+            }
+            if (current.size() > 1) current.push_back(',');
+            current += item;
+        }
+        current.push_back(']');
+        out.push_back(std::move(current));
+        return out;
+    }
 } // namespace bridge::json

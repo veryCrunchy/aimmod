@@ -50,7 +50,7 @@ sealed partial class MultiplayerService
         if (arrived.Spectatable && watch is null) actions.Add(new("Watch", "friend-watch", arrived.Id));
         actions.Add(new("Dismiss", "friend-dismiss", arrived.Id));
         var detail = arrived.Status == "aimmod-lobby" ? "In an AimMod lobby" : arrived.Detail is { Length: > 0 } d ? Detail(d) : "Playing KovaaK’s with AimMod";
-        flash = (new GameNotice("fr-" + arrived.Id + "-" + now, "friend", name + " is on AimMod", detail, null, null, "click") { Actions = actions }, now + FriendToastMs);
+        flash = (new GameNotice("fr-" + arrived.Id + "-" + now, "friend", name + " is on AimMod", detail, null, null, "click") { Actions = actions, Peer = arrived.Id, PeerName = name }, now + FriendToastMs);
     }
 
     // Status lines like "Playing <scenario>" are longer than a name; keep up to 80 characters.

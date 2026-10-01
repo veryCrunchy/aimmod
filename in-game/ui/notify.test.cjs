@@ -84,9 +84,36 @@ test('a missed poll leaves the buttons in place; a run of misses clears the laye
   for(let i=0;i<8;i++)n.reply(0,null);
   assert.equal(n.buttons().length,0);assert.equal(n.box.className,'');
 });
+test('invite notices show who it is from: initials first, their Steam picture once it loads, without rebuilding the buttons',()=>{
+  // Synthetic names and ids only.
+  const invite={version:1,active:true,id:'inv-inv-123456',kind:'invite',title:'Synthetic Friend invited you',body:'Click Join, or press F7.',key:'F7',layout:'toast',interactive:true,
+    actions:[{label:'Join',action:'accept-invite',id:'inv-123456'},{label:'Dismiss',action:'decline-invite',id:'inv-123456'}],person:{name:'Synthetic Friend',avatar:null}};
+  const n=live();n.render(invite);
+  const who=n.box.all().find(e=>/^who /.test(e.className));assert.ok(who,'a circle for the sender');assert.equal(who.textContent,'SF');assert.equal(who.children.length,0);
+  const join=n.buttons()[0];
+  const url='/avatar/76561190000000105.png?v=33334444';
+  n.render(Object.assign({},invite,{person:{name:'Synthetic Friend',avatar:url}}));
+  assert.equal(n.buttons()[0],join,'the toast is not rebuilt when the picture arrives');
+  const img=who.children[0];assert.ok(img&&img.className==='who-img'&&img.src==='/cap'+url,'the picture goes into the same circle');
+  assert.ok(!/pic/.test(who.className));img.onload();assert.match(who.className,/ pic$/);
+  n.render(Object.assign({},invite,{person:{name:'Synthetic Friend',avatar:'https://example.invalid/a.png'}}));
+  assert.equal(who.children.length,0,'foreign links are never loaded');assert.ok(!/pic/.test(who.className));
+  n.render(Object.assign({},invite,{person:{name:'Synthetic Friend',avatar:url}}));
+  assert.match(who.className,/ pic$/,'a picture seen before shows at once');who.children[0].onerror();
+  assert.equal(who.children.length,0);assert.ok(!/pic/.test(who.className),'a broken picture leaves the initials');
+  n.render({version:1,active:true,id:'cd-1',kind:'countdown',title:'Match starting in 3',body:'',countdown:3,layout:'toast'});
+  assert.ok(!n.box.all().some(e=>/^who /.test(e.className)),'countdowns keep their number, no circle');
+  const css=fs.readFileSync(path.join(__dirname,'notify.css'),'utf8');
+  assert.match(css,/\.who\{[^}]*width:44px;height:44px[^}]*border-radius:22px;overflow:hidden/);
+  assert.match(css,/\.who-img\{position:absolute;left:0;top:0;width:44px;height:44px;border-radius:22px;border:1px solid/);
+});
 test('a notice can carry a short extra line, such as a keybind that differs',()=>{
   const n=setup();n.render({version:1,active:true,id:'ld-m1-0',kind:'countdown',title:'Waiting for everyone to load (1/2)',body:'Loading…',note:'Walk is on Q here (usually Shift)'});
   assert.ok(n.box.all().some(e=>e.className==='note'&&e.textContent==='Walk is on Q here (usually Shift)'));
   const k=setup();k.render({version:1,active:true,id:'keys-m1',kind:'info',eyebrow:'AimMod · Keybinds',title:'Walk is on Q here (usually Shift)',body:'',key:'F7'});
   assert.equal(k.box.all().find(e=>e.className==='brand').textContent,'AIMMOD · KEYBINDS');assert.ok(!k.box.all().some(e=>e.className==='note'));
+});
+test('a sender named only with punctuation keeps those characters in the circle',()=>{
+  const n=live();n.render({version:1,active:true,id:'inv-inv-1',kind:'invite',title:'-.- invited you',body:'',layout:'toast',interactive:true,actions:[{label:'Join',action:'accept-invite',id:'inv-1'}],person:{name:'-.-',avatar:null}});
+  assert.equal(n.box.all().find(e=>/^who /.test(e.className)).textContent,'-.');
 });

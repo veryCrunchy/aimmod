@@ -1,5 +1,7 @@
 #include "Bridge.hpp"
 
+#include "AvatarImage.hpp"
+
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
@@ -22,6 +24,7 @@ namespace bridge
         constexpr auto LobbyPollInterval = 250ms;
         constexpr auto ReconnectInterval = 3s;
         constexpr auto CallTimeout = 20s;
+        constexpr std::size_t FriendsPartBytes = 48 * 1024; // friends JSON per event, leaving room for the envelope
         // Keys the bridge owns; the service can read but not set them.
         constexpr const char* KeyVersion = "aimmod.v";
         constexpr const char* KeyToken = "aimmod.token";
@@ -91,8 +94,8 @@ namespace bridge
             {"lobby.kick", {"peer"}},
             {"lobby.transfer", {"peer"}},
             {"join.dismiss", {}},
-            {"friends.list", {}},
-            {"avatar.get", {"peer"}},
+            {"friends.list", {"offline"}},
+            {"avatar.get", {"peer", "format", "have"}},
             {"presence.set", {"status"}},
             {"p2p.send", {"peer", "reliable", "data"}},
             {"p2p.close", {"peer"}},
@@ -147,6 +150,24 @@ namespace bridge
         Listener(Bridge& owner, int id, int size) : m_owner(owner), m_size(size) { m_iCallback = id; }
         void Run(void* param) override
         {
+            if (m_iCallback == CbPersonaStateChange || m_iCallback == CbAvatarImageLoaded)
+            {
+                std::uint64_t id = 0;
+                int flags = 0;
+                std::memcpy(&id, param, sizeof(id));
+                if (m_iCallback == CbPersonaStateChange) std::memcpy(&flags, static_cast<const std::uint8_t*>(param) + offsetof(PersonaStateChange_t, m_nChangeFlags), sizeof(flags));
+                {
+                    std::lock_guard lock(m_owner.m_mutex);
+                    if (m_iCallback == CbAvatarImageLoaded)
+                    {
+                        if (m_owner.m_avatarsLoaded.size() < 1024) m_owner.m_avatarsLoaded.insert(id);
+                    }
+                    else if (m_owner.m_personaChanged.size() < 1024 || m_owner.m_personaChanged.contains(id))
+                        m_owner.m_personaChanged[id] |= flags;
+                }
+                m_owner.m_wake.notify_one();
+                return;
+            }
             RawCallback cb{m_iCallback, {}};
             cb.bytes.assign(static_cast<const std::uint8_t*>(param), static_cast<const std::uint8_t*>(param) + m_size);
             {
@@ -199,7 +220,9 @@ namespace bridge
                        new Listener(*this, CbConnectionStatusChanged, sizeof(steamabi::SteamNetConnectionStatusChangedCallback_t)),
                        new Listener(*this, CbLobbyInvite, sizeof(LobbyInvite_t)),
                        new Listener(*this, CbItemInstalled, sizeof(ItemInstalled_t)),
-                       new Listener(*this, CbDownloadItemResult, sizeof(DownloadItemResult_t))};
+                       new Listener(*this, CbDownloadItemResult, sizeof(DownloadItemResult_t)),
+                       new Listener(*this, CbPersonaStateChange, sizeof(PersonaStateChange_t)),
+                       new Listener(*this, CbAvatarImageLoaded, sizeof(AvatarImageLoaded_t))};
         m_onGameThread([this] {
             for (auto* l : m_listeners) m_steam.RegisterCallback(l, l->Id());
         });
@@ -300,14 +323,22 @@ namespace bridge
         std::deque<std::string> commands;
         std::deque<RawCallback> callbacks;
         std::deque<bool> states;
+        std::map<std::uint64_t, int> personas;
+        std::set<std::uint64_t> loaded;
         {
             std::lock_guard lock(m_mutex);
             commands.swap(m_commands);
             callbacks.swap(m_callbacks);
             states.swap(m_pipeStates);
+            personas.swap(m_personaChanged);
+            loaded.swap(m_avatarsLoaded);
         }
         for (const bool connected : states)
-            if (!connected) m_avatars.clear();
+            if (!connected)
+            {
+                m_avatars.clear();
+                m_pngAvatars.clear();
+            }
         for (const auto& cb : callbacks) HandleCallback(cb);
         for (const auto& text : commands) HandleCommand(text);
         PollCalls();
@@ -354,6 +385,8 @@ namespace bridge
                 Emit(json::Object().Int("v", ContractVersion).Str("ev", "spectate.ended").Str("peer", Id(lost)).Str("reason", "lost").Done());
             }
         }
+        if (!personas.empty()) FlushPersona(personas);
+        PollAvatars(loaded);
         // Avatars that were still loading.
         const auto now = Clock::now();
         auto avatars = std::move(m_avatars);
@@ -751,7 +784,8 @@ namespace bridge
         }
         else if (name == "friends.list")
         {
-            EmitFriends();
+            // Online friends only, unless the service asks for offline ones too.
+            EmitFriends(c.Bool("offline").value_or(false));
             Result(*id, true);
         }
         else if (name == "avatar.get")
@@ -760,6 +794,29 @@ namespace bridge
             if (!peer)
             {
                 Result(*id, false, "invalid", "peer must be a SteamID64.");
+                return;
+            }
+            if (c.Get("format"))
+            {
+                const auto format = c.Str("format", 8);
+                const auto have = c.Get("have") ? c.Str("have", 16) : std::optional<std::string>(std::string());
+                if (format != "png" || !have || !std::all_of(have->begin(), have->end(), [](char ch) { return (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f'); }))
+                {
+                    Result(*id, false, "invalid", "format must be \"png\" and have a lowercase hex hash.");
+                    return;
+                }
+                auto it = std::find_if(m_pngAvatars.begin(), m_pngAvatars.end(), [&](const AvatarWant& w) { return w.peer == *peer; });
+                if (it == m_pngAvatars.end())
+                {
+                    if (m_pngAvatars.size() >= 128)
+                    {
+                        Result(*id, false, "busy", "Too many avatars are loading.");
+                        return;
+                    }
+                    m_pngAvatars.push_back({*peer, *have, Clock::now() + 15s, Clock::now(), false});
+                }
+                else it->have = *have;
+                Result(*id, true);
                 return;
             }
             Result(*id, true);
@@ -1991,7 +2048,17 @@ namespace bridge
 
     void Bridge::Emit(const std::string& text)
     {
-        if (m_pipe) m_pipe->Send(text);
+        if (!m_pipe) return;
+        // Never drop an event silently: name what didn't fit the frame.
+        if (text.size() > MaxPipeFrame)
+        {
+            const auto at = text.find("\"ev\":\"");
+            const auto end = at == std::string::npos ? at : text.find('"', at + 6);
+            const std::string ev = at == std::string::npos || end == std::string::npos ? "?" : text.substr(at + 6, std::min<std::size_t>(end - at - 6, 32));
+            m_log("pipe: " + ev + " event of " + std::to_string(text.size()) + " bytes is over the " + std::to_string(MaxPipeFrame) + "-byte frame; not sent");
+            return;
+        }
+        m_pipe->Send(text);
     }
 
     void Bridge::Result(std::int64_t id, bool ok, const char* code, const std::string& message)
@@ -2080,7 +2147,7 @@ namespace bridge
             .Int("appId", KovaaksAppId)
             .Raw("self", json::Object().Str("peer", Id(m_self)).Str("name", name).Str("initials", Initials(name)).Done())
             .Str("relay", steamabi::AvailabilityName(avail))
-            .Raw("features", R"(["lobby","p2p","ugc","xfer","ugc-query","spectate-direct","dev-avatar","dev-avatar-walk"])")
+            .Raw("features", R"(["lobby","p2p","ugc","xfer","ugc-query","spectate-direct","dev-avatar","dev-avatar-walk","avatar"])")
             .Int("maxChunk", static_cast<std::int64_t>(MaxChunk))
             .Int("xferWindow", static_cast<std::int64_t>(XferWindow));
         o.Str("spectatePrivacy", SpectatePrivacyName(m_spectatePrivacy));
@@ -2129,7 +2196,7 @@ namespace bridge
         Emit(o.Done());
     }
 
-    void Bridge::EmitFriends()
+    void Bridge::EmitFriends(bool offline)
     {
         constexpr int FlagImmediate = 4;
         const int count = std::min(m_steam.F_GetFriendCount(m_steam.friends, FlagImmediate), static_cast<int>(MaxFriends));
@@ -2139,6 +2206,7 @@ namespace bridge
         {
             const std::uint64_t f = m_steam.F_GetFriendByIndex(m_steam.friends, i, FlagImmediate);
             if (!IsIndividualId(f)) continue;
+            if (!offline && m_steam.F_GetFriendPersonaState(m_steam.friends, f) == 0) continue;
             FriendGameInfo_t game{};
             const bool inGame = m_steam.F_GetFriendGamePlayed(m_steam.friends, f, &game);
             const bool playing = inGame && (game.m_gameID & 0xFFFFFFull) == KovaaksAppId && ((game.m_gameID >> 24) & 0xFF) == 0;
@@ -2158,6 +2226,16 @@ namespace bridge
                 if (const auto target = ParseJoinString(connect ? connect : "")) joinLobby = target->lobby;
             }
             const std::string name = Name(f);
+            if (name.empty() || name == "[unknown]")
+            {
+                // Steam hasn't sent this persona yet; a PersonaStateChange_t follows.
+                auto& asked = m_infoRequested[f];
+                if (now >= asked)
+                {
+                    m_steam.F_RequestUserInformation(m_steam.friends, f, true);
+                    asked = now + 60s;
+                }
+            }
             json::Object o;
             o.Str("peer", Id(f))
                 .Str("name", name)
@@ -2191,7 +2269,21 @@ namespace bridge
             }
             list.push_back(o.Done());
         }
-        Emit(json::Object().Int("v", ContractVersion).Str("ev", "friends").Raw("friends", json::Array(list)).Done());
+        // A long friends list doesn't fit one pipe frame: send it in parts the service joins by seq.
+        std::size_t skipped = 0;
+        const auto parts = json::Chunks(list, FriendsPartBytes, skipped);
+        if (skipped) m_log("friends: " + std::to_string(skipped) + " entries too large to send");
+        const std::int64_t seq = ++m_friendsSeq;
+        for (std::size_t i = 0; i < parts.size(); ++i)
+            Emit(json::Object()
+                     .Int("v", ContractVersion)
+                     .Str("ev", "friends")
+                     .Raw("friends", parts[i])
+                     .Int("part", static_cast<std::int64_t>(i))
+                     .Int("parts", static_cast<std::int64_t>(parts.size()))
+                     .Int("seq", seq)
+                     .Int("total", static_cast<std::int64_t>(list.size() - skipped))
+                     .Done());
     }
 
     void Bridge::EmitAvatar(std::uint64_t peer, bool)
@@ -2218,6 +2310,133 @@ namespace bridge
                  .Str("rgba", Base64Encode(rgba.data(), rgba.size()))
                  .Done());
     }
+    // PNG avatars (feature "avatar"). GetMediumFriendAvatar returns 0 until Steam
+    // has the user's information (RequestUserInformation fetches it, also for
+    // lobby members who aren't friends) and -1 while the image itself loads
+    // (AvatarImageLoaded_t follows). At most 8 avatar events a second.
+    void Bridge::PollAvatars(const std::set<std::uint64_t>& loaded)
+    {
+        if (m_pngAvatars.empty()) return;
+        const auto now = Clock::now();
+        const double elapsed = std::chrono::duration<double>(now - m_avatarBudgetAt).count();
+        m_avatarBudgetAt = now;
+        m_avatarBudget = std::min(8.0, m_avatarBudget + std::max(0.0, elapsed) * 8.0);
+        for (auto it = m_pngAvatars.begin(); it != m_pngAvatars.end();)
+        {
+            if (m_avatarBudget < 1) break;
+            const bool final = now >= it->deadline;
+            if (!final && now < it->next && !loaded.contains(it->peer))
+            {
+                ++it;
+                continue;
+            }
+            const int handle = m_steam.F_GetMediumFriendAvatar(m_steam.friends, it->peer);
+            if (handle == 0 && !it->asked)
+            {
+                it->asked = true;
+                // False: Steam already has this user's information, so there is no picture.
+                if (!m_steam.F_RequestUserInformation(m_steam.friends, it->peer, false))
+                {
+                    m_avatarBudget -= 1;
+                    EmitPngAvatar(*it);
+                    it = m_pngAvatars.erase(it);
+                    continue;
+                }
+            }
+            if (handle > 0 || final)
+            {
+                m_avatarBudget -= 1;
+                EmitPngAvatar(*it);
+                it = m_pngAvatars.erase(it);
+                continue;
+            }
+            it->next = now + 250ms;
+            ++it;
+        }
+    }
+
+    // One avatar event: the PNG, "unchanged" when the service already has this
+    // picture, or missing with a reason (none, timeout, size).
+    void Bridge::EmitPngAvatar(const AvatarWant& want)
+    {
+        auto missing = [&](const char* reason) {
+            Emit(json::Object().Int("v", ContractVersion).Str("ev", "avatar").Str("peer", Id(want.peer)).Str("format", "png").Bool("missing", true).Str("reason", reason).Done());
+        };
+        const int handle = m_steam.F_GetMediumFriendAvatar(m_steam.friends, want.peer);
+        if (handle <= 0)
+        {
+            missing(handle < 0 || Clock::now() >= want.deadline ? "timeout" : "none");
+            return;
+        }
+        std::uint32_t w = 0, h = 0;
+        if (!m_steam.Utils_GetImageSize(m_steam.utils, handle, &w, &h) || w == 0 || h == 0 || w > avatar::MaxEdge || h > avatar::MaxEdge)
+        {
+            missing("size");
+            return;
+        }
+        std::vector<std::uint8_t> rgba(static_cast<std::size_t>(w) * h * 4);
+        if (!m_steam.Utils_GetImageRGBA(m_steam.utils, handle, rgba.data(), static_cast<int>(rgba.size())))
+        {
+            missing("none");
+            return;
+        }
+        const std::string hash = avatar::Hash(rgba.data(), w, h);
+        if (!want.have.empty() && want.have == hash)
+        {
+            Emit(json::Object().Int("v", ContractVersion).Str("ev", "avatar").Str("peer", Id(want.peer)).Str("format", "png").Str("hash", hash).Bool("unchanged", true).Done());
+            return;
+        }
+        const auto png = avatar::EncodePng(rgba.data(), rgba.size(), w, h);
+        if (png.empty() || png.size() > avatar::MaxPngBytes)
+        {
+            missing("size");
+            return;
+        }
+        Emit(json::Object()
+                 .Int("v", ContractVersion)
+                 .Str("ev", "avatar")
+                 .Str("peer", Id(want.peer))
+                 .Str("format", "png")
+                 .Int("w", w)
+                 .Int("h", h)
+                 .Str("hash", hash)
+                 .Str("png", Base64Encode(png.data(), png.size()))
+                 .Done());
+    }
+
+    // Persona names and pictures that arrived or changed (PersonaStateChange_t):
+    // lobby members refresh the lobby, friends and members get a persona event.
+    void Bridge::FlushPersona(const std::map<std::uint64_t, int>& changed)
+    {
+        constexpr int Interesting = PersonaChangeName | PersonaChangeNameFirstSet | PersonaChangeNickname | PersonaChangeAvatar;
+        constexpr int RelationshipFriend = 3;
+        bool lobby = false;
+        int sent = 0;
+        for (const auto& [peer, flags] : changed)
+        {
+            if (!(flags & Interesting) || !IsIndividualId(peer)) continue;
+            const bool member = m_lobby && IsMember(peer);
+            lobby = lobby || member;
+            if (flags & PersonaChangeAvatar)
+                for (auto& w : m_pngAvatars)
+                    if (w.peer == peer) w.next = Clock::now();
+            if (peer == m_self || (!member && m_steam.F_GetFriendRelationship(m_steam.friends, peer) != RelationshipFriend)) continue;
+            if (sent >= 64) continue;
+            const std::string name = Name(peer);
+            if (name.empty()) continue;
+            ++sent;
+            Emit(json::Object()
+                     .Int("v", ContractVersion)
+                     .Str("ev", "persona")
+                     .Str("peer", Id(peer))
+                     .Str("name", name)
+                     .Str("initials", Initials(name))
+                     .Bool("avatar", (flags & PersonaChangeAvatar) != 0)
+                     .Done());
+        }
+        if (lobby) EmitLobby();
+    }
+
     // --- Workshop ---------------------------------------------------------
 
     bool Bridge::InstallFolder(std::uint64_t item, std::string& folder)
