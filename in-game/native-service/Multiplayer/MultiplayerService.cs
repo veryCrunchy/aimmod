@@ -820,7 +820,8 @@ sealed partial class MultiplayerService : IDisposable
         if (!quiet && Current is null or { Match: null or { Phase: MatchPhases.Final } } && Tournaments?.Notice() is { } tournamentNotice) return tournamentNotice;
         if (Current is not { } lobby) return flash is { } f && now < f.Until ? f.Notice : null;
         var me = lobby.Members.FirstOrDefault(m => m.Id == SelfId);
-        if (lobby.Match is { } match && match.Players.Contains(SelfId) && match.Phase is MatchPhases.Countdown && match.StartsAt is { } at)
+        // CS shows its own freeze clock, so the generic match countdown stays away.
+        if (lobby.Match is { } match && match.Players.Contains(SelfId) && match.Phase is MatchPhases.Countdown && match.Cs is null && match.StartsAt is { } at)
         {
             var seconds = (int)Math.Max(0, Math.Ceiling((at - now) / 1000.0));
             var round = match.Round > 1 ? "Round " + match.Round + " starting" : "Match starting";
@@ -963,6 +964,8 @@ sealed partial class MultiplayerService : IDisposable
             return JsonSerializer.Serialize(new
             {
                 version = 1, active = notice is not null, badge, notice?.Id, notice?.Kind, notice?.Eyebrow, notice?.Title, notice?.Body, notice?.Key, notice?.Countdown, notice?.Sound, notice?.Invite,
+                // full: the notice layer covers the screen (the HUDs sit at its edges); toast: top centre only.
+                layout = cs is not null || board is not null || boardFull is not null ? "full" : "toast",
                 actions = notice?.Actions, interactive = notice?.Actions is { Count: > 0 } || cs?.BuyOpen == true, volume = prefs.Sounds ? prefs.Volume : 0, duel, combat, cs, board, boardFull,
             }, Protocol.Json);
         }
@@ -1668,7 +1671,7 @@ sealed partial class MultiplayerService : IDisposable
                 plan = plan with { State = "loading", Message = "Loading “" + plan.Scenario + "” in KovaaK’s…", LoadSequence = again, StartSequence = null };
         }
         // Tell the host once this machine has the scenario loaded (or will start it by hand).
-        if (match.Phase == MatchPhases.Loading && loadedSent != key && plan.State is "ready" or "manual" or "error" or "started")
+        if (match.Phase == MatchPhases.Loading && loadedSent != key && plan.State is "ready" or "manual" or "error" or "started" && (plan.State != "ready" || game.SceneLoading != true))
         { loadedSent = key; Command("loaded", JsonSerializer.SerializeToElement(new { match = match.Id, round = match.Round })); }
         if (match.Phase == MatchPhases.Live && plan.StartSequence is null && plan.State is "loading" or "ready" or "manual")
         {

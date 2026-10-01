@@ -5,13 +5,28 @@
 -- service's hotkey (F7) answers instead. No input mode, focus or key callbacks.
 -- Call only from the native game thread.
 local M={}
-local owner,host,view,renderer,loadedUrl
+local owner,host,view,renderer,loadedUrl,slot,layout
 local shown=false
 local text
 local lastId,lastCount
 local interactive=false
 local base=(os.getenv('LOCALAPPDATA') or '')..'/AimMod/KovaaksNative/'
 local Width,Height=620,230
+-- Two sizes: the toast (top centre, 620 x 230) for notices, and the whole screen for
+-- the mode HUDs (CS, standings) that sit at the screen edges. The service says which.
+local function place(full)
+    if not slot then return end
+    layout=full and 'full' or 'toast'
+    if full then
+        slot:SetAnchors({Minimum={X=0,Y=0},Maximum={X=1,Y=1}})
+        slot:SetAlignment({X=0,Y=0})
+        slot:SetOffsets({Left=0,Top=0,Right=0,Bottom=0})
+    else
+        slot:SetAnchors({Minimum={X=0.5,Y=0},Maximum={X=0.5,Y=0}})
+        slot:SetAlignment({X=0.5,Y=0})
+        slot:SetOffsets({Left=0,Top=0,Right=Width,Bottom=Height})
+    end
+end
 local function valid(value)return value and value:IsValid()end
 local function read(name,limit)
     local file=io.open(base..name,'rb');if not file then return nil end
@@ -58,7 +73,7 @@ end
 function M.close()
     M.hide()
     if valid(host) then host:RemoveFromParent() end
-    host=nil;view=nil;renderer=nil;loadedUrl=nil
+    host=nil;view=nil;renderer=nil;loadedUrl=nil;slot=nil;layout=nil
 end
 function M.attach(value)
     if owner==value and valid(owner) then return end
@@ -78,10 +93,9 @@ local function create(url)
     renderer=view:GetCohtmlWidget();assert(valid(renderer),'notice renderer unavailable')
     renderer.bReceiveInput=false;renderer:SetVisibility(3)
     -- Only the toast area: top centre, fixed size, so the rest of the screen is untouched.
-    local slot=canvas:AddChildToCanvas(view)
-    slot:SetAnchors({Minimum={X=0.5,Y=0},Maximum={X=0.5,Y=0}})
-    slot:SetAlignment({X=0.5,Y=0});slot:SetAutoSize(false)
-    slot:SetOffsets({Left=0,Top=0,Right=Width,Bottom=Height})
+    slot=canvas:AddChildToCanvas(view)
+    slot:SetAutoSize(false)
+    place(false)
     host:AddToViewport(5100)
     host.bIsFocusable=false;view.bIsFocusable=false
     host:SetVisibility(1);renderer.bReceiveInput=false
@@ -108,6 +122,8 @@ function M.update(panelOpen,replayActive)
         if not ok then M.close();return end
     elseif url~=loadedUrl then renderer:Load(url);loadedUrl=url end
     if not shown then shown=true;host:SetVisibility(3) end
+    local full=text:find('"layout":"full"',1,true)~=nil
+    if (full and layout~='full') or (not full and layout~='toast') then pcall(place,full) end
     local cursor=false
     pcall(function()cursor=owner:GetOwningPlayer().bShowMouseCursor==true end)
     local wantInput=text:find('"interactive":true',1,true)~=nil and cursor

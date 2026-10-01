@@ -23,7 +23,7 @@
     while(box.firstChild)box.removeChild(box.firstChild);
     if(!n||(!n.active&&!n.badge&&!n.duel&&!n.combat&&!n.cs)){box.className='';return;}
     // CS draws its own strip at the top, so notices move below it.
-    var extra=n.cs&&root.AimModCsHud?' cs-on':n.duel||n.combat||n.cs?' duel-on':'';
+    var extra=n.cs&&root.AimModCsHud?' cs-on'+(n.cs.buyOpen?' cs-buying':''):n.duel||n.combat||n.cs?' duel-on':'';
     box.className='show'+extra;
     if(n.duel)box.appendChild(duel(n.duel));
     if(n.combat)box.appendChild(combat(n.combat));
