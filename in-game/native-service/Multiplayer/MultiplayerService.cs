@@ -118,7 +118,7 @@ sealed partial class MultiplayerService : IDisposable
                     if (Current is not null || hostPeer is not null || joinPendingSince is not null) return LobbyResult.Fail("in-lobby", "Leave your current lobby first.");
                     selfName = LocalName();
                     var mode = Text("mode");
-                    var settings = new LobbySettings(Mode: mode is not null && LobbyModes.All.Contains(mode) ? mode : LobbyModes.Race);
+                    var settings = LobbyRules.ModeDefaults(new LobbySettings(), mode is not null && LobbyModes.All.Contains(mode) ? mode : LobbyModes.Race);
                     if (Text("scenario") is { } wanted && library.Scenario(wanted) is { } picked) settings = settings with { Scenario = picked };
                     else if (library.Scenarios.FirstOrDefault() is { } first) settings = settings with { Scenario = library.Scenario(first.Name) };
                     core = new LobbyCore(SelfId, selfName, settings, clock);
@@ -784,6 +784,12 @@ sealed partial class MultiplayerService : IDisposable
             var seconds = (int)Math.Max(0, Math.Ceiling((at - now) / 1000.0));
             var round = match.Round > 1 ? "Round " + match.Round + " starting" : "Match starting";
             var how = plan is { } p && p.Key == match.Id + "#" + match.Round ? p.Message : "Get ready.";
+            // Tracking duel: the countdown says who tracks (the duel HUD repeats it during the round).
+            if (match.Mode == LobbyModes.Tracking && match.Attacker is { } attacker)
+            {
+                var other = lobby.Members.FirstOrDefault(x => x.Id != SelfId && match.Players.Contains(x.Id))?.Name ?? "your opponent";
+                how = attacker == SelfId ? "You track " + other + ". Keep your crosshair on them." : "You dodge. " + other + " tracks you.";
+            }
             return new GameNotice("cd-" + match.Id + "-" + match.Round, "countdown", round + " in " + seconds, LobbyRules.CleanName(match.Scenario, "Scenario") + " · " + how, null, seconds, "countdown");
         }
         if (!quiet && lobby.ReadyCheck is { } asked && now - asked < LobbyCore.ReadyCheckMs && me is { Role: MemberRoles.Player, Ready: false } && lobby.HostId != SelfId)
@@ -818,7 +824,7 @@ sealed partial class MultiplayerService : IDisposable
         }
     }
 
-    static string ModeLabel(string mode) => mode switch { LobbyModes.Race => "a score race", LobbyModes.Duel => "a duel", LobbyModes.Rounds => "free-for-all", _ => "practice" };
+    static string ModeLabel(string mode) => mode switch { LobbyModes.Race => "a score race", LobbyModes.Duel => "a duel", LobbyModes.Rounds => "free-for-all", LobbyModes.Tracking => "a tracking duel", _ => "practice" };
 
     // Ask AimModNativeUI to open the AimMod panel on the Multiplayer page. It waits for
     // the main menu, and never interrupts a running scenario: the request stays until then.
@@ -850,17 +856,40 @@ sealed partial class MultiplayerService : IDisposable
         return watchers.Count + " watching: " + names;
     }
     public string NoticeText() => NoticeJson();
+
+    // Tracking duel HUD for the notice layer (top edge, away from the crosshair):
+    // this player's role, the opponent, the attacker's host score so far, the
+    // share of the elapsed round on target, and the seconds left. Countdown and live only.
+    internal sealed record DuelView(string Role, string Opponent, double? Percent, double? OnTarget, int? Left, int Round, int Rounds, string Phase, bool Disputed);
+    internal DuelView? DuelHud()
+    {
+        if (Current is not { Match: { Mode: LobbyModes.Tracking, Phase: MatchPhases.Countdown or MatchPhases.Live, Attacker: { } attacker } m } lobby || !m.Players.Contains(SelfId)) return null;
+        var opponent = lobby.Members.FirstOrDefault(x => x.Id != SelfId && m.Players.Contains(x.Id))?.Name ?? "Opponent";
+        // Match times are on the host clock.
+        var hostNow = clock() + (core is null && hostPeer is not null ? clocks.GetValueOrDefault(hostPeer)?.Offset ?? 0 : 0);
+        int? left = null; double? share = null;
+        if (m.Phase == MatchPhases.Live && m.StartsAt is { } start)
+        {
+            var end = start + (long)(m.TimeLimit * 1000);
+            left = (int)Math.Max(0, Math.Ceiling((end - hostNow) / 1000.0));
+            var elapsed = Math.Clamp(hostNow - start, 0, end - start) / 1000.0;
+            if (m.Tracking is { } t && elapsed > 0.5) share = Math.Round(Math.Min(100, t.Seconds * 100 / elapsed), 1);
+        }
+        return new DuelView(attacker == SelfId ? "track" : "dodge", LobbyRules.CleanName(opponent, "Opponent"), m.Phase == MatchPhases.Live ? m.Tracking?.Percent ?? 0 : null, share,
+            left, m.Round, m.TotalRounds ?? m.Round, m.Phase, m.Tracking?.Disputed == true);
+    }
     string NoticeJson(GameNotice? notice = null)
     {
         lock (gate)
         {
             notice ??= ComputeNotice(clock());
             var badge = Badge();
-            if (notice is null && badge is null) return "{\"version\":1,\"active\":false}";
+            var duel = DuelHud();
+            if (notice is null && badge is null && duel is null) return "{\"version\":1,\"active\":false}";
             return JsonSerializer.Serialize(new
             {
                 version = 1, active = notice is not null, badge, notice?.Id, notice?.Kind, notice?.Title, notice?.Body, notice?.Key, notice?.Countdown, notice?.Sound, notice?.Invite,
-                actions = notice?.Actions, interactive = notice?.Actions is { Count: > 0 }, volume = prefs.Sounds ? prefs.Volume : 0,
+                actions = notice?.Actions, interactive = notice?.Actions is { Count: > 0 }, volume = prefs.Sounds ? prefs.Volume : 0, duel,
             }, Protocol.Json);
         }
     }
@@ -1264,6 +1293,12 @@ sealed partial class MultiplayerService : IDisposable
             case "finish":
                 if (ReadFinish(m.Body) is { } run) core!.Finish(peer, run);
                 break;
+            case "track":
+                if (TrackBatch.Read(m.Body) is { } batch) core!.Track(peer, batch);
+                break;
+            case "hit":
+                if (HitClaim.Read(m.Body) is { } claim) core!.Claim(peer, claim);
+                break;
             case "content.request":
                 if (server.Manifest(core!.Settings) is { } manifest) Send(peer, "content.manifest", new { key = manifest.Key, files = manifest.Files, workshop = manifest.Workshop });
                 else Send(peer, "content.error", new { hash = "", code = "none" });
@@ -1540,9 +1575,66 @@ sealed partial class MultiplayerService : IDisposable
 
     // The local player's score comes from AimModCore's live feed, and the final
     // result from the run journal, exactly as the rest of AimMod records runs.
+    // Tracking duel: stream this machine's camera samples and drawn avatars to the
+    // host (both roles; the host knows who attacks). The host does the scoring.
+    SelfPoseTracker? poseTracker;
+    string? trackKey;
+    void StreamTracking(MatchSnapshot match)
+    {
+        if (outputFolder is null) return;
+        poseTracker ??= new SelfPoseTracker(outputFolder);
+        var key = match.Id + "#" + match.Round;
+        if (trackKey != key) { trackKey = key; poseTracker.Reset(); }
+        var now = clock();
+        poseTracker.Request(now);
+        if (match.Phase is not (MatchPhases.Countdown or MatchPhases.Live)) return;
+        // Samples travel on the host clock: offset = host - local.
+        var offset = core is not null || hostPeer is null ? 0 : clocks.GetValueOrDefault(hostPeer)?.Offset ?? 0;
+        poseTracker.Poll(offset);
+        foreach (var batch in poseTracker.Drain(match.Id, match.Round))
+        {
+            if (core is not null) core.Track(SelfId, batch);
+            else if (hostPeer is not null) Send(hostPeer, "track", batch.Body());
+        }
+    }
+
+    // Combat modes: the same camera stream, plus hit claims from AimModCore's shot
+    // feed, and the host's verdict for this player written back for AimModCore.
+    ShotFeed? shotFeed; string? shotKey;
+    long playSequence; string? lastPlayState;
+    void StreamCombat(MatchSnapshot match)
+    {
+        if (outputFolder is null) return;
+        StreamTracking(match);
+        shotFeed ??= new ShotFeed(outputFolder);
+        if (shotKey != match.Id + "#" + match.Round) { shotKey = match.Id + "#" + match.Round; shotFeed.Reset(); }
+        if (match.Phase == MatchPhases.Live && poseTracker is not null)
+        {
+            var offset = core is not null || hostPeer is null ? 0 : clocks.GetValueOrDefault(hostPeer)?.Offset ?? 0;
+            foreach (var claim in shotFeed.Poll(match.Id, match.Round, offset, poseTracker.LastSeen))
+            {
+                if (core is not null) core.Claim(SelfId, claim);
+                else if (hostPeer is not null) Send(hostPeer, "hit", claim.Body());
+            }
+        }
+        if (match.Combat?.Players.FirstOrDefault(p => p.Member == SelfId) is { } self)
+        {
+            var lastHit = match.Combat.Events.LastOrDefault(e => e.Member == SelfId && e.Kind is "damage");
+            var body = PlayState.Format(0, match.Id, self, lastHit, lastHit?.Attacker);
+            if (body != lastPlayState)
+            {
+                lastPlayState = body;
+                try { AtomicFile.WriteText(Path.Combine(outputFolder, "play-state.tsv"), PlayState.Format(++playSequence, match.Id, self, lastHit, lastHit?.Attacker)); }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+            }
+        }
+    }
+
     void TrackLocalRun()
     {
         if (Current is not { Match: { } match } || !match.Players.Contains(SelfId)) { trackedRound = null; return; }
+        if (match.Mode == LobbyModes.Tracking) { StreamTracking(match); return; }
+        if (LobbyModes.Combat(match.Mode)) { StreamCombat(match); return; }
         var roundKey = match.Id + "#" + match.Round;
         if (trackedRound != roundKey)
         {
