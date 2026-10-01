@@ -14,9 +14,9 @@ sealed class LobbyCore
     {
         public required string Id; public required string Name; public string Role = MemberRoles.Player;
         public bool Ready; public int? Ping; public string Scenario = ContentStates.Unknown, Map = ContentStates.Unknown, Profiles = ContentStates.None;
-        public string Connection = Connections.Connected, Link = "local"; public long JoinedAt; public long? LostAt; public bool Simulated; public string Avatar = AvatarProfiles.Default; public string? Version;
+        public string Connection = Connections.Connected, Link = "local"; public long JoinedAt; public long? LostAt; public bool Simulated; public string Avatar = AvatarProfiles.Default; public string? Version; public bool Away;
         public readonly Queue<long> ChatTimes = new();
-        public LobbyMember View() => new(Id, Name, Role, Ready, Ping, Scenario, Map, Profiles, Connection, Link, JoinedAt, Simulated, Avatar, Version);
+        public LobbyMember View() => new(Id, Name, Role, Ready, Ping, Scenario, Map, Profiles, Connection, Link, JoinedAt, Simulated, Avatar, Version, Away);
     }
     sealed class Line
     {
@@ -28,7 +28,7 @@ sealed class LobbyCore
         public required string Id; public required LobbySettings Settings; public string Phase = MatchPhases.Countdown;
         public int Round = 1; public long? StartsAt, EndsAt, NextAt; public List<string> Players = [];
         public Dictionary<string, Line> Live = new(); public List<RoundResult> Rounds = []; public HashSet<string> Rematch = [];
-        public Dictionary<string, string> Names = new(); public string? WinnerId; public bool Over; public long? RematchDeadline;
+        public Dictionary<string, string> Names = new(); public string? WinnerId; public bool Over; public long? RematchDeadline; public HashSet<string> Loaded = [];
     }
 
     readonly Func<long> clock;
@@ -87,7 +87,11 @@ sealed class LobbyCore
     public IReadOnlyList<LobbyMember> Members => members.Select(m => m.View()).ToArray();
     public const long ReadyCheckMs = 30_000;
     long? readyCheck, autoStartAt;
-    public LobbySnapshot Snapshot() => new(Protocol.Version, Id, Code, Revision, HostId, Settings, Members, MatchView(), chat.ToArray(), clock(), readyCheck, autoStartAt);
+    public LobbySnapshot Snapshot() => new(Protocol.Version, Id, Code, Revision, HostId, Settings, Members, MatchView(), chat.ToArray(), clock(), readyCheck, autoStartAt, suggestions.Select(s => new Suggestion(s.Scenario, s.By, s.Votes.ToArray())).ToArray());
+    // Wait for everyone to load the scenario before the countdown (set when AimMod can load scenarios).
+    public bool RequireLoading { get; set; }
+    public const long LoadingMs = 20_000;
+    readonly List<(string Scenario, string By, HashSet<string> Votes)> suggestions = [];
 
     public LobbyResult Join(string id, string name, bool simulated = false, string? version = null)
     {
@@ -176,7 +180,7 @@ sealed class LobbyCore
                 if (member.Role != MemberRoles.Player) return LobbyResult.Fail("spectator", "Spectators don’t ready up.");
                 if (ready && Settings.Scenario is not null && (member.Scenario != ContentStates.Ok || member.Map != ContentStates.Ok))
                     return LobbyResult.Fail("content", "You need the scenario and map before you can ready up.");
-                if (member.Ready != ready) { member.Ready = ready; Changed(); }
+                if (member.Ready != ready || (ready && member.Away)) { member.Ready = ready; if (ready) member.Away = false; Changed(); }
                 return LobbyResult.Success;
             case "content":
                 var scenario = Text("scenario"); var map = Text("map"); var profiles = Text("profiles") ?? ContentStates.None;
@@ -234,6 +238,47 @@ sealed class LobbyCore
                 if (!spectate && member.Role == MemberRoles.Spectator && PlayerCount >= Settings.MaxPlayers) return LobbyResult.Fail("full", "All player slots are taken.");
                 var role = spectate ? MemberRoles.Spectator : MemberRoles.Player;
                 if (member.Role != role) { member.Role = role; member.Ready = false; Changed(); }
+                return LobbyResult.Success;
+            case "away":
+                if (Flag("away") is not { } away) return LobbyResult.Fail("invalid", "Away must be true or false.");
+                if (member.Away != away) { member.Away = away; if (away) member.Ready = false; System(member.Name + (away ? " is away." : " is back.")); }
+                return LobbyResult.Success;
+            case "skip":
+                // The host marks someone away so they don't hold up the start.
+                if (!IsHost(from)) return HostOnly();
+                if (Text("member") is not { } skipped || Find(skipped) is not { } sk || sk.Id == from) return LobbyResult.Fail("invalid", "Choose someone in the lobby.");
+                if (!sk.Away) { sk.Away = true; sk.Ready = false; System(sk.Name + " was marked away."); }
+                return LobbyResult.Success;
+            case "suggest":
+                if (!Settings.Voting) return LobbyResult.Fail("voting-off", "The host turned suggestions off.");
+                if (match is { Phase: not MatchPhases.Final }) return LobbyResult.Fail("in-match", "Suggest after the match.");
+                var suggested = Text("scenario");
+                if (string.IsNullOrWhiteSpace(suggested) || suggested.Length > LobbyRules.MaxContentName || suggested.Any(char.IsControl)) return LobbyResult.Fail("invalid", "Pick a scenario to suggest.");
+                var existing2 = suggestions.FirstOrDefault(s => s.Scenario.Equals(suggested, StringComparison.OrdinalIgnoreCase));
+                if (existing2.Scenario is null)
+                {
+                    if (suggestions.Count >= 8) return LobbyResult.Fail("full", "There are enough suggestions. Vote for one.");
+                    suggestions.Add((suggested.Trim(), member.Name, [from]));
+                    System(member.Name + " suggests " + suggested.Trim() + ".");
+                }
+                else if (existing2.Votes.Add(from)) Changed();
+                return LobbyResult.Success;
+            case "vote":
+                var choice = suggestions.FirstOrDefault(s => s.Scenario.Equals(Text("scenario"), StringComparison.OrdinalIgnoreCase));
+                if (choice.Scenario is null) return LobbyResult.Fail("invalid", "That suggestion is gone.");
+                foreach (var s in suggestions) s.Votes.Remove(from);
+                choice.Votes.Add(from); Changed();
+                return LobbyResult.Success;
+            case "pick":
+                if (!IsHost(from)) return HostOnly();
+                var picked = suggestions.FirstOrDefault(s => s.Scenario.Equals(Text("scenario"), StringComparison.OrdinalIgnoreCase));
+                if (picked.Scenario is null) return LobbyResult.Fail("invalid", "That suggestion is gone.");
+                var applied = Apply(from, "settings", JsonSerializer.SerializeToElement(new { settings = new { scenario = picked.Scenario } }), resolve);
+                if (!applied.Ok) return LobbyResult.Fail(applied.Code ?? "scenario-missing", applied.Code == "scenario-missing" ? "You don’t have “" + picked.Scenario + "”. Get it first, or pick another." : applied.Message ?? "Couldn’t use that scenario.");
+                suggestions.Clear(); Changed();
+                return LobbyResult.Success;
+            case "loaded":
+                if (match is { Phase: MatchPhases.Loading } lm && lm.Players.Contains(from) && lm.Loaded.Add(from)) Changed();
                 return LobbyResult.Success;
             case "avatar":
                 // How this member looks in other players' games (any member, any time).
@@ -298,10 +343,12 @@ sealed class LobbyCore
     void BeginMatch()
     {
         autoStartAt = null;
-        var players = members.Where(m => m.Role == MemberRoles.Player && m.Connection == Connections.Connected).ToArray();
+        var players = members.Where(m => m.Role == MemberRoles.Player && m.Connection == Connections.Connected && !m.Away).ToArray();
+        suggestions.Clear();
         match = new Match { Id = "m-" + Convert.ToHexString(RandomNumberGenerator.GetBytes(6)).ToLowerInvariant(), Settings = Settings, Players = players.Select(p => p.Id).ToList() };
         foreach (var p in players) match.Names[p.Id] = p.Name;
-        StartRound();
+        if (RequireLoading) { match.Phase = MatchPhases.Loading; match.NextAt = clock() + LoadingMs; match.Live = match.Players.ToDictionary(id => id, _ => new Line()); Changed(); }
+        else StartRound();
     }
     void StartRound()
     {
@@ -368,6 +415,8 @@ sealed class LobbyCore
         else if (autoStartAt is not null) { autoStartAt = null; Changed(); }
         if (match is { Phase: MatchPhases.Final, RematchDeadline: { } deadline } && now >= deadline) TryRematch(timedOut: true);
         if (match is null) return;
+        // Warm-up: the countdown begins once everyone has the scenario loaded, or after 20 s.
+        if (match.Phase == MatchPhases.Loading && (now >= match.NextAt || match.Players.All(id => match.Loaded.Contains(id) || Find(id) is null))) StartRound();
         if (match.Phase == MatchPhases.Countdown && now >= match.StartsAt)
         {
             match.Phase = MatchPhases.Live;
@@ -466,7 +515,7 @@ sealed class LobbyCore
         var s = m.Settings;
         return new MatchSnapshot(m.Id, m.Phase, s.Mode, s.Scenario?.Name ?? "", s.EffectiveTimeLimit, m.Round, s.TotalRounds,
             s.Mode == LobbyModes.Duel ? s.FirstTo : null, m.StartsAt, m.EndsAt, m.NextAt, m.Players.ToArray(),
-            m.Live.Select(kv => kv.Value.View(kv.Key)).ToArray(), m.Rounds.ToArray(), Standings(m), m.WinnerId, m.Rematch.ToArray(), m.RematchDeadline);
+            m.Live.Select(kv => kv.Value.View(kv.Key)).ToArray(), m.Rounds.ToArray(), Standings(m), m.WinnerId, m.Rematch.ToArray(), m.RematchDeadline, m.Loaded.ToArray());
     }
 
     // A client that becomes host rebuilds the authority from the last snapshot it mirrored.
@@ -479,12 +528,13 @@ sealed class LobbyCore
             core.members.Add(new Member { Id = m.Id, Name = m.Name, Role = m.Role, Ready = m.Ready, Ping = m.Id == newHostId ? null : m.Ping, Scenario = m.Scenario, Map = m.Map, Profiles = m.Profiles,
                 // Everyone else must reconnect to the new host, so they start as reconnecting.
                 Connection = m.Id == newHostId ? Connections.Connected : Connections.Reconnecting, Link = m.Id == newHostId ? "local" : m.Link,
-                JoinedAt = m.JoinedAt, Simulated = m.Simulated, LostAt = m.Id == newHostId ? null : clock(), Avatar = AvatarProfiles.Find(m.Avatar)?.Id ?? AvatarProfiles.Default, Version = m.Version });
+                JoinedAt = m.JoinedAt, Simulated = m.Simulated, LostAt = m.Id == newHostId ? null : clock(), Avatar = AvatarProfiles.Find(m.Avatar)?.Id ?? AvatarProfiles.Default, Version = m.Version, Away = m.Away });
         core.chat.AddRange(snapshot.Chat); core.chatId = snapshot.Chat.Count > 0 ? snapshot.Chat.Max(c => c.Id) : 0; core.readyCheck = snapshot.ReadyCheck;
+        foreach (var s in snapshot.Suggestions ?? []) core.suggestions.Add((s.Scenario, s.By, s.Votes.ToHashSet()));
         if (snapshot.Match is { } ms)
         {
             var match = new Match { Id = ms.Id, Settings = snapshot.Settings, Phase = ms.Phase, Round = ms.Round, StartsAt = ms.StartsAt, EndsAt = ms.EndsAt, NextAt = ms.NextAt,
-                Players = ms.Players.ToList(), Rounds = ms.Rounds.ToList(), WinnerId = ms.WinnerId };
+                Players = ms.Players.ToList(), Rounds = ms.Rounds.ToList(), WinnerId = ms.WinnerId, Loaded = ms.Loaded?.ToHashSet() ?? [], RematchDeadline = ms.RematchDeadline };
             foreach (var l in ms.Live) match.Live[l.MemberId] = new Line { Score = l.Score, Seconds = l.Seconds, Remaining = l.Remaining, Shots = l.Shots, Hits = l.Hits, Kills = l.Kills, Status = l.Status, Disputed = l.Disputed };
             foreach (var st in ms.Standings) match.Names[st.MemberId] = st.Name;
             foreach (var r in ms.Rematch) match.Rematch.Add(r);

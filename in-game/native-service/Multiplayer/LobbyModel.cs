@@ -63,7 +63,8 @@ sealed record LobbySettings(
     string Privacy = LobbyPrivacy.Friends,
     int Countdown = 5,
     bool LateJoin = false,
-    bool AutoStart = false)
+    bool AutoStart = false,
+    bool Voting = true)
 {
     public const int MinPlayers = 2, MaxPlayerLimit = 8, MaxSpectators = 4;
     [JsonIgnore] public ProfileChoice WeaponProfile => Weapon ?? ProfileChoice.Default;
@@ -79,13 +80,13 @@ sealed record LobbySettings(
 static class MemberRoles { public const string Player = "player", Spectator = "spectator"; }
 static class ContentStates { public const string Ok = "ok", Missing = "missing", Mismatch = "mismatch", Unknown = "unknown", None = "none"; }
 static class Connections { public const string Connected = "connected", Reconnecting = "reconnecting"; }
-static class MatchPhases { public const string Countdown = "countdown", Live = "live", Round = "round", Final = "final"; }
+static class MatchPhases { public const string Loading = "loading", Countdown = "countdown", Live = "live", Round = "round", Final = "final"; }
 static class LineStates { public const string Waiting = "waiting", Playing = "playing", Finished = "finished", Dnf = "dnf", Left = "left"; }
 
 // Connection: connected or reconnecting. Link: local (this machine), relay,
 // direct or simulated. Profiles: whether custom weapon/character profiles are present.
 sealed record LobbyMember(string Id, string Name, string Role, bool Ready, int? Ping, string Scenario, string Map, string Profiles,
-    string Connection, string Link, long JoinedAt, bool Simulated, string Avatar = AvatarProfiles.Default, string? Version = null);
+    string Connection, string Link, long JoinedAt, bool Simulated, string Avatar = AvatarProfiles.Default, string? Version = null, bool Away = false);
 
 sealed record ScoreLine(string MemberId, double? Score, double? Seconds, double? Remaining, int Shots, int Hits, int Kills,
     string Status, bool Disputed);
@@ -96,14 +97,17 @@ sealed record Standing(string MemberId, string Name, int Place, int Wins, int Po
 
 sealed record MatchSnapshot(string Id, string Phase, string Mode, string Scenario, double TimeLimit, int Round, int? TotalRounds,
     int? FirstTo, long? StartsAt, long? EndsAt, long? NextAt, IReadOnlyList<string> Players, IReadOnlyList<ScoreLine> Live,
-    IReadOnlyList<RoundResult> Rounds, IReadOnlyList<Standing> Standings, string? WinnerId, IReadOnlyList<string> Rematch, long? RematchDeadline = null);
+    IReadOnlyList<RoundResult> Rounds, IReadOnlyList<Standing> Standings, string? WinnerId, IReadOnlyList<string> Rematch, long? RematchDeadline = null, IReadOnlyList<string>? Loaded = null);
 
 // Clip: a shared clip replay id (everyone in the lobby received the file).
 sealed record ChatLine(long Id, string? From, string Name, string Text, long At, bool System, string? Clip = null);
 
 // ReadyCheck: when the host last asked everyone to ready up (host clock), while it is open.
 sealed record LobbySnapshot(int V, string Id, string Code, long Revision, string HostId, LobbySettings Settings,
-    IReadOnlyList<LobbyMember> Members, MatchSnapshot? Match, IReadOnlyList<ChatLine> Chat, long Now, long? ReadyCheck = null, long? AutoStartAt = null);
+    IReadOnlyList<LobbyMember> Members, MatchSnapshot? Match, IReadOnlyList<ChatLine> Chat, long Now, long? ReadyCheck = null, long? AutoStartAt = null,
+    IReadOnlyList<Suggestion>? Suggestions = null);
+// A scenario a member suggested, with the members who voted for it.
+sealed record Suggestion(string Scenario, string By, IReadOnlyList<string> Votes);
 
 sealed record StartBlocker(string Code, string Text);
 
@@ -123,7 +127,7 @@ static class LobbyRules
 {
     public const int MaxName = 32, MaxChat = 200, MaxContentName = 128;
     static readonly HashSet<string> Keys = ["mode", "scenario", "mapOverride", "maxPlayers", "spectators", "rounds", "firstTo",
-        "timeLimit", "weapon", "movement", "character", "targetSpeed", "targetSize", "privacy", "countdown", "lateJoin", "autoStart"];
+        "timeLimit", "weapon", "movement", "character", "targetSpeed", "targetSize", "privacy", "countdown", "lateJoin", "autoStart", "voting"];
 
     public static string CleanName(string? name, string fallback)
     {
@@ -192,6 +196,7 @@ static class LobbyRules
                 case "countdown": if (Number() is not { } countdown) return (null, Bad("Countdown must be a number.")); next = next with { Countdown = (int)Clamp(countdown, 3, 10, 1) }; break;
                 case "lateJoin": if (Flag() is not { } late) return (null, Bad("Late join must be on or off.")); next = next with { LateJoin = late }; break;
                 case "autoStart": if (Flag() is not { } auto) return (null, Bad("Auto start must be on or off.")); next = next with { AutoStart = auto }; break;
+                case "voting": if (Flag() is not { } vote) return (null, Bad("Suggestions must be on or off.")); next = next with { Voting = vote }; break;
             }
         }
         if (seen.Count == 0) return (null, LobbyResult.Fail("invalid", "No settings supplied."));
@@ -246,7 +251,8 @@ static class LobbyRules
     {
         var list = new List<StartBlocker>();
         var s = lobby.Settings;
-        var players = lobby.Members.Where(m => m.Role == MemberRoles.Player).ToArray();
+        // Away players are skipped: they never block the start and sit the match out.
+        var players = lobby.Members.Where(m => m.Role == MemberRoles.Player && !m.Away).ToArray();
         if (lobby.Match is { Phase: not MatchPhases.Final }) { list.Add(new("in-match", "A match is already running.")); return list; }
         if (s.Scenario is null) list.Add(new("scenario", "Choose a scenario."));
         if (s.Mode == LobbyModes.Duel && players.Length != 2) list.Add(new("duel-players", "A duel needs exactly two players."));

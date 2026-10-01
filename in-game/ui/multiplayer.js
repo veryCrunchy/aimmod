@@ -196,6 +196,40 @@
       panel.appendChild(box);
     });
   }
+  // Warm-up: everyone loads the scenario before the countdown.
+  function loadingStage(page,lobby,match){
+    var stage=node('div','mp-stage');page.appendChild(stage);
+    var loaded=match.loaded||[];
+    add(stage,node('div','eyebrow',mode(match.mode).label+' · getting ready'),node('div','mp-spinner'),node('h2','','Loading '+safe(match.scenario,'the scenario')),node('p','subtle',loaded.length+' of '+match.players.length+' ready. The countdown starts when everyone has loaded.'));
+    var plan=planBox(lobby);if(plan)stage.appendChild(plan);
+    var who=node('div','mp-stage-players');match.players.forEach(function(id){add(who,add(node('div','mp-stage-player'+(loaded.indexOf(id)>=0?' ok':'')),avatar(nameOf(id),true),node('span','',nameOf(id)),chip(loaded.indexOf(id)>=0?'Ready':'Loading…',loaded.indexOf(id)>=0?'mint':'')));});
+    stage.appendChild(who);
+    var left=node('p','mp-note','');countNodes.push({node:left,at:match.nextAt,format:function(ms){return 'Starting anyway in '+seconds(ms)+' s.';}});stage.appendChild(left);
+    if(lobby.isHost)stage.appendChild(actions(button('Cancel match',function(){act('end');},'compact quiet danger')));
+  }
+  // Scenario suggestions and votes; the host picks.
+  var suggesting=false;
+  function suggestionsPanel(lobby){
+    var list=lobby.suggestions||[];if(lobby.settings.voting===false&&!list.length)return null;
+    var p=node('div','panel mp-suggest');var head=node('div','panel-head');var text=node('div','head-text');add(text,node('h2','','Suggestions'),node('p','',lobby.isHost?'Pick one to play it.':'Suggest a scenario and vote.'));head.appendChild(text);
+    if(lobby.settings.voting!==false)head.appendChild(actions(button(suggesting?'Close':'Suggest',function(){suggesting=!suggesting;if(suggesting){picker='suggest';pickerQuery='';loadLibrary();}else picker=null;render();},'compact')));
+    p.appendChild(head);
+    if(suggesting)p.appendChild(pickerList('suggest',null));
+    list.forEach(function(sg){var row=node('div','mp-friend');var mine=sg.votes.indexOf(lobby.self)>=0;
+      add(row,add(node('div','mp-friend-info'),node('strong','',safe(sg.scenario,'Scenario')),node('span','','By '+safe(sg.by)+' · '+sg.votes.length+(sg.votes.length===1?' vote':' votes'))));
+      row.appendChild(actions(mine?null:button('Vote',function(){act('vote',{scenario:sg.scenario});},'compact quiet'),lobby.isHost?button('Pick',function(){act('pick',{scenario:sg.scenario});},'compact primary'):null));p.appendChild(row);});
+    if(!list.length&&!suggesting)p.appendChild(node('div','mp-empty','No suggestions yet.'));
+    return p;
+  }
+  // Saved setups for the host (the last one is used for new lobbies).
+  function setupsPanel(){
+    var p=node('div','panel mp-setups');var head=node('div','panel-head');var text=node('div','head-text');add(text,node('h2','','Setups'),node('p','','Save this setup to reuse it. New lobbies start from your last one.'));head.appendChild(text);p.appendChild(head);
+    var body=node('div','mp-setups-body');p.appendChild(body);
+    (view.presets||[]).forEach(function(n){var row=node('div','mp-clip-row');add(row,node('span','mp-clip-name',safe(n,'Setup')));row.appendChild(actions(button('Load',function(){act('preset-load',{name:n});},'compact'),button('Delete',function(){act('preset-delete',{name:n});},'compact quiet danger')));body.appendChild(row);});
+    var input=trackInput(node('input','mp-chat-input'),'preset');input.setAttribute('maxlength','32');input.setAttribute('autocomplete','off');
+    var saveRow=node('div','mp-chat-row');add(saveRow,field(input,'Name this setup','mp-chat-field'),actions(button('Save',function(){var n=(drafts.preset||'').trim();if(!n){toast('Name the setup first.');return;}act('preset-save',{name:n},function(ok){if(ok){drafts.preset='';toast('Setup saved.');}});},'compact')));
+    body.appendChild(saveRow);return p;
+  }
   // Spectating a friend without a lobby: status, their live stats, stop and switch.
   var watchTried=0,watchStartedFor='';
   function startWatchView(w){
@@ -269,9 +303,10 @@
     body.appendChild(settingRow('Who can spectate me','Friends watch from their own game, osu!-style.',segmented([{id:'friends',label:'Friends'},{id:'ask',label:'Ask me'},{id:'off',label:'Nobody'}],pr.spectatePrivacy||'friends',function(id){pref('spectatePrivacy',id);},false,'spectate privacy')));
     flag('showWatchers','Show who’s watching while I play','A small line at the top of the screen.');
     if(pr.sounds)body.appendChild(settingRow('Volume','',stepper(typeof pr.volume==='number'?pr.volume:0.8,0,1,0.1,function(v){return F.number(v*100,0)+'%';},function(v){pref('volume',v);},false,'volume')));
-    var keys=[];for(var i=5;i<=10;i++)keys.push({id:'F'+i,label:'F'+i});
+    var taken=(view.keys&&view.keys.taken)||[];function keyLabel(k){return k+(taken.indexOf(k)>=0?' (in use)':'');}
+    var keys=[];for(var i=5;i<=10;i++)keys.push({id:'F'+i,label:keyLabel('F'+i)});
     body.appendChild(settingRow('Hotkey','Ready up or open the lobby from in game.',segmented(keys,pr.hotkey||'F7',function(id){pref('hotkey',id);},false,'hotkey')));
-    var ks=view.keys||{};var clipOptions=['F6','F8','F9','F10','F11','Insert','Home','PageUp'].map(function(k){return {id:k,label:k};});
+    var ks=view.keys||{};var clipOptions=['F6','F8','F9','F10','F11','Insert','Home','PageUp'].map(function(k){return {id:k,label:keyLabel(k)};});
     body.appendChild(settingRow('Clip key','Marks a moment of a recorded run as a clip.',segmented(clipOptions,ks.clip||'F8',function(id){pref('clipKey',id);},false,'clip key')));
     (ks.conflicts||[]).forEach(function(c){body.appendChild(node('p','mp-warn-text',safe(c,'')));});
     return p;
@@ -390,6 +425,7 @@
     if(view.simulation)main.appendChild(devPanel(true));
     if((view.watchers&&view.watchers.length)||(view.watchAsks&&view.watchAsks.length))side.appendChild(watchersPanel());
     side.appendChild(lookPanel(lobby));
+    var sug=suggestionsPanel(lobby);if(sug)side.appendChild(sug);
     side.appendChild(summaryCard(lobby));
     // While the host is alone, inviting matters more than chat.
     var invite=view.friends.items&&view.friends.items.length?friendsPanel(true):null;
@@ -423,11 +459,11 @@
     add(sub,node('span','mp-content '+c.kind,c.text),node('span','mp-link'+(m.connection==='reconnecting'?' warn':''),linkText(m,lobby)));
     add(info,name,sub);
     add(row,avatar(m.name),info);
-    var state=m.role==='spectator'?null:m.id===lobby.hostId?node('span','mp-ready host','Host'):m.ready?node('span','mp-ready on','Ready'):node('span','mp-ready','Not ready');
+    var state=m.role==='spectator'?null:m.id===lobby.hostId?node('span','mp-ready host','Host'):m.away?node('span','mp-ready away','Away'):m.ready?node('span','mp-ready on','Ready'):node('span','mp-ready','Not ready');
     if(state)row.appendChild(state);
     if(m.id!==lobby.self&&!m.simulated&&lobby.match&&lobby.match.phase==='live'&&m.role==='player'){var watch=actions(button(lobby.spectate&&lobby.spectate.member===m.id?'Watching':'Spectate',function(){spectate(m.id);},'compact quiet'));watch.className='actions mp-member-tools';row.appendChild(watch);}
     if(lobby.isHost&&m.id!==lobby.self){
-      var tools=actions(m.connection==='connected'&&m.role==='player'?button('Make host',function(){act('transfer',{member:m.id});},'compact quiet'):null,button('Kick',function(){act('kick',{member:m.id},function(ok){if(ok)toast(safe(m.name)+' was removed.');});},'compact quiet danger'));
+      var tools=actions(m.role==='player'&&!m.ready&&!m.away&&!lobby.match?button('Skip',function(){act('skip',{member:m.id});},'compact quiet'):null,m.connection==='connected'&&m.role==='player'?button('Make host',function(){act('transfer',{member:m.id});},'compact quiet'):null,button('Kick',function(){act('kick',{member:m.id},function(ok){if(ok)toast(safe(m.name)+' was removed.');});},'compact quiet danger'));
       tools.className='actions mp-member-tools';row.appendChild(tools);
     }
     return row;
@@ -452,7 +488,8 @@
       add(text,node('strong','',me.ready?'You’re ready':'Ready up when you’re set'),node('span','subtle',!have&&lobby.settings.scenario?contentHelp(lobby):blockers.length?'Waiting: '+blockers[0].text:'Waiting for '+safe(nameOf(lobby.hostId))+' to start.'));
       bar.appendChild(text);
       var ready=button(me.ready?'Not ready':'Ready',function(){act('ready',{ready:!me.ready});},me.ready?'mp-big':'primary mp-big');if(!have&&lobby.settings.scenario&&!me.ready)ready.disabled=true;
-      bar.appendChild(actions(lobby.settings.spectators?button('Watch',function(){act('role',{spectator:true});},'compact quiet'):null,ready));
+      var awayBtn=button(me.away?'I’m back':'I’m away',function(){act('away',{away:!me.away});},'compact quiet');
+      bar.appendChild(actions(awayBtn,lobby.settings.spectators?button('Watch',function(){act('role',{spectator:true});},'compact quiet'):null,ready));
     }
     return bar;
   }
@@ -516,6 +553,7 @@
     function send(){var text=(drafts.chat||'').trim();if(!text)return;act('chat',{text:text},function(ok){if(ok){drafts.chat='';render();}});}
     input.onkeydown=function(e){if((e||root.event).keyCode===13)send();};
     var row=node('div','mp-chat-row');add(row,field(input,'Message the lobby','mp-chat-field'),actions(button('Send',send,'compact'),button('Share a clip',function(){clipPicker(p);},'compact quiet')));
+    var quick=node('div','mp-quick');['GG','Nice shot!','One more?','glhf','brb','Ready when you are'].forEach(function(q){quick.appendChild(button(q,function(){act('chat',{text:q});},'compact quiet'));});p.appendChild(quick);
     p.appendChild(row);
     setTimeout(function(){log.scrollTop=log.scrollHeight||0;},0);
     return p;
@@ -525,6 +563,7 @@
   function section(title,note){var s=node('div','mp-section');add(s,node('h3','',title));if(note)s.appendChild(node('p','mp-section-note',note));return s;}
   function settingsEditor(page,lobby){
     var s=lobby.settings,overrides=s.mode!=='score-race',lockNote='Score race plays the scenario exactly as published, so scores compare with everyone’s history.';
+    page.appendChild(setupsPanel());
     var top=node('div','mp-editor-top');var t=node('div','mp-editor-title');add(t,node('div','eyebrow','Lobby settings'),node('h2','','Set up the match'),node('p','subtle','Changes apply right away. Anything that changes the match clears everyone’s ready.'));
     add(top,t,actions(button('Done',function(){editing=false;picker=null;render();},'primary')));page.appendChild(top);
     var cols=node('div','mp-row');page.appendChild(cols);var a=node('div','mp-col mp-half'),b=node('div','mp-col mp-half');cols.appendChild(a);cols.appendChild(b);
@@ -562,6 +601,7 @@
     var lateOk=s.mode==='ffa-rounds'||s.mode==='practice';
     rd.appendChild(settingRow('Late join',lateOk?'Players who join mid-match play from the next round.':'Only free-for-all and practice allow late join.',toggleSwitch(s.lateJoin,'Late join',function(){setting('lateJoin',!s.lateJoin);},!lateOk)));
     rd.appendChild(settingRow('Auto start','Starts by itself a few seconds after everyone is ready.',toggleSwitch(!!s.autoStart,'Auto start',function(){setting('autoStart',!s.autoStart);})));
+    rd.appendChild(settingRow('Scenario suggestions','Players can suggest scenarios and vote; you pick.',toggleSwitch(s.voting!==false,'Scenario suggestions',function(){setting('voting',s.voting===false);})));
     right.appendChild(rd);
     // Loadout
     var lo=section('Loadout',overrides?'Presets build a match scenario from the base scenario, so everyone gets the same feel.':lockNote);
@@ -604,17 +644,17 @@
     input.onchanged=function(){pickerQuery=input.value;fill();};
     box.appendChild(field(input,kind==='scenario'?'Find a scenario':kind==='map'?'Find a map':'Find a profile'));
     var list=node('div','mp-picker-list');box.appendChild(list);
-    function items(){var src=kind==='scenario'?library.scenarios:kind==='map'?library.maps:kind==='weapon'?library.weapons:library.characters;return (src||[]).map(function(x){return typeof x==='string'?{name:x}:x;});}
+    function items(){var src=kind==='scenario'||kind==='suggest'?library.scenarios:kind==='map'?library.maps:kind==='weapon'?library.weapons:library.characters;return (src||[]).map(function(x){return typeof x==='string'?{name:x}:x;});}
     function fill(){
       while(list.firstChild)list.removeChild(list.firstChild);
       var q=(pickerQuery||'').toLowerCase(),shown=0,all=items();
       all.forEach(function(x){if(shown>=80||(q&&String(x.name).toLowerCase().indexOf(q)<0))return;shown++;
         var b=node('button','mp-pick-item');b.type='button';
         var info=node('span','mp-pick-info');add(info,node('strong','',safe(x.name,'Untitled')));
-        if(kind==='scenario')info.appendChild(node('span','','Map '+safe(x.map,'')+' · '+F.duration(x.timeLimit)+(x.defaultWeapon?' · '+safe(x.defaultWeapon,''):'')));
+        if(kind==='scenario'||kind==='suggest')info.appendChild(node('span','','Map '+safe(x.map,'')+' · '+F.duration(x.timeLimit)+(x.defaultWeapon?' · '+safe(x.defaultWeapon,''):'')));
         b.appendChild(info);
-        if(kind==='map'||kind==='scenario'){var src=kind==='map'?x.source:x.mapSource;b.appendChild(chip(src==='ported'?'Ported':src==='custom'?'Custom map':'Built-in',src==='ported'?'mint':''));}
-        b.onclick=function(){picker=null;if(kind==='scenario'||kind==='map')setting(kind==='map'?'mapOverride':'scenario',x.name);else setting(kind,{preset:'custom',custom:x.name});};
+        if(kind==='map'||kind==='scenario'||kind==='suggest'){var src=kind==='map'?x.source:x.mapSource;b.appendChild(chip(src==='ported'?'Ported':src==='custom'?'Custom map':'Built-in',src==='ported'?'mint':''));}
+        b.onclick=function(){picker=null;if(kind==='suggest'){suggesting=false;act('suggest',{scenario:x.name});return;}if(kind==='scenario'||kind==='map')setting(kind==='map'?'mapOverride':'scenario',x.name);else setting(kind,{preset:'custom',custom:x.name});};
         list.appendChild(b);});
       if(!shown)list.appendChild(node('div','mp-muted',all.length?'Nothing matches. Try a shorter search.':'Nothing in your library yet.'));
       else if(all.length>shown&&!q)list.appendChild(node('div','mp-muted','Showing '+shown+' of '+F.number(all.length,0)+'. Type to narrow the list.'));
@@ -634,7 +674,8 @@
     if(lobby.spectate)page.appendChild(add(banner('info','Spectating '+safe(lobby.spectate.name)+' · '+statLine(lobby.spectate.score)+'. Their view plays in the pause menu.'),actions(button('Stop',function(){act('spectate-stop');},'compact quiet'))));
     var match=lobby.match;
     connectionBanners(page,lobby);
-    if(match.phase==='countdown')countdown(page,lobby,match);
+    if(match.phase==='loading')loadingStage(page,lobby,match);
+    else if(match.phase==='countdown')countdown(page,lobby,match);
     else if(match.phase==='live')live(page,lobby,match);
     else roundResults(page,lobby,match);
   }

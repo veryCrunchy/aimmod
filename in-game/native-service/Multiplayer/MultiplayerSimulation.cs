@@ -152,6 +152,7 @@ sealed class MultiplayerSimulation(Func<long> clock, ContentLibrary library, Fun
         var phase = snapshot.Match?.Phase ?? "lobby";
         if (phase != lastPhase)
         {
+            if (phase == MatchPhases.Loading) foreach (var b in bots.Values) core.Apply(b.Id, "loaded", default, library);
             if (phase == MatchPhases.Countdown && random.NextDouble() < 0.6 && bots.Values.FirstOrDefault() is { } talker) core.Apply(talker.Id, "chat", Args(new { text = "glhf" }), library);
             if (phase == MatchPhases.Final) foreach (var b in bots.Values) b.RematchAt = Jitter(2500, 6000);
             if (phase == "lobby") foreach (var b in bots.Values) b.ReadyAt = Jitter(1200, 3500);

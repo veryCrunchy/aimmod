@@ -234,3 +234,5 @@
 .mp-watch-head{display:flex;flex-direction:row;align-items:center}.mp-watch-text{flex:1;min-width:0;margin-left:14px}.mp-watch-text h2{font-size:20px;font-weight:600;margin:2px 0}.mp-watch-text .subtle{font-size:13px}
 .mp-watch-hud{margin:12px 0 4px;padding:8px 12px;background:#0b1110;border:1px solid #2c4a3d;border-top:2px solid #66ccff;border-radius:6px;font-size:15px;font-weight:600}
 .mp-watch .actions{margin-top:10px}
+.mp-quick{display:flex;flex-direction:row;flex-wrap:wrap;padding:0 16px 12px}.mp-quick .button{margin:0 4px 4px 0;height:26px;line-height:24px;font-size:12px}
+.mp-ready.away{background:#272040;color:#b9a3ff}.mp-stage-player.ok{border-color:#2c6b52}.mp-setups{max-width:none}.mp-setups-body{padding:0 20px 8px}.mp-setups .mp-chat-row{padding:8px 0 4px;border-top:0}

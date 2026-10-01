@@ -44,6 +44,7 @@ sealed class MultiplayerService : IDisposable
     string selfName = "You";
     (string Kind, string Text, long At)? notice;
     RoundPlan? plan;
+    string? loadedSent;
     // Content download: the host serves lobby files; this machine downloads what it lacks.
     readonly ContentServer server;
     readonly ContentDownload? download;
@@ -116,6 +117,8 @@ sealed class MultiplayerService : IDisposable
                     if (Text("scenario") is { } wanted && library.Scenario(wanted) is { } picked) settings = settings with { Scenario = picked };
                     else if (library.Scenarios.FirstOrDefault() is { } first) settings = settings with { Scenario = library.Scenario(first.Name) };
                     core = new LobbyCore(SelfId, selfName, settings, clock);
+                    // Start from the host's last setup, then the mode and scenario picked now.
+                    if (Text("scenario") is null && LoadPresets().Last is { } lastSetup) { ApplySaved(lastSetup); notice = null; if (mode is not null && LobbyModes.All.Contains(mode)) core.Apply(SelfId, "settings", JsonSerializer.SerializeToElement(new { settings = new { mode } }), library); }
                     Reset();
                     ReportContent(force: true);
                     transport.Advertise(core.Snapshot());
@@ -166,6 +169,8 @@ sealed class MultiplayerService : IDisposable
                 case "spectator-remove":
                     if (watchers.All(w => w.Peer != Text("id"))) return LobbyResult.Fail("invalid", "They aren’t watching.");
                     transport.RemoveSpectator(Text("id")!); watchers.RemoveAll(w => w.Peer == Text("id")); return LobbyResult.Success;
+                case "preset-save" or "preset-load" or "preset-delete":
+                    var presetResult = PresetAction(action, Text("name")); presetNames = LoadPresets().Presets.Select(p => p.Name).ToArray(); return presetResult;
                 case "share-clip":
                     return ShareClip(Text("id"), Text("label"));
                 case "spectate-stop":
@@ -273,6 +278,90 @@ sealed class MultiplayerService : IDisposable
     }
 
     IReadOnlyList<FriendEntry> Friends() => Simulation is not null && !transport.Available ? Simulation.Friends(clock()) : transport.Friends();
+
+    // ---- lobby presets and remembered settings -------------------------------
+
+    sealed record PresetStore(JsonElement? Last, List<SavedPreset> Presets);
+    sealed record SavedPreset(string Name, JsonElement Settings);
+    string? lastSavedSettings;
+    string[]? presetNames;
+    string? PresetsPath => outputFolder is null ? null : Path.Combine(outputFolder, "multiplayer-presets.json");
+
+    // Settings as a patch that names content, so it can be re-resolved from the library later.
+    static object Patch(LobbySettings s) => new
+    {
+        mode = s.Mode, scenario = s.Scenario?.Name, mapOverride = s.MapOverride?.Name, maxPlayers = s.MaxPlayers, spectators = s.Spectators,
+        rounds = s.Rounds, firstTo = s.FirstTo, timeLimit = s.TimeLimit,
+        weapon = new { preset = s.WeaponProfile.Preset, custom = s.WeaponProfile.Custom }, movement = s.MovementProfile.Preset,
+        character = new { preset = s.CharacterProfile.Preset, custom = s.CharacterProfile.Custom },
+        targetSpeed = s.TargetSpeed, targetSize = s.TargetSize, privacy = s.Privacy, countdown = s.Countdown, lateJoin = s.LateJoin, autoStart = s.AutoStart, voting = s.Voting,
+    };
+    PresetStore LoadPresets()
+    {
+        try
+        {
+            if (PresetsPath is not { } path || !File.Exists(path) || new FileInfo(path).Length > 65536) return new(null, []);
+            using var doc = JsonDocument.Parse(File.ReadAllText(path));
+            var root = doc.RootElement;
+            var list = root.TryGetProperty("presets", out var p) && p.ValueKind == JsonValueKind.Array
+                ? p.EnumerateArray().Where(x => x.TryGetProperty("name", out var n) && n.ValueKind == JsonValueKind.String && x.TryGetProperty("settings", out _))
+                    .Select(x => new SavedPreset(LobbyRules.CleanName(x.GetProperty("name").GetString(), "Preset"), x.GetProperty("settings").Clone())).Take(12).ToList() : [];
+            return new(root.TryGetProperty("last", out var l) && l.ValueKind == JsonValueKind.Object ? l.Clone() : null, list);
+        }
+        catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException) { return new(null, []); }
+    }
+    void SavePresets(PresetStore store)
+    {
+        if (PresetsPath is not { } path) return;
+        try { AtomicFile.WriteText(path, JsonSerializer.Serialize(new { last = store.Last, presets = store.Presets.Select(p => new { name = p.Name, settings = p.Settings }) }, Protocol.Json)); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+    }
+    // Remember the host's setup whenever it changes.
+    void RememberSettings()
+    {
+        if (core is null || core.HostId != SelfId) return;
+        var json = JsonSerializer.Serialize(Patch(core.Settings), Protocol.Json);
+        if (json == lastSavedSettings) return;
+        lastSavedSettings = json;
+        var store = LoadPresets();
+        SavePresets(store with { Last = JsonDocument.Parse(json).RootElement.Clone() });
+    }
+    // Apply saved settings; content this machine no longer has is skipped rather than failing everything.
+    LobbyResult ApplySaved(JsonElement saved)
+    {
+        if (core is null || core.HostId != SelfId) return LobbyResult.Fail("not-host", "Only the host can load a setup.");
+        var full = core.Apply(SelfId, "settings", JsonSerializer.SerializeToElement(new { settings = saved }), library);
+        if (full.Ok) return full;
+        var trimmed = new Dictionary<string, JsonElement>();
+        foreach (var p in saved.EnumerateObject()) if (p.Name is not ("scenario" or "mapOverride" or "weapon" or "character")) trimmed[p.Name] = p.Value.Clone();
+        var partial = core.Apply(SelfId, "settings", JsonSerializer.SerializeToElement(new { settings = trimmed }), library);
+        if (saved.TryGetProperty("scenario", out var sc) && sc.ValueKind == JsonValueKind.String)
+            core.Apply(SelfId, "settings", JsonSerializer.SerializeToElement(new { settings = new { scenario = sc.GetString() } }), library);
+        notice = ("info", "Loaded the setup. Some content isn’t in your library and was left out.", clock());
+        return partial;
+    }
+    LobbyResult PresetAction(string action, string? name)
+    {
+        var store = LoadPresets();
+        var clean = LobbyRules.CleanName(name, "");
+        switch (action)
+        {
+            case "preset-save":
+                if (core is null || core.HostId != SelfId) return LobbyResult.Fail("not-host", "Only the host can save a setup.");
+                if (clean.Length == 0) return LobbyResult.Fail("invalid", "Name the setup.");
+                store.Presets.RemoveAll(p => p.Name.Equals(clean, StringComparison.OrdinalIgnoreCase));
+                if (store.Presets.Count >= 12) return LobbyResult.Fail("full", "Delete a setup first (12 at most).");
+                store.Presets.Add(new SavedPreset(clean, JsonSerializer.SerializeToElement(Patch(core.Settings), Protocol.Json)));
+                SavePresets(store);
+                return LobbyResult.Success;
+            case "preset-load":
+                return store.Presets.FirstOrDefault(p => p.Name.Equals(clean, StringComparison.OrdinalIgnoreCase)) is { } preset ? ApplySaved(preset.Settings) : LobbyResult.Fail("invalid", "That setup is gone.");
+            case "preset-delete":
+                store.Presets.RemoveAll(p => p.Name.Equals(clean, StringComparison.OrdinalIgnoreCase)); SavePresets(store);
+                return LobbyResult.Success;
+        }
+        return LobbyResult.Fail("invalid", "Unknown setup action.");
+    }
 
     // ---- watching friends without a lobby (osu!-style) ----------------------
 
@@ -639,7 +728,8 @@ sealed class MultiplayerService : IDisposable
     object KeysView()
     {
         var clip = KeyBinds.ReadClipKey(outputFolder);
-        return new { hotkey = prefs.Hotkey, clip, clipKeys = KeyBinds.ClipKeys, conflicts = KeyBinds.Conflicts(prefs.Hotkey, clip, KeyBinds.GameKeys(library.Root)) };
+        var game = KeyBinds.GameKeys(library.Root);
+        return new { hotkey = prefs.Hotkey, clip, clipKeys = KeyBinds.ClipKeys, taken = KeyBinds.ClipKeys.Where(game.Contains), conflicts = KeyBinds.Conflicts(prefs.Hotkey, clip, game) };
     }
     LobbyResult SetPrefs(JsonElement args)
     {
@@ -992,6 +1082,7 @@ sealed class MultiplayerService : IDisposable
             var now = clock();
             if (core is not null)
             {
+                core.RequireLoading = game.Capabilities.Contains("load");
                 Simulation?.Step(core, SelfId);
                 core.Tick();
                 if (core.Closed) { core = null; Reset(); return; }
@@ -1041,6 +1132,7 @@ sealed class MultiplayerService : IDisposable
             SyncSelf();
             FollowWatch();
             PumpWatchContent();
+            RememberSettings();
             PlanRound();
             TrackLocalRun();
             Remember();
@@ -1354,7 +1446,7 @@ sealed class MultiplayerService : IDisposable
         if (Current is not { Match: { } match } lobby || !match.Players.Contains(SelfId) || match.Phase is MatchPhases.Final) { plan = null; return; }
         var key = match.Id + "#" + match.Round;
         var caps = game.Capabilities;
-        if (plan?.Key != key && match.Phase == MatchPhases.Countdown)
+        if (plan?.Key != key && match.Phase is MatchPhases.Loading or MatchPhases.Countdown)
         {
             var s = lobby.Settings;
             var generated = MatchScenario.Needed(s);
@@ -1373,6 +1465,9 @@ sealed class MultiplayerService : IDisposable
             else plan = new RoundPlan(key, scenario, mode, generated, "manual", FindIt(scenario, generated) + " Start when the countdown ends.");
         }
         if (plan is null || plan.Key != key) return;
+        // Tell the host once this machine has the scenario loaded (or will start it by hand).
+        if (match.Phase == MatchPhases.Loading && loadedSent != key && plan.State is "ready" or "manual" or "error" or "started")
+        { loadedSent = key; Command("loaded", JsonSerializer.SerializeToElement(new { match = match.Id, round = match.Round })); }
         if (match.Phase == MatchPhases.Live && plan.StartSequence is null && plan.State is "loading" or "ready" or "manual")
         {
             if (caps.Contains("start") && game.Start(plan.Scenario, plan.Mode) is long start) plan = plan with { State = "starting", Message = "Starting your run…", StartSequence = start };
@@ -1512,7 +1607,7 @@ sealed class MultiplayerService : IDisposable
                 var generated = MatchScenario.Needed(lobby.Settings) && lobby.Settings.Scenario is not null;
                 lobbyView = new
                 {
-                    lobby.Id, lobby.Code, lobby.Revision, lobby.HostId, lobby.Settings, lobby.Members, lobby.Match, lobby.Chat, lobby.ReadyCheck,
+                    lobby.Id, lobby.Code, lobby.Revision, lobby.HostId, lobby.Settings, lobby.Members, lobby.Match, lobby.Chat, lobby.ReadyCheck, lobby.AutoStartAt, lobby.Suggestions,
                     self = SelfId, isHost = lobby.HostId == SelfId, authority = core is not null ? "local" : "remote",
                     blockers = LobbyRules.StartBlockers(lobby), content = new { scenario, map, profiles },
                     simulated = lobby.Members.Any(m => m.Simulated),
@@ -1534,6 +1629,7 @@ sealed class MultiplayerService : IDisposable
                 prefs,
                 rejoin = RejoinOffer(),
                 keys = KeysView(),
+                presets = presetNames ??= LoadPresets().Presets.Select(p => p.Name).ToArray(),
                 watch = WatchView(),
                 watchers = watchers.Select(w => new { peer = w.Peer, name = w.Name }),
                 watchAsks = watchAsks.Select(a => new { peer = a.Peer, name = a.Name }),
