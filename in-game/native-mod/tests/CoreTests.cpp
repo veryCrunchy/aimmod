@@ -645,6 +645,14 @@ static void EndRunChecks()
               std::holds_alternative<CommandError>(parse("action\tload-scenario\nscenario\tX\nthen\treset\n")) &&
               std::holds_alternative<CommandError>(parse("action\tend-run\n")),
           "end-run fields validated");
+    auto quit = parse("action\tquit-run\n");
+    CHECK(std::holds_alternative<GameCommand>(quit) && std::get<GameCommand>(quit).action == GameCommand::Action::QuitRun &&
+              std::string(ActionName(GameCommand::Action::QuitRun)) == "quit-run",
+          "quit-run parses");
+    CHECK(std::holds_alternative<CommandError>(parse("action\tquit-run\nscenario\tX\n")) &&
+              std::holds_alternative<CommandError>(parse("action\tquit-run\nmode\tfreeplay\n")) &&
+              std::holds_alternative<CommandError>(parse("action\tquit-run\nthen\treset\n")),
+          "quit-run takes no fields");
 }
 
 static void MatchPlayChecks()

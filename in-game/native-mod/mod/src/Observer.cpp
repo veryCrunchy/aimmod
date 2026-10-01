@@ -123,6 +123,7 @@ namespace aimmod
         if (m_control.canLoad()) caps += caps.empty() ? "load" : ",load";
         if (m_control.canStart()) caps += caps.empty() ? "start" : ",start";
         if (m_control.canCapture()) caps += caps.empty() ? "capture" : ",capture";
+        if (m_control.canQuit()) caps += caps.empty() ? "quit" : ",quit";
         if (m_b.replayReady()) caps += ",shots";
         if (m_b.replayReady() && m_match.available()) caps += ",match-play";
         if (m_cosmetics.ready()) caps += ",cosmetics";
