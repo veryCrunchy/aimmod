@@ -163,6 +163,10 @@ static partial class MultiplayerChecks
             "world-tags.tsv names each avatar's stream for AimModCore's tags; in a free-for-all everyone is an enemy");
         Check(MultiplayerService.WorldTagsBody([("s-0011223344556677", true, "CT", false, "Nova Prime")]) == "tag\ts-0011223344556677\tfriend\tCT\t0\tNova%20Prime\n",
             "A teammate's row: friend, team, down, escaped name");
+        Check(MultiplayerService.WorldTagsBody([("s-1", true, "CT", true, "Mate", (string?)"w=AK-47;hp=87;kit=1;c4=1")]) == "tag\ts-1\tfriend\tCT\t1\tMate\tw%3DAK-47%3Bhp%3D87%3Bkit%3D1%3Bc4%3D1\n"
+              && MultiplayerService.WorldTagsBody([("s-2", false, "T", true, "Foe", (string?)null)]) == "tag\ts-2\tenemy\tT\t1\tFoe\n",
+            "A CS teammate's row carries their gear (weapon, health, kit, bomb); an enemy's never does");
+        Check(MultiplayerService.CsGear(null, "a", true) is null, "No gear outside CS");
         var tracker = new SelfPoseTracker(Path.Combine(root, "standins-pose"));
         var ids = service.StandIns.ToDictionary(p => p.Value, p => p.Key);
         var frame = new LivePoseFrame(1, "", "x", "m", 1, [new LivePose(5000, [0, 0, 0, 0, 0])], [[4, 100, 0, 0, 45, 115], [5, 200, 0, 0, 45, 115]])

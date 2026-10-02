@@ -104,20 +104,20 @@ static class BombSounds
         return s;
     }
 
-    // A short two-partial blip.
-    public static float[] Beep() { var s = Buffer(0.11); Tone(s, 0, 0.1, 2093, 1, 0.002, 0.04, 0.3); return Normalize(s, 0.8); }
-    // A sweep from 1.5 to 3.6 kHz, getting louder, over the last second.
+    // A short, soft blip around 1 kHz (CS's is a mid-pitched chirp, not a shrill one).
+    public static float[] Beep() { var s = Buffer(0.13); Tone(s, 0, 0.12, 988, 1, 0.004, 0.06, 0.18); return Normalize(s, 0.5); }
+    // A sweep from 700 Hz to 1.6 kHz, getting louder, over the last second.
     public static float[] FinalTone()
     {
         var s = Buffer(FinalToneSeconds + 0.05); double phase = 0;
         for (var i = 0; i < s.Length; i++)
         {
             var t = i / (double)Rate; var u = Math.Min(1, t / FinalToneSeconds);
-            var f = 1500 * Math.Pow(3600 / 1500.0, u);
+            var f = 700 * Math.Pow(1600 / 700.0, u);
             phase += 2 * Math.PI * f / Rate;
             s[i] = (float)((0.5 + 0.5 * u) * Env(t, 0.01, FinalToneSeconds + 0.05, 0.04) * (Math.Sin(phase) + 0.2 * Math.Sin(2 * phase)));
         }
-        return Normalize(s, 0.85);
+        return Normalize(s, 0.55);
     }
     // Three keypad presses.
     public static float[] PlantStart()
@@ -128,7 +128,7 @@ static class BombSounds
         return Normalize(s, 0.6);
     }
     // Armed: two rising chirps.
-    public static float[] PlantDone() { var s = Buffer(0.25); Tone(s, 0, 0.08, 1760, 1); Tone(s, 0.1, 0.12, 2349, 1); return Normalize(s, 0.7); }
+    public static float[] PlantDone() { var s = Buffer(0.25); Tone(s, 0, 0.08, 880, 1); Tone(s, 0.1, 0.12, 1175, 1); return Normalize(s, 0.55); }
     // A snip and a low click.
     public static float[] DefuseStart() { var s = Buffer(0.2); Burst(s, 0, 0.07, 1, 2500, 23, 40); Tone(s, 0.06, 0.05, 660, 0.7, 0.002, 0.03, 0.1); return Normalize(s, 0.6); }
     // Disarmed: three falling notes.
@@ -140,7 +140,7 @@ static class BombSounds
         return Normalize(s, 0.7);
     }
     // A metallic click.
-    public static float[] KitPickup() { var s = Buffer(0.12); Burst(s, 0, 0.02, 1, 6000, 31, 200); Tone(s, 0.005, 0.08, 3136, 0.6, 0.001, 0.07, 0.4); return Normalize(s, 0.55); }
+    public static float[] KitPickup() { var s = Buffer(0.12); Burst(s, 0, 0.02, 1, 6000, 31, 200); Tone(s, 0.005, 0.08, 1568, 0.6, 0.001, 0.07, 0.3); return Normalize(s, 0.45); }
     // A low thump with a long rumble.
     public static float[] Explosion()
     {
@@ -290,6 +290,7 @@ sealed class BombAudio : IDisposable
     // Beep: when the bomb goes off (local unix ms), and its current gains from the listener.
     long? explodesAtLocal; float beepLeft, beepRight; long nextBeepAt; bool finalPlayed;
     double volume = 0.7;
+    const double Headroom = 0.35;
     Thread? thread; volatile bool stopping; long failedAt = long.MinValue / 2;
     public int Played { get; private set; }
 
@@ -373,7 +374,9 @@ sealed class BombAudio : IDisposable
                     }
                 }
             }
-            var gain = (float)(volume * volume); // perceptual: the slider feels even
+            // Perceptual (the slider feels even), with headroom: these play outside KovaaK's mixer, at
+            // Windows volume, so full scale would sit far above the game's own sounds.
+            var gain = (float)(volume * volume * Headroom);
             foreach (var v in voices)
             {
                 var start = v.Delay; v.Delay = 0;

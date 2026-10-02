@@ -21,5 +21,11 @@ namespace worldtags_checks
         const auto json = Json({ScreenTag{"Na\"me", "T", true, true, false, 0.5, 0.25, 12.4}});
         CHECK(json == R"({"tags":[{"n":"Na\"me","t":"T","f":1,"a":1,"c":0,"x":0.5000,"y":0.2500,"d":12}]})", "world tags: the JS payload");
         CHECK(Json({}) == R"({"tags":[]})", "world tags: none on screen clears them");
+        auto geared = Parse("AIMMOD_TAGS_1\t2\ntag\ts-1\tfriend\tCT\t1\tMate\tw%3DAK-47%3Bhp%3D87%3Bkit%3D1\ntag\ts-2\tenemy\tT\t1\tFoe\n");
+        CHECK(geared && geared->at("s-1").gear == "w=AK-47;hp=87;kit=1" && geared->at("s-2").gear.empty(), "world tags: an optional gear column, unescaped");
+        CHECK(!Parse("AIMMOD_TAGS_1\t1\ntag\ts-1\tfriend\tT\t1\tx\t" + std::string(MaxGear + 1, 'a') + "\n"), "world tags: oversized gear is rejected");
+        CHECK(Json({ScreenTag{"M", "CT", true, true, false, 0.5, 0.5, 3, "w=AK-47;c4=1"}}) ==
+                  R"({"tags":[{"n":"M","t":"CT","f":1,"a":1,"c":0,"x":0.5000,"y":0.5000,"d":3,"g":"w=AK-47;c4=1"}]})",
+              "world tags: gear rides along in the payload");
     }
 } // namespace worldtags_checks
