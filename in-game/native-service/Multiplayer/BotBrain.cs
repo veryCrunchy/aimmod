@@ -302,7 +302,8 @@ sealed class BotBrain(int seed = 0)
                 orders.Add(Order("hold", null, lookAway ?? head, sightList, fight: BotAim.Strafe(skill), role: lookAway is null ? "fight" : "fight (looking away)"));
                 // Counter-strafe: harder bots wait for the stop before the next shot; moving costs aim.
                 if (lookAway is null && w.Now >= st.ReactUntil && BotAim.Ready(st.Aim, error, pick.D, w.Now, skill) && !BotAim.WaitsToStop(skill, sight?.Speed))
-                    Fire(w, st, skill, member, slot, eye, target, pick.D, error, BotAim.Moving(sight?.Speed) * BotTactics.HalfBlindAim(blind), fired, shots, csSelf);
+                    Fire(w, st, skill, member, slot, eye, target, pick.D, error, BotAim.MoveAccuracy(csSelf is null ? null : CsFeel.ByProfile(CsRules.InSlot(slot, csSelf.Primary, csSelf.Secondary, false)?.Combat.Name),
+                        sight?.Speed, sight?.Crouch ?? false, pick.D) * BotTactics.HalfBlindAim(blind), fired, shots, csSelf);
                 Note(lookAway is null ? "fight" : "fight (looking away)");
                 continue;
             }

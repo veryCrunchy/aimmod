@@ -284,6 +284,10 @@ static partial class MultiplayerChecks
         Check(Aim.FightStyle(BotSkills.For(BotSkills.Hard)) == "counter" && Aim.FightStyle(BotSkills.For(BotSkills.Easy)) == "ad" && Aim.WaitsToStop(BotSkills.For(BotSkills.Hard), 600)
             && !Aim.WaitsToStop(BotSkills.For(BotSkills.Hard), 60) && !Aim.WaitsToStop(BotSkills.For(BotSkills.Easy), 600) && !Aim.WaitsToStop(BotSkills.For(BotSkills.Hard), null)
             && Aim.Moving(900) < 0.5 && Aim.Moving(80) == 1, "Harder bots counter-strafe and shoot from a stop; shooting on the move costs aim (easy bots do it anyway)");
+        var ak = CsFeel.ById("ak47"); var awp = CsFeel.ById("awp");
+        Check(Aim.MoveAccuracy(ak, 0, false, 1500) == 1 && Aim.MoveAccuracy(ak, 900, false, 1500) < 0.4 && Aim.MoveAccuracy(awp, 0, false, 3000) == 1 && Aim.MoveAccuracy(awp, 700, false, 3000) < 0.2
+              && Aim.MoveAccuracy(ak, 300, true, 3000) >= Aim.MoveAccuracy(ak, 300, false, 3000) && Aim.MoveAccuracy(null, 900, false, 1500) == Aim.Moving(900),
+            "A bot's own movement costs it what the players' cones cost them (CsFeel): an AK on the run, an AWP unscoped on the move; still, it's on");
         var sight = MultiplayerService.ParseBotSight("AIMMOD_BOTSIGHT_1\t1000\nbot\t1\t10\t20\t145\t90\t0\nvel\t1\t412.5\t1\nbot\t2\t5\t5\t100\t0\n", 1000);
         Check(sight is { } s && s["1"].Speed == 412.5 && s["1"].Crouch && s["2"].Speed is null && !s["2"].Crouch, "bot-sight.tsv carries each bot's speed and crouch (older bridges don't)");
         var line = MultiplayerService.BotDebugLine(new BotDebugInfo("Nova", "anchor", ["gunfire (rifle) 23 m through a wall"], ["#2 rifle: decoy (never moves, no hits)"], "HoldEdge (smoke 9 m, 8 s left)", 0.7, "looking away (own flash)", "walk/stand"));

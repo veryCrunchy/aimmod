@@ -101,11 +101,13 @@
     av.body.appendChild(actions([button('Spawn circling avatar',function(){spawnAvatar('circle');},'compact'+(av0&&av0.on&&av0.mode==='circle'?' primary':'')),button('Despawn',function(){once('avatar-off',function(done){act({action:'avatar',on:false,mode:'circle'},function(ok){done();if(ok)toast('Test avatar despawned.');});});},'compact quiet')]));
     if(tools.avatarPath)av.body.appendChild(node('p','dev-note','Path ready from a run of '+tools.avatarPath+'. Load that scenario in freeplay to see the avatar walk it.'));
     // Bot debug: each bot's path (spheres) and goal (a cube) in the world, its job and senses logged
-    // every second, and here: what each bot heard, the decoys it called, its smoke call, how blind it is.
+    // every second, and here: what each bot heard, the decoys it called, its smoke call, how blind it is,
+    // the spot it holds (its role there and what the spot sees) and where it looks.
     av.body.appendChild(add(node('div','dev-line'),node('span','dev-label','Bot debug'),segmented([{id:'off',label:'Off'},{id:'on',label:'Paths and senses'}],st.botDebug?'on':'off',function(id){act({action:'bot-debug',on:id==='on'},function(ok){if(ok)toast(id==='on'?'Bot paths and goals are drawn in the match; their senses show here.':'Bot debug off.');});},'bot debug')));
     if(st.botDebug&&st.bots&&st.bots.length){var bots=node('div','dev-bots');st.bots.forEach(function(b){var parts=[b.move];
       if(b.heard&&b.heard.length)parts.push('heard '+b.heard.join(', '));if(b.sources&&b.sources.length)parts.push('gunfire '+b.sources.join('; '));
       if(b.smoke)parts.push('smoke: '+b.smoke);if(b.blind>0.05)parts.push('blind '+Math.round(b.blind*100)+'%');if(b.flash)parts.push(b.flash);
+      if(b.spot)parts.push(b.spot);if(b.look)parts.push('looking at '+b.look);
       bots.appendChild(add(node('div','dev-bot'),node('strong','',b.name+' · '+b.role),node('span','dev-bot-senses',parts.join(' · '))));});av.body.appendChild(bots);}
     if(st.looks)add(av.body,add(node('div','dev-line'),node('span','dev-label','Your look'),segmented(st.looks.map(function(l){return {id:l.id,label:l.label};}),st.look,function(id){other('POST','/multiplayer',{action:'avatar',avatar:id},function(ok){if(ok)refreshSoon();});},'look')));
     // Replays: pick runs for the tools below.
