@@ -42,7 +42,7 @@ static class MatchPresets
 // KovaaK's ranked leaderboards.
 static partial class MatchScenario
 {
-    public const int GeneratorVersion = 5;
+    public const int GeneratorVersion = 6;
     public const string Prefix = "AimMod Match - ";
     // Written into every generated scenario; cleanup removes only files that carry it.
     public const string Marker = "AimMod multiplayer match generated from ";
@@ -456,7 +456,9 @@ static partial class MatchScenario
 
     // One hitscan profile: the host's damage and fire rate, the look's viewmodel, magazine and
     // reload, and a view kick (the camera climbs while firing and settles back; the claim is the
-    // camera ray, so the kick moves hits as it moves the crosshair). No spread.
+    // camera ray, so the kick moves hits as it moves the crosshair). KovaaK's random spread stays 0;
+    // a CS gun gets one per-bullet spread entry, which AimModCore fills with each shot's seeded CS
+    // spread (CsFeel), so the game's own trace follows the bullet.
     static List<string> WeaponLines(CombatWeapon w, CsLook look, double? adsFov = null, double adsSensitivity = 1)
     {
         var range = w.Range > 0 ? w.Range : 1000000.0;
@@ -478,8 +480,10 @@ static partial class MatchScenario
         };
         // Right mouse zooms (KovaaK's own ADS): the FOV, the zoomed sensitivity ratio, and the sniper's
         // slower walk while scoped. The knife and the bomb never zoom (right mouse stabs or does nothing).
+        if (CsFeel.ByProfile(w.Name) is { Spreads: true }) lines.AddRange(["UsePerBulletSpread=true", "PBS0=0.0,0.0"]);
+        // The scoped sniper's slower walk is AimModCore's (CsFeel: CS's scoped speed), so KovaaK's own ADS factor stays out of it.
         if (adsFov is { } fov)
-            lines.AddRange(["CanAimDownSight=true", "ADSScope=No Scope", "ADSZoomSensFactor=" + Num(adsSensitivity), "ADSMoveFactor=" + (look.Scope ? "0.52" : "0.8"),
+            lines.AddRange(["CanAimDownSight=true", "ADSScope=No Scope", "ADSZoomSensFactor=" + Num(adsSensitivity), "ADSMoveFactor=" + (look.Scope ? "1.0" : "0.8"),
                 "ADSFOVOverride=" + Num(fov), "ADSAllowUserOverrideFOV=false", "ADSZoomInDuration=" + (look.Scope ? "0.08" : "0.12"), "ADSZoomOutDuration=0.05", "ADSBlocksShooting=false", "ShootingBlocksADS=false"]);
         else lines.Add("CanAimDownSight=false");
         // The knife and the bomb make no gunshot (AimMod plays the knife's own swish and thud).

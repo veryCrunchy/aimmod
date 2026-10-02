@@ -21,6 +21,7 @@
 #include <Windows.h>
 
 #include <algorithm>
+#include <chrono>
 #include <utility>
 #include <cmath>
 #include <filesystem>
@@ -43,6 +44,7 @@ namespace aimmod
     {
         constexpr int MaxSpawnFailures = 3;          // then this peer falls back to shapes
         constexpr std::uint64_t TestPeer = 1;         // synthetic peer for avatar_test
+        constexpr double WalkerRunShare = 0.85;       // Walker::Tune walks at this share of the run speed it is given
 
 
         void WriteFloats(std::uint8_t* value, const Param& p, double a, double b, double c)
@@ -772,12 +774,18 @@ namespace aimmod
                         if (!m_linkCache) m_linkCache = std::make_shared<bridge::ghost::LinkCache>();
                         walk.walker.links = m_linkCache;
                         walk.walker.nav = m_nav;
-                        // Move like the local player does on this map (a ported map is scaled up).
-                        if (m_runSpeed != walk.tunedSpeed || m_stepHeight != walk.tunedStep)
+                        // Move like the local player does on this map (a ported map is scaled up). CS: at
+                        // the speed of the weapon in the bot's hand (the order's share of the run speed;
+                        // Walker::Tune walks at WalkerRunShare of what it is given).
+                        double botRun = m_runSpeed;
+                        if (m_botOrders && m_runSpeed > 0)
+                            if (const auto it = m_botOrders->bots.find(w.peer); it != m_botOrders->bots.end() && it->second.speed > 0)
+                                botRun = m_runSpeed * it->second.speed / WalkerRunShare;
+                        if (botRun != walk.tunedSpeed || m_stepHeight != walk.tunedStep)
                         {
-                            walk.tunedSpeed = m_runSpeed;
+                            walk.tunedSpeed = botRun;
                             walk.tunedStep = m_stepHeight;
-                            walk.walker.Tune(m_runSpeed, m_stepHeight);
+                            walk.walker.Tune(botRun, m_stepHeight);
                             if (!walk.tuneLogged && m_runSpeed > 0)
                             {
                                 walk.tuneLogged = true;
@@ -1127,6 +1135,16 @@ namespace aimmod
                     if (up <= 0 && u2 > 0) up = u2;
                     if (run > 0 && up > 0) break;
                 }
+        // CS: AimModCore scales the local player's speed by the weapon in hand; the bots copy the unscaled one.
+        try
+        {
+            const std::filesystem::path csmove = std::filesystem::path(m_options.stateDir) / L"cs-movement.tsv";
+            std::ifstream in(csmove, std::ios::binary);
+            std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+            const auto nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+            if (const auto unscaled = bridge::csmove::RunSpeed(text, nowMs)) run = *unscaled, from = "the local player (unscaled by the weapon in hand)";
+        }
+        catch (const std::exception&) {}
         const bool readable = run > 0;
         // Neither readable: the avatars' own profile (Avatars.cs: MaxSpeed 1100, StepUpHeight 75).
         if (run <= 0) run = 1100;

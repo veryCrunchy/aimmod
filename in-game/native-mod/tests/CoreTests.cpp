@@ -757,13 +757,22 @@ static void MatchPlayChecks()
           "malformed round states are rejected whole");
 
     ShotRecord shot{1790000000123, 4, {1, 2, 3}, {1, 0, 0}, 1, 9, true, false};
-    CHECK(FormatShot(shot) == "shot\t1790000000123\t4\t1\t2\t3\t1\t0\t0\t1\t9\t1\t0\t0\t0\t0\t0\t0\t-1\t0\n", "shot row layout (no drawn capsule)");
+    CHECK(FormatShot(shot) == "shot\t1790000000123\t4\t1\t2\t3\t1\t0\t0\t1\t9\t1\t0\t0\t0\t0\t0\t0\t-1\t0\t0\t0\t0\n", "shot row layout (no drawn capsule)");
     ShotRecord drawn = shot;
     drawn.gameHit = true;
     drawn.targetCenter[0] = 500, drawn.targetCenter[1] = -20.5, drawn.targetCenter[2] = 100;
     drawn.targetRadius = 34, drawn.targetHalfHeight = 96, drawn.gameDamage = 144, drawn.source = SourceNear;
-    CHECK(FormatShot(drawn) == "shot\t1790000000123\t4\t1\t2\t3\t1\t0\t0\t1\t9\t1\t1\t500\t-20.5\t100\t34\t96\t144\t2\n",
+    CHECK(FormatShot(drawn) == "shot\t1790000000123\t4\t1\t2\t3\t1\t0\t0\t1\t9\t1\t1\t500\t-20.5\t100\t34\t96\t144\t2\t0\t0\t0\n",
           "shot row carries the drawn capsule, the game's damage per hit and the target source");
+    ShotRecord sprayed = drawn;
+    sprayed.inaccuracy = 0.0064, sprayed.spreadShot = 4, sprayed.spreadApplied = true;
+    CHECK(FormatShot(sprayed).ends_with("\t144\t2\t6.4\t4\t1\n"), "shot row carries the CS inaccuracy (mrad), the seed's shot and whether the game's trace followed it");
+    const auto feel = ParseRoundState("AIMMOD_ROUND_1\t1\nmatch\tA\nfeel\t18446744073709551615\t0\tall\t0.8\n");
+    CHECK(feel && feel->feel && feel->feel->salt == 18446744073709551615ull && !feel->feel->crosshair && feel->feel->zoom == "all" && feel->feel->adsSensitivity == 0.8,
+          "round state: the CS feel line (salt, crosshair, zoom, zoomed sensitivity)");
+    CHECK(!ParseRoundState("AIMMOD_ROUND_1\t1\nmatch\tA\nfeel\t1\t1\tmax\t1\n") && !ParseRoundState("AIMMOD_ROUND_1\t1\nmatch\tA\nfeel\t-1\t1\tcs\t1\n") &&
+              !ParseRoundState("AIMMOD_ROUND_1\t1\nmatch\tA\nfeel\t1\t2\tcs\t1\n") && ParseRoundState("AIMMOD_ROUND_1\t1\nmatch\tA\n")->feel == std::nullopt,
+          "a bad feel line is refused; without one there is no feel");
 
     // Target pick: what the ray meets first; with no exact hit, the nearest pass within reach.
     const std::vector<Capsule> drawnTargets = {{7, {1000, 0, 100}, 34, 96}, {8, {600, 0, 100}, 34, 96}, {9, {800, 200, 100}, 34, 96}};
@@ -1056,6 +1065,7 @@ static void WaterChecks()
 #include "WorldTagsTests.inl"
 #include "CsGearTests.inl"
 #include "CsGrenadesTests.inl"
+#include "CsFeelTests.inl"
 
 int main(int argc, char** argv)
 {
@@ -1093,6 +1103,7 @@ int main(int argc, char** argv)
     WaterChecks();
     csgear_checks::Run();
     csgrenades_checks::Run();
+    csfeel_checks::Run();
     std::printf("%d AimModCore checks, %d failed.\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }

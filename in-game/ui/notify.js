@@ -234,6 +234,10 @@
   }
   // AimModCore's events reach the page through Gameface's engine (cohtml.js, loaded first by notify.html).
   if(root.AimModListen)root.AimModListen('AimModPointer',pointer);else if(root.engine&&root.engine.on)root.engine.on('AimModPointer',pointer);
+  // CS sights from AimModCore (AimModScope): the scope view and the dynamic crosshair, every frame they change.
+  var sightsLayer=root.document.getElementById('cs-sights');
+  function scope(json){if(root.AimModCsHud&&root.AimModCsHud.sights&&sightsLayer)root.AimModCsHud.sights(sightsLayer,json);}
+  if(root.AimModListen)root.AimModListen('AimModScope',scope);else if(root.engine&&root.engine.on)root.engine.on('AimModScope',scope);
   if(root.document.addEventListener){
     root.document.addEventListener('mousemove',function(){counts.gfMove++;},true);
     root.document.addEventListener('mousedown',function(){counts.gfDown++;nativeDownAt=Date.now();debug();},true);
@@ -247,5 +251,5 @@
     clearTimeout(timer);timer=setTimeout(poll,250);
   }
   poll();
-  root.AimModNotify={render:render,pointer:pointer,filePointer:filePointer};
+  root.AimModNotify={render:render,pointer:pointer,filePointer:filePointer,scope:scope};
 })(window);

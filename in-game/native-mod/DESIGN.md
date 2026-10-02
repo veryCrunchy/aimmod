@@ -528,9 +528,16 @@ last 5 s; deleted when the request lapses; atomic replace on every new shot):
 
 ```
 AIMMOD_SHOTS_1	<publish seq>	<session>
-shot	<unix ms>	<shot seq>	<ox>	<oy>	<oz>	<dx>	<dy>	<dz>	<slot>	<target>	<headshot 0/1>	<gameHit 0/1>	<cx>	<cy>	<cz>	<radius>	<half height>	<game damage>	<source>
+shot	<unix ms>	<shot seq>	<ox>	<oy>	<oz>	<dx>	<dy>	<dz>	<slot>	<target>	<headshot 0/1>	<gameHit 0/1>	<cx>	<cy>	<cz>	<radius>	<half height>	<game damage>	<source>	<inaccuracy mrad>	<spread shot>	<applied 0/1>
 tag	<target id>	<stream id>
 ```
+
+- CS weapon feel (game-modes.md 6.6.6, `CsFeel`): the direction stays the
+  camera ray; `inaccuracy` (0: none) and `spread shot` (whose seed drew the
+  offset) let the host rebuild the bullet's ray; the target is picked on that
+  ray. `applied 0`: the game's trace didn't follow the offset (KovaaK's
+  per-bullet spread couldn't be confirmed), the row's game hit is dropped and
+  the service claims it on AimModCore's ray (checked against the map).
 
 - Shots are detected by polling every weapon's `ShotsFiredThisSession` each
   frame (up to 8 per weapon per frame); `slot` is the weapon's index in

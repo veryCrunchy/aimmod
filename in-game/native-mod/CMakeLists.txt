@@ -43,6 +43,7 @@ add_library(aimmod_core STATIC
     core/src/WorldTags.cpp
     core/src/CsGear.cpp
     core/src/CsGrenades.cpp
+    core/src/CsFeel.cpp
 )
 target_include_directories(aimmod_core PUBLIC core/include)
 if(MSVC)
@@ -75,6 +76,7 @@ if(AIMMOD_BUILD_MOD)
         mod/src/MatchPlay.cpp
         mod/src/CsGear.cpp
         mod/src/CsGrenades.cpp
+        mod/src/CsFeel.cpp
         mod/src/Cosmetics.cpp
         mod/src/CosmeticsPreview.cpp
         mod/src/Reflect.cpp
