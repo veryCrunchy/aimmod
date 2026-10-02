@@ -1437,9 +1437,9 @@ preset):
   untouched outside matches).
 - **Profiles** (`CsRules`, `CsLook`): every CS item is a hitscan profile with
   the host's damage and fire rate, a viewmodel by class, the CS2 magazine and
-  reload, and a view kick (`MaxRecoilUp`/`Horiz`, auto reset). Spread stays 0
-  because the host validates hits on the camera ray; a kick moves the camera,
-  so it moves hits as it moves the crosshair.
+  reload, and a view kick (`MaxRecoilUp`/`Horiz`, auto reset). KovaaK's random
+  spread stays 0; the CS spread is the seeded per-bullet entry of 6.6.6; a
+  kick moves the camera, so it moves hits as it moves the crosshair.
 
   | Item | Viewmodel | Third person | Mag | Reload |
   | --- | --- | --- | --- | --- |
@@ -1977,6 +1977,105 @@ AimMod's own: procedural models of engine basic shapes and synthesised sounds.
   while they throw), the radar, smoke that bends around walls (it is an
   ellipsoid), and a molotov that steeper floors (CS: over 30 degrees) bounce
   off rather than catch on (here any surface a grenade lands on).
+
+#### 6.6.6 Weapon feel: spread, scope and speed (built)
+
+CS:GO-like accuracy and movement for every CS gun, real on the bullet and
+validated by the host. Numbers and formulas: `aimmod::cs` in
+`native-mod/core/include/aimmod/CsFeel.hpp`, mirrored by the host's
+`CsFeel.cs` (both test suites check the same golden numbers).
+
+- **How KovaaK's fires.** A hitscan weapon traces from the camera
+  (`AWeaponParentActor::SingleHitscanTrace`), natively; UFunction hooks on the
+  shot never fire, and the shot is only seen afterwards (the weapon's
+  `ShotsFiredThisSession`). Its random spread (`Spread*`, `CircularSpread`)
+  can't be reproduced by the host, so it stays 0. The profile's
+  **per-bullet spread** (`UsePerBulletSpread`, `PBS0=<distance>,<angle>`,
+  `FWeaponProfileNative::PerBulletSpread`) is a fixed offset the game applies
+  to the shot's direction: each CS gun ships one entry, and AimModCore writes
+  the next shot's offset into it every frame (all four profile copies of the
+  weapon in hand). The game's own trace, tracer, decal, hit counter and
+  `Send_ShotHit` then follow the bullet, so hits, misses and hitmarkers agree
+  with the spread.
+- **Measured, not assumed.** The entry's units and how the game composes it
+  with the camera aren't documented. AimModCore measures them once
+  (`GetPerBulletSpread(0)` for entries (1, 0), (1, 90) and a linearity check,
+  `GetHitscanDestination(0)` while looking up or down for added-to-the-camera
+  vs camera-frame), reads every arming back, and logs the result. If that
+  can't be confirmed the entry stays 0, the game's trace stays on the
+  crosshair, and only AimModCore's own ray (with a world trace against the
+  map) carries the spread: the shot row says `applied 0`, its game hit is
+  dropped, and the service claims it on that ray.
+- **Deterministic seeds.** A bullet's offset (right, up in the camera's frame)
+  is `inaccuracy * u1` at angle `2 pi u2` plus the static spread `* u3` at
+  `2 pi u4`, with `u1..u4` from SplitMix64 seeded by the match salt (FNV-1a 64
+  of the match id, `feel` line of round-state.tsv) and the shot number. The
+  ray is `forward + right * x + up * y`, normalised.
+- **Inaccuracy** (radians, CS:GO's numbers / 1000): base cone by stance
+  (crouched better; the AWP's unscoped cone is wide, its scoped cone tiny),
+  plus the movement cone by speed (none up to 34 % of the weapon's max speed,
+  full from 95 %: walking costs some, running a lot), plus the jump cone while
+  airborne, plus a penalty each shot (and each landing) adds that recovers to
+  10 % in the weapon's recovery time (first-shot accuracy, spray growth and
+  recovery). Rifles are bad on the run, SMGs and pistols forgiving, the AWP
+  accurate only scoped and still. Scoping in takes 0.15 s to reach the scoped
+  cone (quick-scopes are a little wider).
+- **Host validation.** The claim carries the camera ray (checked against the
+  shooter's track as before) plus `sp: [inaccuracy mrad, seed shot]`. The host
+  measures the shooter's speed and airborne state from its own track at the
+  shot (the slower of two windows), refuses an inaccuracy below half the
+  least cone that motion allows (`spread`: a running rifle can't claim a
+  standing shot), above 0.6 rad, or a seed that isn't the shot's or one of the
+  8 before it, then rebuilds the bullet's ray and validates the hit on it
+  (the same capsule tolerances). A claim without spread numbers is turned by
+  the least cone. Not provable by the host: the spray penalty (misses aren't
+  claimed) and whether an AWP was scoped; both are bounded by the least cone.
+- **Scope (AWP).** Right mouse: level 1 (CS FOV 40), level 2 (10, the same
+  tangent ratio from whatever FOV the game's first level has), out. KovaaK's
+  own zoom does it (`WeaponHandler:ZoomIn/ZoomOut`, `FullZoomUnscaledFOV`,
+  `ADSZoomSensFactor`), driven by AimModCore with the handler's `BlockADS` on
+  so the game's own right mouse stays out (if the game then refuses to zoom,
+  `BlockADS` is given back and `ZoomDesired` follows the scope). Each shot
+  unscopes; holding right mouse through the bolt (the profile's fire
+  interval) scopes back to the same level. Reloading or switching unscopes.
+  The zoomed sensitivity is the lobby's on level 1 and scaled by the zoom on
+  level 2. While scoped the first-person weapon and KovaaK's crosshair are
+  hidden.
+- **Sights.** The notice layer draws them on its own canvas (`#cs-sights`,
+  `cshud.js` `sights()`) from AimModCore's `AimModScope` event: black around a
+  round view with thin black crosshair lines (AimMod's own drawing, no game
+  art), closing in from a wider ring while scoping in, a veil and smeared line
+  ghosts while moving (and a backdrop blur where the engine supports it) that
+  settle over about 0.35 s after stopping. Unscoped, the dynamic crosshair
+  (lobby setting `dynamicCrosshair`, on by default) replaces KovaaK's: four
+  lines whose gap is the current cone on screen.
+- **Speed.** Max speed with each weapon, as a share of the knife's 250 u/s
+  (CS2): AWP 200 (scoped 100), AK-47 215, M4A1-S 225, Desert Eagle 230,
+  pistols and SMGs 240, grenades 245, knife and C4 250. AimModCore scales the
+  movement component's `MaxWalkSpeed`, `MaxWalkSpeedCrouched` and KovaaK's
+  `MaxSpeed` by it; a value the game set itself (a walk ability, a respawn)
+  becomes the new base. The AWP's `ADSMoveFactor` is 1 (the scoped speed is
+  AimModCore's). `cs-movement.tsv` gives AimModSteam the unscaled run speed,
+  and bot orders carry `speed <peer> <share>` for the weapon in each bot's
+  hand, so bots move at the same speeds. The host has no speed check; the
+  spread check reads speed from the track, so a faster knife changes nothing
+  there.
+- **Checks:** spread against speed, stance and jumps per weapon, the host's
+  least cone never above an honest client's, recoil growth and recovery,
+  golden seeds shared by both suites, offsets inside the cone, the rotator
+  forms, the scope's level cycle and resume, level FOV and sensitivity, speeds
+  per weapon, the crosshair gap and the scope's settling blur (AimModCore);
+  the host accepting honest spread shots, a centred crosshair missing when the
+  seeded offset leaves the body and hitting when aimed off by it, a running
+  shooter claiming a standing shot refused, seeds and absurd inaccuracies
+  refused, the claim and shot-row fields, which rows are claimed, the arena's
+  per-bullet entries and the lobby setting (service); the scope and crosshair
+  drawing (UI); the bot speed order and `cs-movement.tsv` (AimModSteam).
+- **Check live:** the `cs feel:` log lines (per-bullet spread measured, the
+  composition, "first shot armed ... follows it"), that tracers and decals
+  scatter when running, the AWP's two zoom levels and sensitivities, the
+  scope view and its blur, the crosshair gap, the speeds per weapon (the log
+  prints each), and hits refused as `spread` (should be none from honest play).
 
 ### 6.7 Capture the flag
 

@@ -162,6 +162,15 @@ namespace aimmod
                 if (c.size() == 9) l.grenade = std::string(c[8]);
                 r.loadout = l;
             }
+            else if (c[0] == "feel" && c.size() == 5 && !r.feel)
+            {
+                RoundState::Feel f;
+                if (!Int(c[1], f.salt) || !Flag(c[2], f.crosshair) || (c[3] != "off" && c[3] != "cs" && c[3] != "all") || !Num(c[4], f.adsSensitivity) ||
+                    f.adsSensitivity < 0.05 || f.adsSensitivity > 10)
+                    return std::nullopt;
+                f.zoom = std::string(c[3]);
+                r.feel = f;
+            }
             else if (c[0] == "bomb" && c.size() == 7 && !r.bomb)
             {
                 RoundState::Bomb b;
@@ -282,7 +291,11 @@ namespace aimmod
         out += '\t';
         if (s.gameDamage >= 0 && IsUsableNumber(s.gameDamage)) AppendNumber(out, s.gameDamage, 6);
         else out += "-1";
-        out += "\t" + std::to_string(std::clamp(s.source, 0, 3)) + "\n";
+        out += "\t" + std::to_string(std::clamp(s.source, 0, 3)) + "\t";
+        // CS weapon feel: the inaccuracy in milliradians, the seed's shot number, whether the game's trace followed it.
+        const bool spread = s.inaccuracy > 0 && IsUsableNumber(s.inaccuracy);
+        AppendNumber(out, spread ? std::min(s.inaccuracy, 1.0) * 1000 : 0.0, 6);
+        out += "\t" + std::to_string(spread ? s.spreadShot : 0) + "\t" + (spread && s.spreadApplied ? "1" : "0") + "\n";
         return out;
     }
 

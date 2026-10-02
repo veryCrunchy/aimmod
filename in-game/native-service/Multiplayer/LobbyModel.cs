@@ -87,6 +87,9 @@ sealed record LobbySettings(
     string AdsZoom = AdsZooms.Cs,
     double AdsSensitivity = 1,
     bool? FriendlyFire = null,
+    // CS: a crosshair whose gap shows the weapon's current inaccuracy (moving, jumping, spraying), in
+    // place of KovaaK's own (on by default).
+    bool DynamicCrosshair = true,
     // CS: dead players' chat reaches everyone (off: only other dead players and spectators see it, as in CS).
     bool DeadTalk = false)
 {
@@ -182,7 +185,7 @@ static class LobbyRules
 {
     public const int MaxName = 32, MaxChat = 200, MaxContentName = 128;
     static readonly HashSet<string> Keys = ["mode", "scenario", "mapOverride", "maxPlayers", "spectators", "rounds", "firstTo",
-        "timeLimit", "weapon", "movement", "character", "targetSpeed", "targetSize", "privacy", "countdown", "lateJoin", "autoStart", "voting", "fragLimit", "lifesteal", "requireFire", "halfRounds", "overtime", "adsZoom", "adsSensitivity", "friendlyFire", "deadTalk"];
+        "timeLimit", "weapon", "movement", "character", "targetSpeed", "targetSize", "privacy", "countdown", "lateJoin", "autoStart", "voting", "fragLimit", "lifesteal", "requireFire", "halfRounds", "overtime", "adsZoom", "adsSensitivity", "friendlyFire", "dynamicCrosshair", "deadTalk"];
 
     // A member id AimModCore accepts in play-state.tsv: [A-Za-z0-9_-]{1,64}.
     public static bool IsStreamSafe(string? id) => id is { Length: > 0 and <= 64 } && id.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_');
@@ -276,6 +279,7 @@ static class LobbyRules
                 case "adsZoom": if (Text() is not { } zoom || !AdsZooms.Values.Contains(zoom)) return (null, Bad("ADS zoom is off, CS-style or all weapons.")); next = next with { AdsZoom = zoom }; break;
                 case "adsSensitivity": if (Number() is not { } adsSens) return (null, Bad("Zoom sensitivity must be a number.")); next = next with { AdsSensitivity = Clamp(adsSens, 0.2, 2, 0.05) }; break;
                 case "friendlyFire": if (Flag() is not { } ff) return (null, Bad("Friendly fire must be on or off.")); next = next with { FriendlyFire = ff }; break;
+                case "dynamicCrosshair": if (Flag() is not { } xh) return (null, Bad("The dynamic crosshair must be on or off.")); next = next with { DynamicCrosshair = xh }; break;
                 case "deadTalk": if (Flag() is not { } dt) return (null, Bad("Dead chat must be on or off.")); next = next with { DeadTalk = dt }; break;
                 case "requireFire": if (Flag() is not { } fire) return (null, Bad("Require fire must be on or off.")); next = next with { RequireFire = fire }; break;
                 case "lifesteal": if (Number() is not { } steal) return (null, Bad("Lifesteal must be a percentage.")); next = next with { Lifesteal = (int)Clamp(steal, 0, 200, 5) }; break;

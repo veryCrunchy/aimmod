@@ -147,3 +147,32 @@ test('a flash plays on the top layer from the service\'s timing: full white whil
   s.hud.render(s.root,Object.assign({},base,{buyOpen:false,phase:'live',flash:0.8,flashFx:fx}),()=>{});
   assert.ok(!s.walk(s.root).some(e=>e.className==='cs-flash'),'with the timing the HUD draws no second white');
 });
+test('the scope: black around a round view with thin crosshair lines, closing in while scoping in, smeared while moving',()=>{
+  const s=setup();
+  const sharp=s.hud.sightsPlan({on:1,lvl:1,in:1,blur:0,gap:0,xh:1},1920,1080);
+  assert.equal(sharp.scope,true);assert.equal(sharp.r,Math.round(1080*0.47));assert.equal(sharp.ghosts.length,0);assert.equal(sharp.veil,0);assert.equal(sharp.line,1);
+  const entering=s.hud.sightsPlan({on:1,lvl:2,in:0,blur:1,gap:0,xh:0},1920,1080);
+  assert.ok(entering.r>sharp.r,'scoping in starts from a wider ring');
+  assert.equal(entering.ghosts.length,4);assert.ok(entering.veil>0.4&&entering.blurPx===6,'moving: the view veils over and the lines smear');
+  const settling=s.hud.sightsPlan({on:1,lvl:2,in:1,blur:0.3},1920,1080);
+  assert.ok(settling.ghosts[0].alpha<entering.ghosts[0].alpha&&Math.abs(settling.ghosts[0].dx)<Math.abs(entering.ghosts[0].dx),'the smear settles as the blur drops');
+  // Drawn on a canvas: the screen with the round view cut out, the lines over it.
+  const calls=[];const ctx=new Proxy({},{get:(t,k)=>k in t?t[k]:(...a)=>calls.push([k,...a]),set:(t,k,v)=>{t[k]=v;return true;}});
+  const canvas={style:{},getContext:()=>ctx};
+  const plan=s.hud.sights(canvas,JSON.stringify({on:1,lvl:1,in:1,blur:0.5,gap:0,xh:0}));
+  assert.equal(canvas.style.display,'block');assert.equal(canvas.width,1920);assert.equal(plan.scope,true);
+  assert.ok(calls.some(c=>c[0]==='arc'&&c[6]===true)&&calls.some(c=>c[0]==='fill')&&calls.filter(c=>c[0]==='fillRect').length>=6,'the black cut-out and the reticle are drawn');
+  assert.equal(canvas.style.backdropFilter,'blur(3px)','where the engine can, the view behind blurs');
+  assert.equal(s.hud.sights(canvas,{on:0}),null);assert.equal(canvas.style.display,'none');
+});
+test('the dynamic crosshair opens with the cone and is drawn only when wanted',()=>{
+  const s=setup();
+  const still=s.hud.sightsPlan({on:1,lvl:0,gap:0.002,xh:1},1920,1080),moving=s.hud.sightsPlan({on:1,lvl:0,gap:0.09,xh:1},1920,1080);
+  assert.equal(still.scope,false);assert.ok(still.gap>=3&&still.gap<6,'standing still: a tight crosshair');
+  assert.ok(moving.gap>still.gap*10,'running: the gap opens with the cone');
+  assert.ok(s.hud.sightsPlan({on:1,lvl:0,gap:9,xh:1},1920,1080).gap<=1080*0.3,'never wider than the screen allows');
+  assert.equal(s.hud.sightsPlan({on:1,lvl:0,gap:0.05,xh:0},1920,1080),null,'switched off in the lobby: KovaaK’s crosshair stays');
+  assert.equal(s.hud.sightsPlan(null,1920,1080),null);
+  const canvas={style:{},getContext:()=>null};
+  assert.equal(s.hud.sights(canvas,'not json'),null);assert.equal(canvas.style.display,'none');
+});

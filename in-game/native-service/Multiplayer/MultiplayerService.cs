@@ -361,6 +361,7 @@ sealed partial class MultiplayerService : IDisposable
         character = new { preset = s.CharacterProfile.Preset, custom = s.CharacterProfile.Custom },
         targetSpeed = s.TargetSpeed, targetSize = s.TargetSize, privacy = s.Privacy, countdown = s.Countdown, lateJoin = s.LateJoin, autoStart = s.AutoStart, voting = s.Voting,
         fragLimit = s.FragLimit, lifesteal = s.Lifesteal, requireFire = s.RequireFire, halfRounds = s.HalfRounds, overtime = s.Overtime, adsZoom = s.AdsZoom, adsSensitivity = s.AdsSensitivity,
+        dynamicCrosshair = s.DynamicCrosshair,
     };
     PresetStore LoadPresets()
     {

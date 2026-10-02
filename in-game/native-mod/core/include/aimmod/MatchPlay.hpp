@@ -72,6 +72,17 @@ namespace aimmod
             bool defusing{};
         };
         std::optional<Bomb> bomb;
+        // CS weapon feel (CsFeel.hpp): the match's spread salt (the host rebuilds every bullet's ray
+        // from it), the dynamic crosshair (on by default), the lobby's ADS zoom (off | cs | all) and
+        // the zoomed sensitivity of the first scope level.
+        struct Feel
+        {
+            std::uint64_t salt{};
+            bool crosshair{true};
+            std::string zoom{"cs"};
+            double adsSensitivity{1};
+        };
+        std::optional<Feel> feel;
     };
     std::optional<RoundState> ParseRoundState(std::string_view text);
 
@@ -127,10 +138,16 @@ namespace aimmod
         // How the target was found: 0 none, 1 the ray meets its capsule, 2 the ray passes within
         // GameHitToleranceCm of it (game hits only), 3 the game named it (Send_ShotHit).
         int source{};
+        // CS weapon feel: the dynamic inaccuracy the bullet was fired with (rad, 0: none), the shot
+        // number whose seed drew its offset, and whether the game's own trace followed that offset
+        // (KovaaK's per-bullet spread); 0: only this ray did (the game's trace stayed on the crosshair).
+        double inaccuracy{};
+        std::uint64_t spreadShot{};
+        bool spreadApplied{};
     };
     enum ShotSource : int { SourceNone = 0, SourceRay = 1, SourceNear = 2, SourceGame = 3 };
     // "shot\t<ms>\t<seq>\t<ox oy oz>\t<dx dy dz>\t<slot>\t<target>\t<headshot>\t<gameHit>
-    //  \t<cx cy cz>\t<radius>\t<half height>\t<game damage>\t<source>\n"
+    //  \t<cx cy cz>\t<radius>\t<half height>\t<game damage>\t<source>\t<inaccuracy mrad>\t<spread shot>\t<applied>\n"
     std::string FormatShot(const ShotRecord& shot);
 
     // The shots self-shots.tsv carries. Kept until the service acknowledges them (it writes the

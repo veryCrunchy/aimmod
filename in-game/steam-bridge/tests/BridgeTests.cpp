@@ -1291,6 +1291,13 @@ int main()
         Check(more && more->debug && more->bots.at(1).stop == 0.6 && more->bots.at(1).via && (*more->bots.at(1).via)[3] == 0.5 && more->bots.at(1).fight == 0.8 && more->bots.at(1).turn == 420,
               "parses stop-short goals, detours, fight strafing, turn rates and the debug switch");
         Check(more && more->bots.at(2).stop == 1 && !more->bots.at(2).via && more->bots.at(2).fight == 0 && more->bots.at(2).turn == 0, "out-of-range values are ignored");
+        // CS: each bot walks at the speed of the weapon in its hand; the local player's speed unscaled.
+        const auto speeds = bridge::bots::Parse("AIMMOD_BOTS_1\t9\nbot\t1\troam\nspeed\t1\t0.86\nbot\t2\troam\nspeed\t2\t9\nbot\t3\troam\n");
+        Check(speeds && speeds->bots.at(1).speed == 0.86 && speeds->bots.at(2).speed == 0 && speeds->bots.at(3).speed == 0, "parses the weapon speed share; out of range or none: the walker's own");
+        Check(bridge::csmove::RunSpeed("AIMMOD_CSMOVE_1\t1790891335000\t1100\t0.860\n", 1790891336000) == 1100.0 &&
+                  !bridge::csmove::RunSpeed("AIMMOD_CSMOVE_1\t1790891335000\t1100\t0.860\n", 1790891340000) && !bridge::csmove::RunSpeed("AIMMOD_CSMOVE_1\t1790891335000\t9\t1\n", 1790891335000) &&
+                  !bridge::csmove::RunSpeed("AIMMOD_CSMOVE_2\t1790891335000\t1100\t1\n", 1790891335000),
+              "cs-movement.tsv: the unscaled run speed while fresh");
     }
     Check(ghost::IsHelperBot("AimMod Hidden Bot") && !ghost::IsHelperBot("AimMod Hidden") && !ghost::IsHelperBot("target") &&
               std::hypot(ghost::HelperParkX, ghost::HelperParkY) > 100000 && std::hypot(ghost::HelperParkX, ghost::HelperParkY) < 1048576,

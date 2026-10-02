@@ -17,8 +17,9 @@ namespace AimMod.InGame.Multiplayer;
 //  - ThirdPerson: the 3rdPersonWeaponModel (WeaponDeveloperSettings' WeaponMeshViewModels),
 //    which other players' avatars show while this item is held; "-" for none.
 //  - Magazine and reload (s), view kick per shot (degrees up, sideways), and whether
-//    right mouse scopes in. Spread stays 0: the host validates hits on the camera ray, so
-//    a spread bullet would hit where the crosshair isn't.
+//    right mouse scopes in. KovaaK's own random spread stays 0: the spread is CS's (CsFeel),
+//    drawn from a per-shot seed AimModCore puts into the profile's per-bullet spread entry,
+//    and the host rebuilds the same bullet ray from the claim.
 sealed record CsLook(string Model, string ThirdPerson, int Magazine, double Reload, double KickUp, double KickSide, bool Scope = false);
 
 // A CS item that goes in a weapon slot: 0 primary, 1 secondary (pistol), 2 knife, 3 grenades, 4 bomb.
@@ -277,6 +278,8 @@ sealed class CsMatch
                 : slot == CsRules.StabSlot ? CsRules.Stab : CsRules.InSlot(slot, p.Primary?.Id, p.Secondary?.Id, false)?.Combat,
             DamageModel = Damage,
             OnKill = Killed,
+            // CS spread and movement inaccuracy: the weapon in that slot (the knife and grenades have none).
+            SpreadFor = (id, slot) => !players.TryGetValue(id, out var p) || slot is CsRules.StabSlot ? null : CsFeel.ByProfile(CsRules.InSlot(slot, p.Primary?.Id, p.Secondary?.Id, false)?.Combat.Name),
         };
         Grenades = new CsGrenadeField
         {

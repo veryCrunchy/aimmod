@@ -30,6 +30,7 @@ static partial class MultiplayerChecks
         TeamsAndSpawns();
         CsMode();
         CsWeapons();
+        CsFeelChecks();
         CsGrenadeChecks();
         LoadGate();
         ProtocolFrames();
