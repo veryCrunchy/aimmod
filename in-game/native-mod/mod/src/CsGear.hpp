@@ -57,6 +57,7 @@ namespace aimmod
         void HandModels(game::UObject* character, int slot);
         void KnifeAttacks(double now, game::UObject* player, game::UObject* character, int hand);
         void WorldBomb(double now, game::UObject* player, game::UObject* character, const std::optional<RoundState::Bomb>& bomb);
+        static std::optional<double> FloorBelow(game::UObject* context, double x, double y, double top, double bottom);
 
         game::Bindings& m_b;
         game::Scene& m_scene;
