@@ -129,7 +129,10 @@ sealed class BotBrain(int seed = 0)
             else { st.LastSeen = [pick.P.X, pick.P.Y, pick.P.Z - EyeAboveCentre]; st.LastSeenAt = w.Now; }
 
             // The objective (CS) decides whether a bot keeps planting or defusing through a fight.
-            var objective = w.Cs is { } cs2 && csSelf is not null ? Objective(w, cs2, csSelf, member, index, eye, st) : null;
+            // Its place among its own side's bots (CTs split over the sites by it; counting every bot
+            // sent all of one side's bots to the same site when the sides alternate).
+            var sideIndex = w.Cs is { } c0 && csSelf is not null ? w.Bots.TakeWhile(b => b.Member != member).Count(b => c0.Players.FirstOrDefault(p => p.Member == b.Member)?.Side == csSelf.Side) : index;
+            var objective = w.Cs is { } cs2 && csSelf is not null ? Objective(w, cs2, csSelf, member, sideIndex, eye, st) : null;
             var busy = objective is { Use: true } && w.Cs is { } cs3 && (
                 (cs3.Bomb.Planter == member && cs3.Bomb.PlantDoneAt is { } pd && pd - w.Now < 1000) ||
                 (cs3.Bomb.Defuser == member && cs3.Bomb.DefuseDoneAt is { } dd && (dd - w.Now < 1500 || (skill.Id == BotSkills.Hard && dd - w.Now < 3000))));
@@ -173,7 +176,8 @@ sealed class BotBrain(int seed = 0)
                 }
                 st.HoldSince = long.MinValue / 2;
                 if (st.Using) { st.Using = false; actions.Add(new BotAction(member, "use", new() { ["held"] = false })); }
-                orders.Add(new BotOrder(member, "goal", o.Goal, null, sightList, placeToken, placeAt));
+                // Near its spot: hold the angle the enemy comes from (their spawn's way).
+                orders.Add(new BotOrder(member, "goal", o.Goal, o.Goal is { } at && csSelf is not null ? HoldAngle(w, csSelf.Side, eye, at) : null, sightList, placeToken, placeAt));
                 continue;
             }
             st.HoldSince = long.MinValue / 2;
@@ -187,6 +191,17 @@ sealed class BotBrain(int seed = 0)
     }
 
     sealed record Plan(double[]? Goal, bool Use);
+
+    public const double HoldAngleCm = 600;
+    // Within HoldAngleCm of its spot, a bot looks toward the other side's spawn (the way the enemy
+    // comes) at eye height; farther away it looks where it walks (null).
+    internal static double[]? HoldAngle(BotWorld w, string side, double[] eye, double[] spot)
+    {
+        if (Math.Sqrt((eye[0] - spot[0]) * (eye[0] - spot[0]) + (eye[1] - spot[1]) * (eye[1] - spot[1])) > HoldAngleCm) return null;
+        var enemy = w.Map?.SpawnsFor(side == CsRules.T ? CsRules.CT : CsRules.T) ?? [];
+        if (enemy.Count == 0) return null;
+        return [Math.Round(enemy.Average(s => s.X), 1), Math.Round(enemy.Average(s => s.Y), 1), Math.Round(eye[2], 1)];
+    }
 
     // CS: Terrorists take the round's site (the carrier plants there, the bomb is picked up when
     // dropped, then they guard it); Counter-Terrorists split between the sites and defuse.

@@ -685,6 +685,9 @@ namespace aimmod
                 if (!m_lastScene.empty() && !m_ghosts.empty()) m_log("avatars: scenario changed; re-applying looks and AI-off");
                 m_lastScene = scene;
                 m_linkCache.reset(); // another map: which walks are clear is learnt again
+                m_nav.reset();
+                m_navSeeds.clear();
+                m_navDoneLogged = false;
                 m_botsAllowed = bridge::ghost::AvatarBotsAllowed(scene);
                 m_parkedHelpers.clear();
                 m_nextHelperPark = 0;
@@ -749,6 +752,7 @@ namespace aimmod
                         m_log("avatars: walker traces: floor " + std::to_string(m_floorHits) + "/" + std::to_string(m_floorTraces) + " found, walls " +
                               std::to_string(m_wallHits) + "/" + std::to_string(m_wallTraces) + " blocked");
                     }
+                    GrowNav(dev.walkers, character, now);
                     for (const auto& w : dev.walkers)
                     {
                         DevWalk& walk = m_walkers[w.peer];
@@ -765,6 +769,7 @@ namespace aimmod
                         // One map, one record of which straight walks are clear (Walker LinkCache).
                         if (!m_linkCache) m_linkCache = std::make_shared<bridge::ghost::LinkCache>();
                         walk.walker.links = m_linkCache;
+                        walk.walker.nav = m_nav;
                         // Move like the local player does on this map (a ported map is scaled up).
                         if (m_runSpeed != walk.tunedSpeed || m_stepHeight != walk.tunedStep)
                         {
@@ -876,6 +881,22 @@ namespace aimmod
                             }
                         }
                         if (order) m_botReports.push_back({w.peer, ws.x, ws.y, ws.z, ws.yaw, walk.seen});
+                        // Every 5 s: what each bot is told and how far along it is.
+                        if (order && now >= walk.nextStatusLog)
+                        {
+                            walk.nextStatusLog = now + 5.0;
+                            const auto& b = walk.walker;
+                            const char* mode = order->mode == bridge::bots::Order::Mode::Goal ? "goal" : order->mode == bridge::bots::Order::Mode::Hold ? "hold" : "roam";
+                            char line[320];
+                            if (b.goal)
+                                std::snprintf(line, sizeof(line), "avatars: bot %llu %s (%.0f, %.0f, %.0f), %.0f cm away; at (%.0f, %.0f, %.0f) %s; path %zu points, at %zu%s; plans %d found, %d partial, %d none; %d blocked",
+                                              static_cast<unsigned long long>(w.peer), mode, (*b.goal)[0], (*b.goal)[1], (*b.goal)[2], std::hypot((*b.goal)[0] - b.x, (*b.goal)[1] - b.y), b.x, b.y, b.z,
+                                              b.target == bridge::ghost::Walker::NavTarget ? "walking" : b.target == -1 ? "standing" : "walking to a waypoint", b.navPath.size(), b.navIndex,
+                                              b.navReached ? "" : " (not to the goal yet)", b.plansFound, b.plansPending, b.plansFailed, b.navBlocked);
+                            else
+                                std::snprintf(line, sizeof(line), "avatars: bot %llu %s at (%.0f, %.0f, %.0f)%s", static_cast<unsigned long long>(w.peer), mode, b.x, b.y, b.z, order->face ? ", facing an enemy" : "");
+                            m_log(line);
+                        }
                         if (!wasPlaced && walk.walker.placed)
                             m_log("avatars: simulated player " + std::to_string(w.peer) + " placed at spawn " + std::to_string(walk.walker.at) + " z=" +
                                   std::to_string(static_cast<int>(walk.walker.z)) + (walk.walker.grounded ? " on the traced floor" : " (no floor found yet: waiting there)"));
@@ -1045,13 +1066,91 @@ namespace aimmod
     // on this map: a ported map is scaled up and the walker's defaults would crawl.
     void GhostDemo::ReadLocalMovement(UObject* character)
     {
-        if (!BindAvatars() || !m_movementComponent.ok()) return;
-        UObject* movement = m_movementComponent.Object(character);
-        if (!movement) return;
-        const auto* walk = movement->GetValuePtrByPropertyNameInChain<float>(STR("MaxWalkSpeed"));
-        const auto* step = movement->GetValuePtrByPropertyNameInChain<float>(STR("MaxStepHeight"));
-        m_runSpeed = walk && std::isfinite(*walk) && *walk > 50 && *walk < 5000 ? *walk : -1;
-        m_stepHeight = step && std::isfinite(*step) && *step > 5 && *step < 300 ? *step : -1;
+        const bool bound = BindAvatars() && m_movementComponent.ok();
+        UObject* movement = bound ? m_movementComponent.Object(character) : nullptr;
+        const auto read = [](UObject* m, double& run, double& up) {
+            const auto* walk = m ? m->GetValuePtrByPropertyNameInChain<float>(STR("MaxWalkSpeed")) : nullptr;
+            const auto* step = m ? m->GetValuePtrByPropertyNameInChain<float>(STR("MaxStepHeight")) : nullptr;
+            run = walk && std::isfinite(*walk) && *walk > 50 && *walk < 5000 ? *walk : -1;
+            up = step && std::isfinite(*step) && *step > 5 && *step < 300 ? *step : -1;
+        };
+        double run = -1, up = -1;
+        read(movement, run, up);
+        const char* from = "the local player";
+        // Not readable there: an avatar's own (the AimMod profile runs like a KovaaK's player).
+        if (run <= 0 || up <= 0)
+            for (auto& [_, g] : m_ghosts)
+                if (UObject* pawn = g.pawn.Get())
+                {
+                    double r2 = -1, u2 = -1;
+                    read(bound ? m_movementComponent.Object(pawn) : nullptr, r2, u2);
+                    if (run <= 0 && r2 > 0) run = r2, from = "an avatar";
+                    if (up <= 0 && u2 > 0) up = u2;
+                    if (run > 0 && up > 0) break;
+                }
+        const bool readable = run > 0;
+        // Neither readable: the avatars' own profile (Avatars.cs: MaxSpeed 1100, StepUpHeight 75).
+        if (run <= 0) run = 1100;
+        if (up <= 0) up = 75;
+        m_runSpeed = run;
+        m_stepHeight = up;
+        if (!m_movementLogged && !m_walkers.empty())
+        {
+            m_movementLogged = true;
+            m_log("avatars: movement for the bots from " + std::string(readable ? from : "the avatar profile (not readable in game)") + ": run " + std::to_string(static_cast<int>(run)) + " cm/s, step " +
+                  std::to_string(static_cast<int>(up)) + " cm");
+        }
+    }
+
+    // The bots' nav grid: seeded at every walker's spawns and waypoints and at their goals, grown a
+    // trace budget per tick (about 1500 traces: a few seconds for a whole ported map, during freeze time).
+    void GhostDemo::GrowNav(const std::vector<bridge::Bridge::DevAvatar::Walker>& walkers, UObject* character, double now)
+    {
+        if (!m_botOrders || m_botOrders->bots.empty()) return; // only bots need it
+        if (!m_nav)
+        {
+            // The bodies' size first (the grid's step and waist checks are theirs): wait for an avatar.
+            double half = -1;
+            for (auto& [_, g] : m_ghosts)
+                if (UObject* capsule = g.pawn.Get() && m_capsule.ok() ? m_capsule.Object(g.pawn.Get()) : nullptr)
+                    if (auto h = m_capsuleHalfHeight.Number(capsule); h && *h > 20 && *h < 400) { half = *h; break; }
+            if (half < 0) return;
+            m_nav = std::make_shared<bridge::ghost::NavGrid>();
+            bridge::ghost::Walker tuned;
+            tuned.Tune(m_runSpeed, m_stepHeight);
+            m_nav->stepUp = tuned.stepUp;
+            m_nav->stepDown = tuned.stepDown;
+            m_nav->halfHeight = half;
+            m_nav->spacing = 120;
+            m_navDoneLogged = false;
+            m_log("avatars: building the bots' nav grid (" + std::to_string(static_cast<int>(m_nav->spacing)) + " cm, step " + std::to_string(static_cast<int>(m_nav->stepUp)) + " cm)");
+        }
+        const auto floor = [&](double fx, double fy, double fz) -> std::optional<double> {
+            const double a[3]{fx, fy, fz}, b[3]{fx, fy, fz - 3000};
+            const auto hit = Trace(character, a, b, character, nullptr);
+            return hit ? std::optional<double>((*hit)[2]) : std::nullopt;
+        };
+        const auto clear = [&](double ax, double ay, double az, double bx, double by, double bz) {
+            const double a[3]{ax, ay, az}, b[3]{bx, by, bz};
+            return !Trace(character, a, b, character, nullptr).has_value();
+        };
+        const auto seed = [&](const std::array<double, 3>& p) {
+            char key[64];
+            std::snprintf(key, sizeof(key), "%.0f,%.0f,%.0f", p[0], p[1], p[2]);
+            if (m_navSeeds.insert(key).second) m_nav->Seed(p[0], p[1], p[2], floor);
+        };
+        for (const auto& w : walkers)
+            for (const auto& s : w.spawns) seed(s);
+        for (const auto& [_, o] : m_botOrders->bots)
+            if (o.goal) seed(*o.goal);
+        if (!m_nav->Done()) m_nav->Grow(1500, floor, clear);
+        if (!m_navDoneLogged && (m_nav->Done() || now >= m_nextNavLog))
+        {
+            m_nextNavLog = now + 5.0;
+            if (m_nav->Done()) m_navDoneLogged = true;
+            m_log("avatars: nav grid " + std::to_string(m_nav->nodes.size()) + " points" + (m_nav->Done() ? " (done)" : " (growing, " + std::to_string(m_nav->frontier.size()) + " to check)") + ", " +
+                  std::to_string(m_nav->traces) + " traces");
+        }
     }
 
     // spectate-view.tsv (service -> AimModSteam, BotOrders.hpp bridge::view): the peer to watch.

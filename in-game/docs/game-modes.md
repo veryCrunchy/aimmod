@@ -1454,9 +1454,20 @@ changes to one without shooting.
   of the waypoints), hold, face a point, and stand at the round's spawn.
   The host sends their positions to everyone 10 times a second (`bots`), and
   each client's walkers follow them.
-  - A goal no straight walk reaches is reached by a route over the
-    waypoints (A*). Which straight walks are clear is checked a few at a
-    time and remembered for the map, shared by every walker on it.
+  - Ported maps carry spawns and bomb sites only (no callouts, no nav
+    data), so AimModSteam builds a nav grid for the bots
+    (`NavGrid.hpp`): floor points 120 cm apart, grown from every spawn,
+    waypoint and goal by line traces (no step over the step height, no
+    drop over 1.6 steps, nothing across at foot or waist height), about
+    1500 traces a tick, so a whole map is covered in a few seconds. A bot
+    walks the A* path over it, skipping ahead where a straight walk is
+    clear. Without a grid (other arenas) a goal is reached by a route over
+    the waypoints, checked a few straight walks at a time.
+  - Logs: the grid's growth, and every 5 s each bot's order, goal,
+    distance, path length and progress; the service adds the orders to
+    its 30 s bot line.
+  - CT bots split over the sites by their place among their own side's
+    bots; near its spot a bot faces the enemy spawn's way.
   - Walkers move like the local player: run speed and step height from its
     `CharacterMovement` (a ported map is scaled up, CS runs at 1100 cm/s
     with 79 cm steps).
@@ -1469,6 +1480,10 @@ changes to one without shooting.
   - `avatar-state.tsv` names bots by their stand-in peer; AimModSteam
     accepts peers 1 to 16 there (their rows used to void the whole file, so
     no avatar showed deaths, teams or weapons).
+- **Scoreboard (CS).** Board kind `cs`: each side (yours first) with its
+  score and players alive, then its players and bots with money (your side
+  only), kills, deaths, K/D and DEAD; the clock is the round's phase clock,
+  not the match time limit (a three-hour cap).
 - **Looks.** Each bot gets one of the humanoid avatars (Meso skins, Meso,
   Endo, Ecto) from its id, skipping looks other bots already wear while one
   is free, so it's stable for the match and the lobby isn't one bot copied.

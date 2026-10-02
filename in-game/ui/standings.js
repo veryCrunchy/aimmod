@@ -30,12 +30,32 @@
     cols.forEach(function(c){tr.appendChild(node('span','sb-num',c[1](r)));});
     return tr;
   }
+  // CS: each side as its own block (yours first), CS-style: the side's name, score and players
+  // alive, then its players with money (your side only), kills, deaths and K/D; the down greyed.
+  var csCols=[['$',function(r){return typeof r.money==='number'?'$'+num(r.money):'';}],['K',function(r){return num(r.frags);}],['D',function(r){return num(r.deaths);}],['K/D',function(r){return num(r.kd,2);}]];
+  function csSide(b,t){
+    var side=node('div','sb-cs-side team'+t.team+(t.side==='T'?' t':' ct')+(t.self?' self':''));
+    var title=node('div','sb-row sb-cs-title');
+    title.appendChild(node('span','sb-cs-score',num(t.total)));
+    title.appendChild(node('span','sb-name',t.name+(t.self?' · your team':'')));
+    title.appendChild(node('span','sb-cs-alive',typeof t.alive==='number'?t.alive+' of '+t.players+' alive':''));
+    side.appendChild(title);
+    var head=node('div','sb-row sb-cols');head.appendChild(node('span','sb-name','Player'));csCols.forEach(function(c){head.appendChild(node('span','sb-num',c[0]));});head.appendChild(node('span','sb-cs-dead',''));side.appendChild(head);
+    b.rows.forEach(function(r){
+      if(r.team!==t.team)return;
+      var tr=row(b,r,csCols,false);
+      if(r.status==='down')tr.appendChild(node('span','sb-cs-dead','DEAD'));else tr.appendChild(node('span','sb-cs-dead',''));
+      side.appendChild(tr);
+    });
+    return side;
+  }
   // mode: corner (compact, in game), full (hold-to-show) or stream (OBS).
   function render(target,b,mode){
     while(target.firstChild)target.removeChild(target.firstChild);
     if(!b||!b.rows)return;
     var box=node('div','sb sb-'+mode+' sb-'+b.kind);target.appendChild(box);
     box.appendChild(header(b));
+    if(b.kind==='cs'){(b.teams||[]).forEach(function(t){box.appendChild(csSide(b,t));});return;}
     var cols=columns(b),rank=b.kind==='score'||b.kind==='combat';
     var head=node('div','sb-row sb-cols');if(rank)head.appendChild(node('span','sb-rank','#'));head.appendChild(node('span','sb-name','Player'));cols.forEach(function(c){head.appendChild(node('span','sb-num',c[0]));});
     if(mode!=='corner')box.appendChild(head);

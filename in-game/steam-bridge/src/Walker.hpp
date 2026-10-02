@@ -10,6 +10,7 @@
 // walker on it).
 
 #include "GhostMath.hpp"
+#include "NavGrid.hpp"
 
 #include <algorithm>
 #include <array>
@@ -89,6 +90,15 @@ namespace bridge::ghost
         std::map<int, bool> fromHere;
         double hereX = 1e30, hereY = 1e30;
         int plansPending = 0, plansFound = 0, plansFailed = 0;
+        // The map's nav grid (shared) and the path along it: floor points, then the goal.
+        static constexpr int NavTarget = -3;         // `target` while following navPath
+        std::shared_ptr<NavGrid> nav;
+        std::vector<std::array<double, 3>> navPath;
+        std::size_t navIndex = 0;
+        bool navReached = false;
+        double navPlannedAt = -1, clockNow = 0;
+        int navBlocked = 0;
+        double NavArrive() const { return nav ? std::min(arrive, nav->spacing * 0.3) : arrive; }
 
         std::uint32_t Next()
         {
@@ -105,6 +115,10 @@ namespace bridge::ghost
             routeGoal.reset();
             fromHere.clear();
             hereX = hereY = 1e30;
+            navPath.clear();
+            navIndex = 0;
+            navReached = false;
+            if (target == NavTarget) target = -1;
         }
         // The waypoint it stands at (within `arrive`), or -1.
         int NodeAt(double px, double py) const
@@ -154,7 +168,11 @@ namespace bridge::ghost
             nextChoose = 0;
             ForgetRoute();
         }
-        std::array<double, 3> Point(int i) const { return i == GoalTarget && goal ? *goal : spawns[static_cast<std::size_t>(i)]; }
+        std::array<double, 3> Point(int i) const
+        {
+            if (i == NavTarget) return navPath[std::min(navIndex, navPath.size() - 1)];
+            return i == GoalTarget && goal ? *goal : spawns[static_cast<std::size_t>(i)];
+        }
 
         static constexpr double SegmentProbe = 100; // cm between floor probes along a walk segment
         static constexpr double FootAbove = 30;     // the foot-height line checked for walls, above the floor
@@ -300,7 +318,28 @@ namespace bridge::ghost
                 // The goal moved (a chase, the dropped bomb): plan again.
                 if (routeGoal && std::hypot((*routeGoal)[0] - g[0], (*routeGoal)[1] - g[1]) > arrive) ForgetRoute();
                 if (!route.empty()) { target = route.front(); return false; }
-                if (Walkable(g[0], g[1], halfHeight, floor, clear)) { target = GoalTarget; routeGoal = g; return false; }
+                // The map's nav grid (NavGrid) when there is one: the way there over the floor.
+                if (nav && !nav->nodes.empty())
+                {
+                    if (!navPath.empty() && navIndex < navPath.size()) { target = NavTarget; return false; }
+                    bool reached = false;
+                    auto path = nav->Path({x, y, z}, g, reached);
+                    if (!path.empty())
+                    {
+                        if (reached) path.push_back(g);
+                        navPath = std::move(path);
+                        navIndex = 0;
+                        while (navIndex + 1 < navPath.size() && std::hypot(navPath[navIndex][0] - x, navPath[navIndex][1] - y) < NavArrive()) ++navIndex;
+                        navReached = reached;
+                        navPlannedAt = clockNow;
+                        routeGoal = g;
+                        reached ? ++plansFound : ++plansPending;
+                        target = NavTarget;
+                        return false;
+                    }
+                    if (!nav->Done()) { ++plansPending; return true; } // the grid hasn't reached here yet
+                }
+                if (std::hypot(g[0] - x, g[1] - y) < 4000 && Walkable(g[0], g[1], halfHeight, floor, clear)) { target = GoalTarget; routeGoal = g; return false; }
                 switch (PlanRoute(g, halfHeight, floor, clear))
                 {
                 case Plan::Found:
@@ -318,7 +357,8 @@ namespace bridge::ghost
                 }
             }
             if (n < 2) return false;
-            for (int tries = 0; tries < std::min(2 * n, 24); ++tries)
+            // A few tries only: each is a straight walk checked by traces along its whole length.
+            for (int tries = 0; tries < std::min(n, 6); ++tries)
             {
                 const int i = static_cast<int>(Next() % static_cast<std::uint32_t>(n));
                 if (i == at) continue;
@@ -356,6 +396,14 @@ namespace bridge::ghost
                 if (routeGoal) ForgetRoute();
                 if (target == GoalTarget) target = -1;
             }
+            clockNow = now;
+            // A path that ended short of the goal (the grid was still growing): look again now and then.
+            if (target == NavTarget && !navReached && now - navPlannedAt > 2.0)
+            {
+                navPath.clear();
+                target = -1;
+                nextChoose = 0;
+            }
             if (target == -1 && now >= nextChoose && !hold)
             {
                 const bool pending = Choose(clear, floor, halfHeight);
@@ -367,7 +415,25 @@ namespace bridge::ghost
             {
                 const auto dest = Point(target);
                 const double dx = dest[0] - x, dy = dest[1] - y, d = std::hypot(dx, dy);
-                if (d < arrive)
+                if (target == NavTarget && d < NavArrive())
+                {
+                    // Next point of the path; skip ahead where a straight walk is clear (fewer turns).
+                    ++navIndex;
+                    for (const std::size_t skip : {std::size_t{5}, std::size_t{3}})
+                        if (navIndex + skip < navPath.size() &&
+                            WalkableFrom(x, y, z - halfHeight, navPath[navIndex + skip][0], navPath[navIndex + skip][1], halfHeight, floor, clear))
+                        {
+                            navIndex += skip;
+                            break;
+                        }
+                    if (navIndex >= navPath.size())
+                    {
+                        navPath.clear();
+                        target = -1;
+                        at = NodeAt(x, y);
+                    }
+                }
+                else if (target != NavTarget && d < arrive)
                 {
                     at = target == GoalTarget ? -1 : target;
                     if (!route.empty() && route.front() == target) route.erase(route.begin());
@@ -380,7 +446,8 @@ namespace bridge::ghost
                     // Strafe left and right while walking, like a bot dodging (less near a turn).
                     walkedFor += dt;
                     const double w = 2 * 3.14159265358979 / StrafePeriod;
-                    const double side = strafe * w * std::cos(walkedFor * w) * std::min(1.0, d / (arrive * 3));
+                    // Not along a nav path: corridors leave no room to dodge.
+                    const double side = target == NavTarget ? 0 : strafe * w * std::cos(walkedFor * w) * std::min(1.0, d / (arrive * 3));
                     vx = fx * speed - fy * side;
                     vy = fy * speed + fx * side;
                     const double nx = x + vx * dt, ny = y + vy * dt;
@@ -388,12 +455,19 @@ namespace bridge::ghost
                     const double nz = ground ? *ground + halfHeight : 0;
                     // Look about the body's radius plus a step ahead for a wall.
                     const double moving = std::max(1.0, std::hypot(vx, vy));
-                    const double ahead = std::max(50.0, arrive * 0.7);
+                    const double ahead = std::min(std::max(50.0, arrive * 0.7), std::max(50.0, d));
                     const bool wall = !clear(x, y, z + WaistAbove, x + vx / moving * ahead, y + vy / moving * ahead, z + WaistAbove);
                     if (!ground || wall || nz > z + stepUp || nz < z - stepDown)
                     {
                         vx = vy = 0;
-                        if (++blocked > 3)
+                        if (++blocked > 3 && target == NavTarget && navIndex > 0 && ++navBlocked % 8 != 0)
+                        {
+                            // Off the grid line (a corner cut at a door jamb): back to the path's last point,
+                            // which it came from, and on from there.
+                            --navIndex;
+                            blocked = 0;
+                        }
+                        else if (blocked > 3)
                         {
                             // The straight walk looked clear but the body can't pass: remember it and go another way.
                             if (links && at >= 0 && target >= 0)

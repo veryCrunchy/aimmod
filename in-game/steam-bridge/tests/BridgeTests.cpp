@@ -766,6 +766,68 @@ int main()
         r2.Step(21, 1 / 60.0, half, big, longWall);
         Check(r2.target != ghost::Walker::GoalTarget && r2.route.empty(), "without a goal the bot drops its route");
     }
+    // The nav grid: ported maps have spawns and bomb sites only, so the bots' way between them is
+    // found over the floor itself (the live test: every bot stayed in its spawn, no route).
+    {
+        const double half = 145;
+        // Two rooms, a wall at x = 50 with one door (y 800..1100); no waypoint anywhere near the door.
+        auto floor = [](double x, double y, double) -> std::optional<double> { return std::fabs(x) < 3000 && std::fabs(y) < 3000 ? std::optional<double>(0.0) : std::nullopt; };
+        auto door = [](double ax, double ay, double, double bx, double by, double) {
+            if ((ax < 50) == (bx < 50)) return true;
+            const double t = (50 - ax) / (bx - ax), yy = ay + (by - ay) * t;
+            return yy > 800 && yy < 1100;
+        };
+        const auto grid = std::make_shared<ghost::NavGrid>();
+        grid->stepUp = 79; grid->stepDown = 126; grid->halfHeight = half;
+        Check(grid->Seed(-2000, -2000, 150, floor) >= 0 && grid->Seed(2000, -2000, 150, floor) >= 0, "the grid is seeded at spawns and goals");
+        const int used = grid->Grow(400, floor, door);
+        Check(used <= 404 && !grid->Done(), "the grid grows a trace budget at a time");
+        int rounds = 0;
+        while (!grid->Done() && rounds++ < 10000) grid->Grow(2000, floor, door);
+        Check(grid->Done() && grid->nodes.size() > 1000 && grid->nodes.size() < 3000, "the whole floor is covered, once per grid point");
+        bool reached = false;
+        const auto path = grid->Path({-2000, -2000, 145}, {2000, -2000, 145}, reached);
+        bool viaDoor = false, crosses = true;
+        for (std::size_t i = 1; i < path.size(); ++i)
+        {
+            crosses &= door(path[i - 1][0], path[i - 1][1], 0, path[i][0], path[i][1], 0);
+            viaDoor |= path[i][1] > 700 && std::fabs(path[i][0]) < 200;
+        }
+        Check(reached && viaDoor && crosses, "the path between the rooms goes through the door");
+        ghost::Walker w;
+        w.nav = grid;
+        w.spawns = {{-2000, -2000, 150}, {-1800, -2000, 150}};
+        w.own = 2;
+        w.Tune(1100, 79);
+        w.Place(0, half, floor);
+        w.goal = std::array<double, 3>{2000, -2000, 576};
+        bool there = false, wallHit = false;
+        double px = w.x, py = w.y;
+        int traces = 0;
+        auto counted = [&](double ax, double ay, double az, double bx, double by, double bz) { ++traces; return door(ax, ay, az, bx, by, bz); };
+        for (int i = 0; i < 60 * 20 && !there; ++i)
+        {
+            const auto s = w.Step(i / 60.0, 1 / 60.0, half, floor, counted);
+            wallHit |= !door(px, py, 0, s.x, s.y, 0);
+            px = s.x; py = s.y;
+            there |= std::hypot(s.x - 2000, s.y + 2000) < w.arrive + 10;
+        }
+        Check(there && !wallHit, "a bot walks from its spawn to a goal in the other room along the grid");
+        Check(traces < 60 * 20 * 3, "following a path costs a few traces a step, not a re-plan every frame");
+        // Stairs: 40 cm steps every 60 cm up to a 400 cm platform; a 79 cm step height climbs them.
+        auto stairs = [](double x, double y, double) -> std::optional<double> {
+            if (std::fabs(x) > 3000 || std::fabs(y) > 600) return std::nullopt;
+            return x < 0 ? 0.0 : std::min(400.0, std::floor(x / 60) * 40);
+        };
+        auto open = [](double, double, double, double, double, double) { return true; };
+        ghost::NavGrid up;
+        up.stepUp = 79; up.stepDown = 126; up.halfHeight = half;
+        up.Seed(-1500, 0, 150, stairs);
+        while (!up.Done()) up.Grow(5000, stairs, open);
+        bool climbed = false;
+        const auto upPath = up.Path({-1500, 0, 145}, {1500, 0, 545}, climbed);
+        Check(climbed && !upPath.empty() && upPath.back()[2] == 400, "the grid climbs stairs no higher than a step");
+    }
     // Avatar placement: the actor follows the simulated position every tick.
     {
         ghost::RemoteTransform s;

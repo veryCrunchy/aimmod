@@ -70,7 +70,10 @@ sealed partial class MultiplayerService
         {
             botSightLoggedAt = now;
             Console.Error.WriteLine("Bots: " + bots.Count + " in the match, " + botSight.Count(kv => now - kv.Value.At <= 1000) + " reported by the game"
-                + (botSight.Count == 0 ? " (no " + BotSightFile + " from AimModSteam: bots walk but can't see, so they don't shoot)" : ""));
+                + (botSight.Count == 0 ? " (no " + BotSightFile + " from AimModSteam: bots walk but can't see, so they don't shoot)" : "")
+                + "; orders: " + string.Join(", ", step.Orders.Select(o => (StandIns.GetValueOrDefault(o.Member) ?? "?") + " " + o.Mode
+                    + (o.Goal is { Length: >= 2 } g ? " to " + R(g[0]).ToString(CultureInfo.InvariantCulture) + "," + R(g[1]).ToString(CultureInfo.InvariantCulture) : "")
+                    + (o.Face is not null ? " facing" : "") + (botSight.TryGetValue(o.Member, out var at) ? " at " + R(at.X).ToString(CultureInfo.InvariantCulture) + "," + R(at.Y).ToString(CultureInfo.InvariantCulture) : ""))));
         }
     }
     static double R(double v) => Math.Round(v, 1);

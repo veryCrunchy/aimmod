@@ -173,7 +173,15 @@ namespace aimmod
             bool poseLogged = false;
             double tunedSpeed = -1, tunedStep = -1;
             bool tuneLogged = false;
+            double nextStatusLog = 0;
         };
+        // The map's nav grid for the bots (NavGrid.hpp), grown a trace budget per tick; reset with the scenario.
+        std::shared_ptr<bridge::ghost::NavGrid> m_nav;
+        std::set<std::string> m_navSeeds;
+        double m_nextNavLog = 0;
+        bool m_navDoneLogged = false;
+        bool m_movementLogged = false;
+        void GrowNav(const std::vector<bridge::Bridge::DevAvatar::Walker>& walkers, RC::Unreal::UObject* character, double now);
         std::shared_ptr<bridge::ghost::LinkCache> m_linkCache; // reset with the scenario
         double m_runSpeed = -1, m_stepHeight = -1;              // the local player's movement (CharacterMovement)
         double m_nextMovementRead = 0;

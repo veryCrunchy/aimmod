@@ -795,6 +795,15 @@ static partial class MultiplayerChecks
         Check(m.Cs is { Phase: "freeze", Round: 1 } && core.Claim("host", new HitClaim(m.Id, 1, 1, clock(), 0, 0, 164, 0, 0, false, null, null, null, null, null, 1)).Code == "round-phase", "Freeze time: no shooting");
         Check(core.Apply("host", "buy", J(new { item = "kevlar" }), content).Ok && core.Apply("host", "buy", J(new { item = "kevlar" }), content).Code == "owned"
             && core.Snapshot().Match!.Cs!.Players.First(p => p.Member == "host").Money == 150, "Buys are lobby commands the host validates (no map metadata: buy anywhere)");
+        // The scoreboard (Tab): both sides with every player, K/D, money and who's alive; the round clock.
+        var snap = core.Snapshot();
+        var board = Standings.Build(snap, snap.Match!, "host", clock(), snap.Match!.Combat)!;
+        var phaseLeft = (int)Math.Ceiling((snap.Match!.Cs!.PhaseEndsAt - clock()) / 1000.0);
+        Check(board.Kind == "cs" && board.Rows.Count == 6 && board.Teams!.Count == 2 && board.Teams[0].Self && board.Teams.All(t => t.Alive == 3 && t.Players == 3)
+            && board.Left == phaseLeft && board.Left < 60, "CS scoreboard: both sides (yours first) with every player, players alive and the round's clock, not the match cap");
+        var mySide = board.Teams[0].Team;
+        Check(board.Rows.Where(r => r.Team == mySide).All(r => r.Money is not null) && board.Rows.Where(r => r.Team != mySide).All(r => r.Money is null) && board.Rows.Take(3).All(r => r.Team == mySide),
+            "CS scoreboard: money for your side only, your side listed first");
     }
 
     static void ProtocolFrames()

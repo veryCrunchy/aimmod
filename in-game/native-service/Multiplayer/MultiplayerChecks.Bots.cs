@@ -186,6 +186,22 @@ static partial class MultiplayerChecks
         var plant = brain.Step(World(siteX, 0, 0, 3000));
         Check(plant.Orders.First(o => o.Member == "tbot").Mode == "hold" && plant.Actions.Any(a => a.Bot == "tbot" && a.Action == "use" && (bool)a.Args["held"]),
             "In the site the carrier stands still and plants");
+        // CT bots split over the sites even when the bots' sides alternate (the live test sent every
+        // bot to site A), and near its spot a bot holds the angle toward the enemy spawn.
+        var mixed = new CsMatch(["ct1", "t1", "ct2", "t2"], t0, 12, true, map, new Dictionary<string, int> { ["ct1"] = 2, ["t1"] = 1, ["ct2"] = 2, ["t2"] = 1 });
+        mixed.Tick(t0 + CsRules.FreezeMs + 1);
+        var brain3 = new BotBrain(seed: 2);
+        brain3.Reset("cs#3");
+        var tm = t0 + CsRules.FreezeMs + 100;
+        BotPlayer Pl(string id, int tag, double x, double y, int team) => new(id, tag, x, y, 164, team, true, 0);
+        var who = new[] { Pl("ct1", 0, 0, 3000, 2), Pl("t1", 1, 0, -3000, 1), Pl("ct2", 2, 100, 3000, 2), Pl("t2", 3, 100, -3000, 1) };
+        var split = brain3.Step(new BotWorld(tm, LobbyModes.Cs, [("ct1", BotSkills.Normal), ("t1", BotSkills.Normal), ("ct2", BotSkills.Normal), ("t2", BotSkills.Normal)], who,
+            who.ToDictionary(p => p.Member, p => new BotSight(tm, p.X, p.Y, 100, 0, new HashSet<int>())), mixed.View(), map, []));
+        var g1 = split.Orders.First(o => o.Member == "ct1").Goal; var g2 = split.Orders.First(o => o.Member == "ct2").Goal;
+        Check(g1 is not null && g2 is not null && Math.Sign(g1[0]) != Math.Sign(g2[0]), "Counter-Terrorist bots split over both sites");
+        var hold = BotBrain.HoldAngle(new BotWorld(tm, LobbyModes.Cs, [], [], new Dictionary<string, BotSight>(), mixed.View(), map, []), CsRules.CT, [3000, 0, 164], [3000, 0, 60]);
+        Check(hold is { } h && Math.Abs(h[1] + 3000) < 1 && BotBrain.HoldAngle(new BotWorld(tm, LobbyModes.Cs, [], [], new Dictionary<string, BotSight>(), mixed.View(), map, []), CsRules.CT, [0, 3000, 164], [3000, 0, 60]) is null,
+            "At its site a CT bot faces the Terrorist spawn; on the way it looks where it walks");
         // Economy: with money a bot buys a rifle and armour (round 3, $4,000).
         var view = cs.View();
         var rich = view with { Round = 3, Players = view.Players.Select(p => p with { Money = 4000 }).ToArray() };

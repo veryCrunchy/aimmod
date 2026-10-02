@@ -45,6 +45,22 @@ test('standings show unknown values as a dash and spell out the frag limit',()=>
   const text=target.all().map(e=>e.textContent);
   assert.ok(text.includes('First to 20 frags'));assert.ok(text.includes('—'));assert.ok(!text.includes('-'));
 });
+test('the CS scoreboard lists both sides with players and bots, money for your side, K/D and who is down',()=>{
+  class El{constructor(t){this.children=[];this.className='';this.textContent='';}appendChild(c){this.children.push(c);return c;}removeChild(c){this.children.splice(this.children.indexOf(c),1);}get firstChild(){return this.children[0];}all(){return this.children.flatMap(c=>[c,...c.all()]);}}
+  const window={document:{createElement:t=>new El(t)}};vm.runInNewContext(fs.readFileSync(path.join(__dirname,'standings.js'),'utf8'),{window});
+  const target=new El('div');
+  window.AimModStandings.render(target,{mode:'cs',kind:'cs',title:'CS competitive',phase:'live',round:1,rounds:24,left:95,
+    teams:[{team:2,name:'Counter-Terrorists',total:1,self:true,side:'CT',alive:2,players:3},{team:1,name:'Terrorists',total:0,self:false,side:'T',alive:1,players:3}],
+    rows:[{name:'Synthetic One',self:true,team:2,frags:2,deaths:0,kd:2,money:3250,status:'alive'},{name:'BOT Echo',bot:true,team:2,frags:0,deaths:1,kd:0,money:1400,status:'down'},{name:'BOT Ace',bot:true,team:2,frags:1,deaths:0,kd:1,money:900,status:'alive'},
+      {name:'BOT Kilo',bot:true,team:1,frags:1,deaths:1,kd:1,status:'down'},{name:'BOT Nyx',bot:true,team:1,frags:0,deaths:1,kd:0,status:'down'},{name:'Synthetic Two',team:1,frags:0,deaths:1,kd:0,status:'alive'}]},'full');
+  const all=target.all(),text=all.map(e=>e.textContent);
+  const sides=all.filter(e=>/sb-cs-side/.test(e.className));
+  assert.equal(sides.length,2);assert.match(sides[0].className,/ct self/);
+  assert.equal(all.filter(e=>/(^| )sb-row( |$)/.test(e.className)&&!/sb-cols|sb-cs-title/.test(e.className)).length,6,'every player and bot has a row');
+  assert.ok(text.includes('1:35')&&text.includes('$3,250')&&text.includes('2 of 3 alive')&&text.includes('DEAD')&&text.includes('Counter-Terrorists · your team'));
+  assert.ok(!text.some(t=>/178:/.test(t)));
+  assert.equal(all.filter(e=>e.className==='sb-bot').length,4);
+});
 test('standings tag bots once, before the name',()=>{
   class El{constructor(t){this.children=[];this.className='';this.textContent='';}appendChild(c){this.children.push(c);return c;}removeChild(c){this.children.splice(this.children.indexOf(c),1);}get firstChild(){return this.children[0];}all(){return this.children.flatMap(c=>[c,...c.all()]);}}
   const window={document:{createElement:t=>new El(t)}};vm.runInNewContext(fs.readFileSync(path.join(__dirname,'standings.js'),'utf8'),{window});

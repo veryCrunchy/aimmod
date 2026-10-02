@@ -7,11 +7,13 @@ namespace AimMod.InGame.Multiplayer;
 //   duel     round wins and the current round's score (score duel)
 //   tracking time on target % and round wins (tracking duel)
 //   combat   frags, deaths, K/D, and health in vampiric (deathmatch, instagib, vampiric)
-//   team     team totals, then players by team with frags, deaths and K/D (TDM, CS)
+//   team     team totals, then players by team with frags, deaths and K/D (TDM)
+//   cs       CS-style: each side with its score and players alive, then its players with money
+//            (your own side only, as in CS), kills, deaths, K/D and who is down
 // No Steam ids: rows carry names and a self flag only.
 sealed record BoardRow(string Name, bool Self, int Rank, double? Score, double? Gap, int? Wins, double? Percent,
-    int? Frags, int? Deaths, double? Kd, double? Health, int Team, string Status, bool Bot = false);
-sealed record BoardTeam(int Team, string Name, int Total, bool Self);
+    int? Frags, int? Deaths, double? Kd, double? Health, int Team, string Status, bool Bot = false, int? Money = null);
+sealed record BoardTeam(int Team, string Name, int Total, bool Self, string? Side = null, int? Alive = null, int? Players = null);
 sealed record Board(string Mode, string Kind, string Title, string Phase, int Round, int? Rounds, int? FirstTo, int? Left, int? FragLimit,
     string Scenario, IReadOnlyList<BoardRow> Rows, IReadOnlyList<BoardTeam>? Teams);
 
@@ -37,11 +39,19 @@ static class Standings
 
         if (m.Cs is { } cs)
         {
-            var teams = new[] { 1, 2 }.Select(t => new BoardTeam(t, (t == 1 ? cs.Team1Side : cs.Team1Side == CsRules.T ? CsRules.CT : CsRules.T) == CsRules.T ? "Terrorists" : "Counter-Terrorists",
-                cs.Score.Length >= t ? cs.Score[t - 1] : 0, cs.Players.Any(p => p.Member == self && p.Team == t))).ToArray();
-            var rows = cs.Players.OrderBy(p => p.Team).ThenByDescending(p => p.Kills).ThenBy(p => p.Deaths)
-                .Select((p, i) => new BoardRow(Name(p.Member), p.Member == self, i + 1, null, null, null, null, p.Kills, p.Deaths, Kd(p.Kills, p.Deaths), p.Alive ? p.Health : 0, p.Team, p.Alive ? "alive" : "down", Bot(p.Member)));
-            return Make("team", rows, teams);
+            // The round's own clock (freeze, round, bomb); the match time limit is only a safety cap
+            // (three hours: it read 178:14 in round 1).
+            left = m.Phase == MatchPhases.Live ? (int)Math.Max(0, Math.Ceiling((cs.PhaseEndsAt - hostNow) / 1000.0)) : null;
+            var mine = cs.Players.FirstOrDefault(p => p.Member == self)?.Team ?? 0;
+            string SideOf(int t) => t == 1 ? cs.Team1Side : cs.Team1Side == CsRules.T ? CsRules.CT : CsRules.T;
+            // Your side first, like CS.
+            var order = mine == 2 ? new[] { 2, 1 } : new[] { 1, 2 };
+            var teams = order.Select(t => new BoardTeam(t, SideOf(t) == CsRules.T ? "Terrorists" : "Counter-Terrorists",
+                cs.Score.Length >= t ? cs.Score[t - 1] : 0, mine == t, SideOf(t), cs.Players.Count(p => p.Team == t && p.Alive), cs.Players.Count(p => p.Team == t))).ToArray();
+            var rows = cs.Players.OrderBy(p => Array.IndexOf(order, p.Team)).ThenByDescending(p => p.Kills).ThenBy(p => p.Deaths).ThenBy(p => Name(p.Member), StringComparer.Ordinal)
+                .Select((p, i) => new BoardRow(Name(p.Member), p.Member == self, i + 1, null, null, null, null, p.Kills, p.Deaths, Kd(p.Kills, p.Deaths), p.Alive ? p.Health : 0, p.Team,
+                    p.Alive ? "alive" : "down", Bot(p.Member), mine != 0 && p.Team == mine ? p.Money : null));
+            return Make("cs", rows, teams);
         }
         if (combat is not null && LobbyModes.Combat(m.Mode))
         {
