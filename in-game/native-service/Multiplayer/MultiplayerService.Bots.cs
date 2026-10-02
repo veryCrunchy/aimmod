@@ -62,8 +62,10 @@ sealed partial class MultiplayerService
         StepBotGrenades(world);
         LastBotStep = step;
         foreach (var a in step.Actions) core.Apply(a.Bot, a.Action, JsonSerializer.SerializeToElement(a.Args, Protocol.Json), library);
+        RecordBotFire(match, step, now); // before the hits: a killing shot still sounds
         foreach (var shot in step.Shots) core.BotShot(shot.Bot, shot.Victim, shot.Head, shot.Slot, shot.Dir);
         if (step.Shots.Count > 0) PushCombat();
+        PushShots();
         WriteBotOrders(FormatBotOrders(step.Orders));
         // Everyone else's game draws the bots where this machine's game has them.
         if (now - botPosesSentAt >= 100)

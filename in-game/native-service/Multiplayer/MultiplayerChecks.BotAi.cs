@@ -272,6 +272,18 @@ static partial class MultiplayerChecks
         // The client hits the bot: the claim goes to the host, which applies it against the bot's track.
         var health = host.BotHealthForTest(botId);
         Check(client.ClaimForTest(botId) && Pump2(() => Pump(3)) && host.BotHealthForTest(botId) < health, "A client's hit on a bot is applied by the host");
+        // Gunfire: the host's bot shots reach the client at once and play there; a client's own shots go
+        // to the host, which passes them on (and never plays a player their own shots).
+        var heardBefore = client.RoundAudio.Played;
+        host.BotFireForTest(botId);
+        Pump(2);
+        Check(client.ShotsForTest.Recent.Any(s => s.Member == botId && s.Weapon == "rifle" && s.From is [300, 400, 160]) && client.RoundAudio.Played > heardBefore,
+            "The host's bot shot reaches the client and plays there");
+        var hostHeard = host.RoundAudio.Played;
+        client.FiredForTest(now);
+        Pump(2);
+        Check(host.ShotsForTest.Recent.Any(s => s.Member == "76561190000000302" && s.From is [10, 20, 160]) && client.ShotsForTest.Recent.Any(s => s.Member == "76561190000000302") && host.RoundAudio.Played > hostHeard,
+            "A client's own shot goes to the host, which plays it and passes it on");
         // The host leaves: the client takes over and runs the bot itself.
         host.Act("leave", default);
         all.Remove(host);

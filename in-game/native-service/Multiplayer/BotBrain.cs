@@ -43,7 +43,10 @@ sealed record BotOrder(string Member, string Mode, double[]? Goal, double[]? Fac
     double Stop = 1, double[]? Via = null, double Fight = 0, double Turn = 0, string? Role = null);
 sealed record BotShotDecision(string Bot, string Victim, bool Head, int Slot, double[] Dir);
 sealed record BotAction(string Bot, string Action, Dictionary<string, object> Args);
-sealed record BotStep(IReadOnlyList<BotOrder> Orders, IReadOnlyList<BotShotDecision> Shots, IReadOnlyList<BotAction> Actions);
+// Every trigger pull, hit or miss (Shots are only the hits): when it fired (host clock), with which
+// slot, from its eye, at whom. Everyone hears these (GunAudio.cs).
+sealed record BotFire(string Bot, int Slot, long T, double[] From, string Target);
+sealed record BotStep(IReadOnlyList<BotOrder> Orders, IReadOnlyList<BotShotDecision> Shots, IReadOnlyList<BotAction> Actions, IReadOnlyList<BotFire>? Fired = null);
 
 // The bots' decisions, one step for every bot (several times a second). The pieces it uses:
 //  - BotStrategy: the side's plan for the round and each bot's job in it (CS);
@@ -82,7 +85,7 @@ sealed class BotBrain(int seed = 0)
 
     public BotStep Step(BotWorld w)
     {
-        var orders = new List<BotOrder>(); var shots = new List<BotShotDecision>(); var actions = new List<BotAction>();
+        var orders = new List<BotOrder>(); var shots = new List<BotShotDecision>(); var actions = new List<BotAction>(); var fired = new List<BotFire>();
         foreach (var id in states.Keys.Where(id => w.Bots.All(b => b.Member != id)).ToArray()) states.Remove(id);
         string TeamKey(BotPlayer p) => w.Cs?.Players.FirstOrDefault(c => c.Member == p.Member)?.Side ?? (p.Team == 0 ? p.Member : "team" + p.Team);
         Perceive(w, TeamKey);
@@ -179,6 +182,7 @@ sealed class BotBrain(int seed = 0)
                     var interval = WeaponInterval(w, csSelf) * skill.FireRateScale;
                     for (var n = 0; n < 3 && st.NextShot <= w.Now; n++)
                     {
+                        fired.Add(new BotFire(member, slot, Math.Max(st.NextShot, w.Now - 50), [eye[0], eye[1], eye[2]], target.Member));
                         var p = HitChance(skill, pick.D, target.Speed, st.BurstShot) * BotAim.OnTarget(error, pick.D);
                         if (random.NextDouble() < p)
                         {
@@ -235,7 +239,7 @@ sealed class BotBrain(int seed = 0)
             else
                 orders.Add(Order("roam", null, null, sightList, role: "roam"));
         }
-        return new BotStep(orders, shots, actions);
+        return new BotStep(orders, shots, actions, fired);
     }
 
     // What each side's bots learn this step: an enemy one of them sees, running footsteps and

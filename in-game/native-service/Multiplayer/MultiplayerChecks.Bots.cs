@@ -136,9 +136,13 @@ static partial class MultiplayerChecks
         Check(hidden.Shots.Count == 0 && hidden.Orders[0].Mode == "roam" && hidden.Orders[0].Sight.Any(s => s.Tag == 1), "A bot shoots nobody out of sight, but asks its game to trace to them");
         var first = brain.Step(World(true));
         Check(first.Shots.Count == 0 && first.Orders[0].Mode == "hold" && first.Orders[0].Face is { } face && face[0] == 800, "A bot that sees an enemy stops and aims, but waits its reaction time");
-        var shots = 0;
-        for (var i = 0; i < 30; i++) { t += 100; shots += brain.Step(World(true)).Shots.Count; }
+        var shots = 0; var fired = new List<BotFire>();
+        for (var i = 0; i < 30; i++) { t += 100; var step = brain.Step(World(true)); shots += step.Shots.Count; fired.AddRange(step.Fired ?? []); }
         Check(shots >= 3, "After its reaction time a hard bot lands hits");
+        // Every trigger pull is a fire decision (misses too, for the gunfire everyone hears), at the weapon's rate.
+        var gaps = fired.Zip(fired.Skip(1)).Select(p => p.Second.T - p.First.T).ToList();
+        Check(fired.Count > shots && fired.All(f => f is { Bot: "bot", Target: "you", From: [0, 0, 164] }) && gaps.All(g => g >= CombatRules.Rifle.TimeBetweenShots * 1000 - 1) && gaps.Min() <= 110,
+            "A bot's every shot, hit or miss, is a fire decision spaced by its weapon's interval (" + fired.Count + " shots, " + shots + " hits)");
         // Teammates are never targets.
         players[1] = players[1] with { Team = 1 };
         var calm = 0;

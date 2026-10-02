@@ -419,6 +419,7 @@
     flag('showWatchers','Show who’s watching while I play','');
     if(pr.sounds)body.appendChild(settingRow('Volume','',stepper(typeof pr.volume==='number'?pr.volume:0.8,0,1,0.1,function(v){return F.number(v*100,0)+'%';},function(v){pref('volume',v);},false,'volume')));
     body.appendChild(settingRow('Bomb and round sounds','CS matches: the bomb beep, plant, defuse and explosion.',stepper(typeof pr.roundVolume==='number'?pr.roundVolume:0.7,0,1,0.1,function(v){return v<=0?'Off':F.number(v*100,0)+'%';},function(v){pref('roundVolume',v);},false,'bomb and round sounds volume')));
+    body.appendChild(settingRow('Gunfire and footsteps','Shooting matches: other players’ and bots’ shots and steps.',stepper(typeof pr.gunVolume==='number'?pr.gunVolume:0.7,0,1,0.1,function(v){return v<=0?'Off':F.number(v*100,0)+'%';},function(v){pref('gunVolume',v);},false,'gunfire and footsteps volume')));
     var taken=(view.keys&&view.keys.taken)||[];function keyLabel(k){return k+(taken.indexOf(k)>=0?' (in use)':'');}
     var keys=[];for(var i=5;i<=10;i++)keys.push({id:'F'+i,label:keyLabel('F'+i)});
     body.appendChild(settingRow('Hotkey','Ready up or open the lobby in game.',segmented(keys,pr.hotkey||'F7',function(id){pref('hotkey',id);},false,'hotkey')));

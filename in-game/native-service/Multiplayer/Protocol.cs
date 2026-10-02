@@ -30,6 +30,8 @@ static class Protocol
         new("hit-ack", true, "host>client", "{match, round, seq, shot, ok, reason?, detail?, victim?, damage, head, kill, dup}: the host's decision on a hit claim (a repeat gets the first decision, dup)"),
         new("combat", true, "host>all", "{match, round, events:[...]}: combat events (damage, death, respawn) the moment the host decides them"),
         new("bots", false, "host>all", "{match, round, b:[[member, x, y, z, yaw]]}: where the host's game has its bots (capsule centre), 10 Hz"),
+        new("fired", false, "client>host", "{match, round, s:[[t, slot, x, y, z]]}: every shot the sender's game fired (hits and misses), host clock, for the others to hear"),
+        new("shots", false, "host>all", "{match, round, s:[{id, member, t, weapon, from, hidden?}]}: everyone's shots (players' own and the host's bots'), passed on at once, for gunfire sounds"),
         new("track", true, "client>host", "{match, round, s:[[t,x,y,z,pitch,yaw]], v:[[t,id,x,y,z,radius,halfHeight]]}: tracking duel camera samples and drawn avatars, host clock, every 100 ms"),
         new("ping", false, "any", "{t0}: clock sync request"),
         new("pong", false, "any", "{t0, t1}: clock sync reply"),

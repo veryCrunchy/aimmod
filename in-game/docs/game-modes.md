@@ -1491,6 +1491,12 @@ preset):
   has `Holding`; `avatar-state.tsv` carries its third-person model, which
   AimModSteam puts on the avatar's own third-person weapon mesh
   (`GetThirdPersonWeaponMeshComponent_Primary`, KovaaK's `FN_*` meshes).
+  KovaaK's has no third-person knife, bomb or grenade, so with one of those in
+  hand the avatar shows the gun that player carries: an alive avatar is never
+  empty-handed. The service rewrites the file every second even when nothing
+  changes, so freeze time never lets it go stale (AimModSteam drops a file
+  older than 10 s, which used to leave every avatar unarmed about 10 s into
+  each round).
 - **Not yet:** the bomb on a remote carrier's back, the knife on avatars,
   weapon drops between players, per-weapon damage falloff.
 
@@ -1514,6 +1520,27 @@ preset):
   70 %, 0 is off). UE can't play a runtime-built sound without engine code
   AimMod doesn't call (`USoundWaveProcedural`'s queue isn't reflected), so
   KovaaK's master volume doesn't apply.
+- Other players' gunfire and footsteps (all shooting modes; `GunAudio.cs`):
+  KovaaK's only plays your own gun. Every shot has its own time from the
+  shooter's stream: a player's service reads every shot its game fired
+  (`self-shots.tsv`, hits and misses) and sends them to the host (`fired`); a
+  bot's trigger pulls are the host's own decisions (`BotFire`). The host checks
+  each against the shooter's weapon (alive, the round under way, never faster
+  than 60 % of the fire interval) and passes them to everyone at once
+  (`shots`). Each machine plays the others' shots at their own spacing (a
+  per-shooter delay absorbs the network path; a shot over 600 ms late is
+  dropped), from where they were fired, by weapon class (pistol, SMG, rifle,
+  AWP, shotgun, knife swish), panned by bearing, falling off at half the
+  bomb's rate. A bot's own line traces say which players a wall hides it from;
+  they hear its shots muffled (low-passed, quieter). Other players' shots
+  carry no line of sight, so they fall off by distance only.
+- Footsteps come from where this machine's game draws the other players: a
+  step every stride (about 3 a second at a run) while they move on the ground,
+  quieter walking (30 %) or crouched (20 %), teammates at 60 %, none past
+  22 m.
+- Both play at the "Gunfire and footsteps" volume (default 70 %, 0 is off), in
+  the same mixer as the round sounds (at most 64 voices; the oldest gunfire
+  goes first).
 
 #### 6.6.4 Bots (built)
 
