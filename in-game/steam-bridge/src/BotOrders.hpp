@@ -38,6 +38,7 @@
 //                                                    shoot after a counter-strafe) and whether it crouches
 //   seen\t<peer>\t<tag>\t<0|1>                        whether the line from its eye to the target is clear
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdint>
@@ -82,11 +83,19 @@ namespace bridge::bots
         std::array<double, 3> peekAt{};
         std::vector<std::array<double, 5>> avoid;         // x, y, z, radius, cost per grid step
     };
+    struct AreaRequest
+    {
+        std::string key;
+        std::array<double, 3> centre{};
+        double rmin = 0, rmax = 0, entry = 0;
+        std::vector<std::array<double, 3>> sources;
+    };
     struct Orders
     {
         std::int64_t sequence = 0;
         std::map<std::uint64_t, Order> bots;
         bool debug = false;
+        std::vector<AreaRequest> areas;
     };
 
     namespace detail
@@ -131,6 +140,14 @@ namespace bridge::bots
             if (v < 1 || v > 16) return std::nullopt;
             return v;
         }
+        // An area's key: 1..32 letters, digits, '.', '_' or '-'.
+        inline bool Key(std::string_view s)
+        {
+            if (s.empty() || s.size() > 32) return false;
+            for (const char c : s)
+                if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-')) return false;
+            return true;
+        }
         inline bool Point(const std::vector<std::string_view>& p, std::size_t from, std::array<double, 3>& out)
         {
             if (p.size() < from + 3) return false;
@@ -170,6 +187,21 @@ namespace bridge::bots
                 continue;
             }
             if (p[0] == "debug" && p.size() == 2) { orders.debug = p[1] == "1"; continue; }
+            if (p[0] == "area" || p[0] == "from")
+            {
+                std::array<double, 3> at{};
+                if (p.size() < 5 || !detail::Key(p[1]) || !detail::Point(p, 2, at)) continue;
+                const auto it = std::find_if(orders.areas.begin(), orders.areas.end(), [&](const AreaRequest& a) { return a.key == p[1]; });
+                if (p[0] == "area")
+                {
+                    if (p.size() < 8 || it != orders.areas.end() || orders.areas.size() >= 4) continue;
+                    const auto rmin = detail::Number(p[5]), rmax = detail::Number(p[6]), entry = detail::Number(p[7]);
+                    if (!rmin || !rmax || !entry || *rmin < 0 || *rmax < 100 || *rmax > 20000 || *rmin >= *rmax || *entry < 100 || *entry > 20000) continue;
+                    orders.areas.push_back({std::string(p[1]), at, *rmin, *rmax, *entry, {}});
+                }
+                else if (it != orders.areas.end() && it->sources.size() < 4) it->sources.push_back(at);
+                continue;
+            }
             if (p.size() < 3) continue;
             const auto peer = detail::Peer(p[1]);
             if (!peer) continue;
@@ -271,6 +303,7 @@ namespace bridge::bots
         std::vector<std::pair<int, bool>> seen;
         double speed = 0;   // horizontal speed (cm/s)
         bool crouch = false;
+        double look = -1;   // how far it sees straight ahead (cm), -1: not traced
     };
     inline std::string Format(std::int64_t unixMs, const std::vector<Report>& reports)
     {
@@ -282,6 +315,11 @@ namespace bridge::bots
             text += line;
             std::snprintf(line, sizeof(line), "vel\t%llu\t%.1f\t%d\n", static_cast<unsigned long long>(r.peer), r.speed, r.crouch ? 1 : 0);
             text += line;
+            if (r.look >= 0)
+            {
+                std::snprintf(line, sizeof(line), "look\t%llu\t%.0f\n", static_cast<unsigned long long>(r.peer), r.look);
+                text += line;
+            }
             for (const auto& [tag, visible] : r.seen)
             {
                 std::snprintf(line, sizeof(line), "seen\t%llu\t%d\t%d\n", static_cast<unsigned long long>(r.peer), tag, visible ? 1 : 0);

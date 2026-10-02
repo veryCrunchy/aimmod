@@ -20,6 +20,8 @@ static partial class MultiplayerChecks
         BotScoreModes(root);
         BotsOnline(root);
         BotSenseChecks();
+        BotHoldChecks();
+        BotCalloutChecks();
     }
 
     static MapObjectives BotMap()
@@ -45,7 +47,8 @@ static partial class MultiplayerChecks
         var early = ts.Select(t => BotStrategy.TJob(def, t, t == "t1", 10_000, sites, [0, 3000, 100])).ToList();
         Check(early.All(j => j.Stop < 1) && early.Select(j => j.Goal![0]).Distinct().Count() == 2, "Default: before the call they take map control part of the way to both sites");
         var called = ts.Select(t => BotStrategy.TJob(def, t, t == "t1", 31_000, sites, null)).ToList();
-        Check(called.All(j => j.Stop == 1 && j.Goal![0] == 3000), "At the call they all go to the chosen site");
+        Check(called.Count(j => j.Stop == 1 && j.Goal![0] == 3000) == 4 && called[4] is { Role: "lurk", Stop: < 1 } lurk && lurk.Goal![0] == -3000,
+            "At the call four go to the chosen site; the fifth lurks out towards the other one");
         var split = new TeamPlan(CsRules.T, 2, BotStyles.Split, 1, 0, ts);
         var splitJobs = ts.Select(t => BotStrategy.TJob(split, t, t == "t1", 1000, sites, null)).ToList();
         Check(splitJobs.All(j => j.Goal![0] == -3000) && splitJobs.Count(j => j.Via is { } v && v[0] == 3000) == 2 && splitJobs[0].Via is null, "Split: half come by way of the other site; the carrier goes straight in");
@@ -53,12 +56,15 @@ static partial class MultiplayerChecks
         string[] cts = ["c1", "c2", "c3", "c4", "c5"];
         var ct = new TeamPlan(CsRules.CT, 2, "hold", 0, 0, cts);
         var hold = cts.Select(c => BotStrategy.CtJob(ct, c, sites, [0, -3000, 100], null)).ToList();
-        Check(hold.Count(j => j.Role == "anchor" && j.Goal![0] == 3000) >= 1 && hold.Count(j => j.Role == "anchor" && j.Goal![0] == -3000) >= 1 && hold.Count(j => j.Role == "rotator" && j.Stop < 1) == 1,
-            "Counter-Terrorists anchor both sites and one plays forward");
+        Check(hold.Count(j => j.Role == "anchor" && j.Goal![0] == 3000) == 2 && hold.Count(j => j.Role == "anchor" && j.Goal![0] == -3000) == 2 && hold.Count(j => j.Role == "rotator" && j.Stop < 1) == 1,
+            "Counter-Terrorists anchor both sites (2-1-2) and one plays forward");
         var alert = BotStrategy.AlertSite([[-2900, 200, 0]], sites);
         Check(alert == 1 && BotStrategy.AlertSite([[0, 0, 0]], sites) is null, "A sighting close to a site raises that site");
-        var rotated = cts.Select(c => BotStrategy.CtJob(ct, c, sites, [0, -3000, 100], alert)).ToList();
-        Check(rotated.Count(j => j.Role == "rotate" && j.Goal![0] == -3000) == 4 && rotated.Count(j => j.Goal![0] == 3000) == 1, "Rotation: all but one anchor go to the raised site");
+        var full = BotStrategy.Alert([[-2900, 200, 0], [-2800, 100, 0], [-3100, -100, 0]], [], sites);
+        Check(full is { Site: 1, Count: 3, From: "seen" }, "Three Terrorists seen near a site raise it as a full execute");
+        var rotated = cts.Select(c => BotStrategy.CtJob(ct, c, sites, [0, -3000, 100], full)).ToList();
+        Check(rotated.Count(j => j.Role == "rotate (retake setup)" && j.Goal![0] == -3000) == 2 && rotated.Count(j => j.Goal![0] == -3000) == 4 && rotated.Count(j => j.Goal![0] == 3000) == 1,
+            "Rotation on a full execute: the forward one and all but one anchor of the other site go over, setting up to retake");
     }
 
     static void BotEconomyChecks()
@@ -111,7 +117,7 @@ static partial class MultiplayerChecks
         var heard = brain.Step(World(players, sight));
         Check(brain.KnowledgeOf(CsRules.CT).Fresh(t).Any(k => k.Enemy == "t1" && k.Heard), "A bot hears running footsteps within earshot, and its side knows");
         var c2 = heard.Orders.First(o => o.Member == "c2");
-        Check(c2.Goal is { } g && g[0] == -3000 && c2.Role == "rotate", "The anchor on the other site rotates to where the Terrorist was heard");
+        Check(c2.Goal is { } g && Math.Abs(g[0] + 3000) < 1600 && Math.Abs(g[1]) < 1600 && c2.Role!.StartsWith("rotate", StringComparison.Ordinal), "The anchor on the other site rotates to where the Terrorist was heard (" + c2.Role + ")");
         var c1 = heard.Orders.First(o => o.Member == "c1");
         Check(c1.Face is { } f && Math.Abs(f[0] + 2900) < 250 && Math.Abs(f[1] - 900) < 250, "The bot that heard it watches that way (about where it was: ears are not exact)");
         Check(heard.Orders.All(o => o.Turn == Aim.TurnRate(BotSkills.For(BotSkills.Normal))), "Every order carries the bot's turn rate");
@@ -130,7 +136,8 @@ static partial class MultiplayerChecks
         var tWorld = new BotWorld(t, LobbyModes.Cs, [("t1", BotSkills.Normal)], [new BotPlayer("t1", 0, -2800, 300, 164, 1, true, 0)],
             new Dictionary<string, BotSight> { ["t1"] = new(t, -2800, 300, 100, 0, new HashSet<int>()) }, planted, map, []);
         var post = tBrain.Step(tWorld).Orders.Single();
-        Check(post.Role == "post-plant" && post.Mode == "hold" && post.Face is { } pf && pf[1] > 2000, "Post-plant: the Terrorist holds near the bomb, watching the defence's way");
+        Check(post.Role!.StartsWith("post-plant", StringComparison.Ordinal) && post.Goal is { } pg && Math.Sqrt((pg[0] + 3000) * (pg[0] + 3000) + pg[1] * pg[1]) > 400,
+            "Post-plant without an area yet: the Terrorist takes a spot off the bomb, not on top of it");
         // Low on health and nothing in sight: back to a teammate.
         var hurt = cs.View() with { Players = cs.View().Players.Select(p => p.Member == "c1" ? p with { Health = 12 } : p).ToArray() };
         var fallBack = new BotBrain(seed: 13);

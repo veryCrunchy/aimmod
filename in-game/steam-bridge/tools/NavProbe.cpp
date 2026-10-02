@@ -4,13 +4,19 @@
 // fare walking from every side's spawns to every site: arrival time, stuck recoveries, blocked steps;
 // running, shift-walking while pre-aiming corners, and round a smoke halfway along the way; then as
 // squads of five. Also how they turn: snaps (a step faster than the turn rate) and the largest
-// turning acceleration. Exit code 0: every pair connected and every walk and squad arrived.
+// turning acceleration. And the holding spots (SiteSpots.hpp) the bots take on each site, as the
+// service asks for them: post-plant (the defenders come from their spawn and the other site) and a
+// site hold (the attackers come from theirs): the entrances, the spots that see the bomb or an
+// entrance, five distinct ones picked out of grenade range of each other, and a walk from the site
+// to each. Exit code 0: every pair connected, every walk and squad arrived, and every site has its
+// entrances and five spots that were walked to.
 //
 //   aimmod_nav_probe <map.json> <map.aimmod.json> [--walk seconds] [--verbose] [--at x y z]
 //
 // Paths come from the command line only; nothing is written.
 #include "MapGeometry.hpp"
 #include "NavGrid.hpp"
+#include "SiteSpots.hpp"
 #include "Walker.hpp"
 
 #include <chrono>
@@ -30,6 +36,7 @@ namespace
     {
         std::string name;
         std::array<double, 3> at{};
+        double half = 0; // a site: its box's half-diagonal across (cm)
     };
 
     std::vector<std::array<double, 4>> Spawns(const json::Value& cs, const char* side, double scale)
@@ -161,7 +168,8 @@ int main(int argc, char** argv)
             if (!mn || !mx || mn->array.size() < 3 || mx->array.size() < 3) continue;
             targets.push_back({"site " + s.Str("name", 8).value_or("?"),
                                {(mn->array[0].number + mx->array[0].number) / 2 * scale, (mn->array[1].number + mx->array[1].number) / 2 * scale,
-                                (mn->array[2].number + mx->array[2].number) / 2 * scale}});
+                                (mn->array[2].number + mx->array[2].number) / 2 * scale},
+                               std::hypot(mx->array[0].number - mn->array[0].number, mx->array[1].number - mn->array[1].number) / 2 * scale});
         }
 
     // The grid as the game builds it (Ghosts.cpp GrowNav): avatar capsule 145, CS movement.
@@ -196,9 +204,92 @@ int main(int argc, char** argv)
         }
     std::printf("coverage: %d/%d target pairs connected (%.0f%%)\n", linked, pairs, pairs ? 100.0 * linked / pairs : 0.0);
 
+    // Holding spots on each site, the way the service asks (BotPositions.cs AreaRadii): post-plant
+    // (from the CT spawn and the other site) and a site hold (from the T spawn).
+    int areasOk = 0, areasRun = 0, spotWalks = 0, spotArrived = 0;
+    std::vector<const Target*> sites;
+    for (const auto& t : targets)
+        if (t.name.rfind("site", 0) == 0) sites.push_back(&t);
+    const auto shared0 = std::make_shared<ghost::NavGrid>(grid);
+    for (const auto* site : sites)
+        for (const bool postPlant : {true, false})
+        {
+            ghost::SpotArea::Request request;
+            request.key = site->name.substr(5) + (postPlant ? "-post" : "-hold");
+            request.centre = site->at;
+            request.rmin = std::clamp(site->half * 0.2, 250.0, 700.0);
+            request.rmax = std::clamp(site->half * 3.2, 2400.0, 5600.0);
+            request.entry = std::clamp(site->half * 1.8, 1200.0, 3600.0);
+            if (postPlant)
+            {
+                if (!ctSpawns.empty()) request.sources.push_back({ctSpawns[0][0], ctSpawns[0][1], ctSpawns[0][2]});
+                for (const auto* other : sites)
+                    if (other != site) request.sources.push_back(other->at);
+            }
+            else if (!tSpawns.empty()) request.sources.push_back({tSpawns[0][0], tSpawns[0][1], tSpawns[0][2]});
+            ghost::SpotArea area;
+            area.Start(request);
+            int steps = 0;
+            const auto t1 = std::chrono::steady_clock::now();
+            while (!area.Done() && steps < 10000) { area.Step(grid, 800, clear); ++steps; }
+            const double spotMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t1).count();
+            int bomb = 0, lurks = 0;
+            for (const auto& sp : area.spots) bomb += sp.bomb;
+            for (const auto& e : area.entrances) lurks += e.lurk.has_value();
+            std::printf("  spots %-9s %zu entrances, %zu spots (%d see the centre), %d lurk spots; %d traces, %d steps, %.0f ms here\n", request.key.c_str(), area.entrances.size(), area.spots.size(), bomb, lurks,
+                        area.traces, steps, spotMs);
+            for (std::size_t i = 0; i < area.entrances.size(); ++i)
+            {
+                const auto& e = area.entrances[i];
+                int seeing = 0;
+                for (const auto& sp : area.spots) seeing += (sp.mask >> i & 1u) != 0;
+                std::printf("    entrance %zu at (%.0f, %.0f, %.0f) from source %d, way %.0f cm; %d spots see it\n", i, e.at[0], e.at[1], e.at[2], e.source, e.pathCm, seeing);
+            }
+            // Five distinct spots, out of one grenade's reach of each other (as the brain picks them):
+            // the best for each entrance first, then the bomb.
+            std::vector<ghost::SpotArea::Spot> picked;
+            const auto apart = [&](const ghost::SpotArea::Spot& sp, double gap) {
+                for (const auto& q : picked)
+                    if (std::hypot(q.at[0] - sp.at[0], q.at[1] - sp.at[1]) < gap) return false;
+                return true;
+            };
+            for (double gap = 960; picked.size() < 5 && gap > 200; gap *= 0.75)
+                for (std::size_t want = 0; want <= area.entrances.size() && picked.size() < 5; ++want)
+                    for (const auto& sp : area.spots)
+                    {
+                        const bool fits = want < area.entrances.size() ? (sp.mask >> want & 1u) != 0 : sp.bomb;
+                        if (fits && apart(sp, gap)) { picked.push_back(sp); break; }
+                    }
+            int arrivedHere = 0;
+            for (const auto& sp : picked)
+            {
+                ghost::Walker w;
+                w.nav = shared0;
+                w.Tune(1100, 79);
+                w.PlaceAt(site->at[0], site->at[1], site->at[2], 0, 145, floor);
+                w.goal = std::array<double, 3>{sp.at[0], sp.at[1], sp.at[2] + 145};
+                bool there = false;
+                for (int f = 0; f < 60 * 30 && !there; ++f)
+                {
+                    const auto st = w.Step(f / 60.0, 1 / 60.0, 145, floor, clear);
+                    there = std::hypot(st.x - sp.at[0], st.y - sp.at[1]) < w.arrive + 40;
+                }
+                ++spotWalks;
+                spotArrived += there;
+                arrivedHere += there;
+                std::printf("    spot (%.0f, %.0f, %.0f) %s, entrances 0x%x, cover %d, walk %.0f cm: %s\n", sp.at[0], sp.at[1], sp.at[2], sp.bomb ? "sees the bomb" : "no bomb", sp.mask, sp.cover, sp.walk,
+                            there ? "walked to" : "NOT REACHED");
+            }
+            ++areasRun;
+            const bool ok = !area.noGrid && !area.entrances.empty() && picked.size() >= 5 && arrivedHere == static_cast<int>(picked.size());
+            areasOk += ok;
+            if (!ok) std::printf("    FAILED: %s\n", area.noGrid ? "no grid point" : area.entrances.empty() ? "no entrance" : picked.size() < 5 ? "fewer than five distinct spots" : "a spot not walked to");
+        }
+    std::printf("holding spots: %d/%d areas with entrances and five distinct spots, %d/%d spots walked to\n", areasOk, areasRun, spotArrived, spotWalks);
+
     // Walkers from each side's first five spawns to every site: running; then shift-walking and
     // pre-aiming corners; then running round a zone to avoid (a smoke) on the middle of the way.
-    if (walkSeconds <= 0) return 0;
+    if (walkSeconds <= 0) return areasOk == areasRun ? 0 : 1;
     const auto shared = std::make_shared<ghost::NavGrid>(grid);
     Turning turning;
     int runs = 0, arrived = 0;
@@ -326,5 +417,5 @@ int main(int argc, char** argv)
     std::printf("squads: %d/%d arrived\n", squadsArrived, squads);
     std::printf("turning: %d snaps (a step faster than the turn rate), largest turning acceleration %.0f deg/s^2 (limit %.0f)\n", turning.snaps, turning.maxAccel, turning.limit);
     arrived += squadsArrived - squads; // a squad that didn't arrive fails the run
-    return arrived == runs && linked == pairs ? 0 : 1;
+    return arrived == runs && linked == pairs && areasOk == areasRun ? 0 : 1;
 }

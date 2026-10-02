@@ -10,6 +10,7 @@
 #include "GrenadePhysics.hpp"
 #include "Json.hpp"
 #include "PoseFile.hpp"
+#include "SiteSpots.hpp"
 #include "Walker.hpp"
 
 #include <cstdio>
@@ -1241,6 +1242,102 @@ int main()
         Check(std::fabs(v.eye[2] - (657 + 145 * 0.75)) < 0.01 && std::fabs(v.camera[0] - 100) < 0.01 && v.camera[1] < 200 - 250 && v.camera[2] > v.eye[2] &&
                   v.yaw == 90 && v.pitch < 0 && v.pitch > -20,
               "the spectator camera sits behind the watched avatar at eye height, looking slightly down its way");
+    }
+    // Holding spots (SiteSpots.hpp): a site in a walled room with a door north and a door east and
+    // a pillar inside; the defenders come from the north. Two ways in (one round to the east door),
+    // spots that really see the bomb or an entrance (checked by the same traces), lurk spots off the
+    // ways, all worked out a budget at a time.
+    {
+        const double half = 145;
+        struct Box { double x0, y0, x1, y1; };
+        const std::vector<Box> solid{
+            {-1000, 990, -150, 1010}, {150, 990, 1000, 1010},   // north wall, door x -150..150
+            {-1000, -1010, 1000, -990},                          // south wall
+            {-1010, -1000, -990, 1000},                          // west wall
+            {990, -1000, 1010, -150}, {990, 150, 1010, 1000},   // east wall, door y -150..150
+            {300, 300, 600, 600},                                // a pillar on the site
+        };
+        auto inside = [&](double x, double y) {
+            for (const auto& b : solid)
+                if (x >= b.x0 && x <= b.x1 && y >= b.y0 && y <= b.y1) return true;
+            return false;
+        };
+        auto floor = [&](double x, double y, double) -> std::optional<double> {
+            return std::fabs(x) < 3000 && std::fabs(y) < 3000 && !inside(x, y) ? std::optional<double>(0.0) : std::nullopt;
+        };
+        int sightTraces = 0;
+        auto clear = [&](double ax, double ay, double, double bx, double by, double) {
+            ++sightTraces;
+            const double len = std::hypot(bx - ax, by - ay);
+            const int n = std::max(1, static_cast<int>(len / 10));
+            for (int i = 0; i <= n; ++i)
+                if (inside(ax + (bx - ax) * i / n, ay + (by - ay) * i / n)) return false;
+            return true;
+        };
+        ghost::NavGrid grid;
+        grid.stepUp = 79; grid.stepDown = 126; grid.halfHeight = half;
+        grid.Seed(0, 0, 150, floor);
+        grid.Seed(0, 2800, 150, floor);
+        for (int i = 0; i < 100000 && !grid.Done(); ++i) grid.Grow(4000, floor, clear);
+        ghost::SpotArea area;
+        area.Start({"post", {0, 0, 0}, 250, 2400, 1300, {{0, 2800, 0}}});
+        sightTraces = 0;
+        int steps = 0, most = 0;
+        while (!area.Done() && steps < 1000)
+        {
+            const int before = sightTraces;
+            area.Step(grid, 300, clear);
+            most = std::max(most, sightTraces - before);
+            ++steps;
+        }
+        Check(area.Done() && !area.noGrid && steps > 3 && most <= 300 + 8, "holding spots are worked out a trace budget at a time");
+        bool north = false, east = false;
+        for (const auto& e : area.entrances)
+        {
+            north |= std::fabs(e.at[0]) < 400 && e.at[1] > 900 && e.at[1] < 1800;
+            east |= std::fabs(e.at[1]) < 400 && e.at[0] > 900 && e.at[0] < 1800;
+        }
+        Check(area.entrances.size() == 2 && north && east, "two ways in from the defenders' side: the north door, and round to the east door");
+        bool truthful = true, ranged = true, bomb = false, pillarHides = true, outsideSeesDoor = false;
+        int checked = 0;
+        for (const auto& sp : area.spots)
+        {
+            const double eye = sp.at[2] + ghost::SpotArea::EyeAbove(grid);
+            int used = 0;
+            const bool sees = ghost::SpotArea::Sees(clear, {sp.at[0], sp.at[1], eye}, {0, 0, ghost::SpotArea::BombAbove}, used);
+            truthful &= sees == sp.bomb;
+            ranged &= std::hypot(sp.at[0], sp.at[1]) >= 250 && std::hypot(sp.at[0], sp.at[1]) <= 2400;
+            bomb |= sp.bomb;
+            if (sp.at[0] > 650 && sp.at[1] > 650 && sp.at[0] < 980 && sp.at[1] < 980 && std::fabs(sp.at[0] - sp.at[1]) < 150) pillarHides &= !sp.bomb;
+            outsideSeesDoor |= sp.at[1] > 1100 && sp.mask != 0;
+            ++checked;
+        }
+        Check(checked >= 8 && truthful && ranged && bomb, "every spot is in range and sees the bomb exactly when a trace says so");
+        Check(pillarHides && outsideSeesDoor, "a spot behind the pillar doesn't see the bomb; one outside the north door watches a way in");
+        bool lurkOff = true;
+        int lurks = 0;
+        for (const auto& e : area.entrances)
+            if (e.lurk)
+            {
+                ++lurks;
+                for (const int w : e.way) lurkOff &= std::hypot(grid.nodes[w].x - (*e.lurk)[0], grid.nodes[w].y - (*e.lurk)[1]) >= grid.spacing * 1.7;
+            }
+        Check(lurks >= 1 && lurkOff, "lurk spots by the ways in, off the ways themselves");
+        std::map<std::string, ghost::SpotArea> areas{{"post", area}};
+        const auto text = ghost::FormatSpots(5, areas);
+        Check(text.rfind("AIMMOD_SPOTS_1\t5\narea\tpost\tdone\t2\t", 0) == 0 && text.find("\nentrance\tpost\t1\t") != std::string::npos && text.find("\nspot\tpost\t") != std::string::npos,
+              "bot-spots.tsv lists each area's entrances and spots");
+        ghost::SpotArea nowhere;
+        nowhere.Start({"far", {50000, 50000, 0}, 250, 2400, 1300, {{0, 2800, 0}}});
+        nowhere.Step(grid, 300, clear);
+        Check(nowhere.Done() && nowhere.noGrid && ghost::FormatSpots(1, {{"far", nowhere}}).find("area\tfar\tnogrid\t0\t0") != std::string::npos, "an area off the grid says so");
+        const auto asked = bridge::bots::Parse("AIMMOD_BOTS_1\t3\narea\tb-12\t10\t20\t30\t250\t2400\t1300\nfrom\tb-12\t0\t2800\t0\nfrom\tb-12\t1\t2\t3\nfrom\tnone\t1\t2\t3\n"
+                                               "area\tbad key\t1\t2\t3\t1\t200\t300\narea\tx\t1\t2\t3\t500\t400\t300\narea\tb-12\t1\t2\t3\t1\t200\t300\n");
+        Check(asked && asked->areas.size() == 1 && asked->areas[0].key == "b-12" && asked->areas[0].sources.size() == 2 && asked->areas[0].rmax == 2400 && asked->areas[0].centre[1] == 20 && asked->bots.empty(),
+              "area and from rows: keys checked, radii in range, one request per key");
+        bridge::bots::Report lr;
+        lr.peer = 3; lr.look = 87.4;
+        Check(bridge::bots::Format(1, {lr}).find("\nlook\t3\t87\n") != std::string::npos, "bot-sight.tsv says how far each bot sees straight ahead");
     }
     // bot-orders.tsv and bot-sight.tsv
     {

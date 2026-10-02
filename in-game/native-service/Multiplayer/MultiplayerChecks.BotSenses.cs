@@ -138,7 +138,8 @@ static partial class MultiplayerChecks
             "A decoy's gunfire: the hard bot calls it a decoy (" + (source?.Verdicts.GetValueOrDefault("c2") ?? "none") + "), the easy bot believes it");
         Check(source?.Cues.Contains("never moves") == true && source.Cues.Contains("no hits") && source.CalledBy == "c2", "Its cues: the shooter never moves and nothing near it gets hit; the hard bot tells the side");
         var c1 = step!.Orders.First(o => o.Member == "c1"); var c2 = step.Orders.First(o => o.Member == "c2");
-        Check(c1.Role == "rotate" && c1.Goal is { } g1 && g1[0] == -3000 && c2.Role != "rotate", "The easy bot rotates to the fake fight at B (it ignores the call); the hard one stays put (" + c2.Role + ")");
+        Check(c1.Goal is { } g1 && Math.Abs(g1[0] + 3000) < 1600 && !c2.Role!.StartsWith("rotate", StringComparison.Ordinal) && c2.Goal is { } g2 && g2[0] > 0,
+            "The easy bot heads to the fake fight at B (it ignores the call); the hard one stays on its site (" + c1.Role + "; " + c2.Role + ")");
         // Seen landing: the hard bot watches the throw come down there, then hears the gun start.
         var (m2, at2) = Thrown([-1600, 1400, 180]);
         var watcher = new BotBrain(seed: 52);

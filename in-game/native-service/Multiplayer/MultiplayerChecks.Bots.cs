@@ -187,7 +187,7 @@ static partial class MultiplayerChecks
         Check(cs.View().Bomb.Carrier == "tbot" && tOrder.Mode == "goal" && tOrder.Goal is { } site && Math.Abs(Math.Abs(site[0]) - 3000) < 1, "The bomb carrier walks to a bomb site");
         var siteX = tOrder.Goal![0];
         var ctGoal = live.Orders.First(o => o.Member == "ctbot").Goal;
-        Check(ctGoal is { } cg && Math.Abs(Math.Abs(cg[0]) - 3000) < 1, "A Counter-Terrorist bot goes to guard a site");
+        Check(ctGoal is { } cg && Math.Abs(Math.Abs(cg[0]) - 3000) < 2000 && Math.Abs(cg[1]) < 2000, "A Counter-Terrorist bot goes to guard a site (a spot by it)");
         t += 100; brain.Step(World(siteX, 0, 0, 3000));
         t += 500;
         var plant = brain.Step(World(siteX, 0, 0, 3000));

@@ -689,6 +689,8 @@ namespace aimmod
                 m_navSeeds.clear();
                 m_navDoneLogged = false;
                 m_navCoverageLogged = false;
+                m_areas.clear();
+                m_areasChanged = true;
                 m_debugMarkers.clear(); // the markers went with the old world
                 m_botsAllowed = bridge::ghost::AvatarBotsAllowed(scene);
                 m_parkedHelpers.clear();
@@ -755,6 +757,7 @@ namespace aimmod
                               std::to_string(m_wallHits) + "/" + std::to_string(m_wallTraces) + " blocked");
                     }
                     GrowNav(dev.walkers, character, now);
+                    StepAreas(character);
                     for (const auto& w : dev.walkers)
                     {
                         DevWalk& walk = m_walkers[w.peer];
@@ -908,10 +911,17 @@ namespace aimmod
                                 const bool visible = !hit || std::hypot(std::hypot((*hit)[0] - to[0], (*hit)[1] - to[1]), (*hit)[2] - to[2]) < 60;
                                 walk.seen.push_back({t.tag, visible});
                             }
+                            // How far it sees straight ahead: a wall right in its face is the service's
+                            // idle watchdog's cue (a bot left staring at a wall).
+                            constexpr double LookFar = 2500;
+                            const double yawRad = ws.yaw * 3.14159265358979 / 180.0;
+                            const double ahead[3]{eye[0] + std::cos(yawRad) * LookFar, eye[1] + std::sin(yawRad) * LookFar, eye[2]};
+                            const auto wall = Trace(character, eye, ahead, pawn, character);
+                            walk.look = wall ? std::hypot((*wall)[0] - eye[0], (*wall)[1] - eye[1]) : LookFar;
                         }
                         // The floor under it as well (the walker's own z is on the traced floor): a bomb it drops lands there.
                         // Its speed and stance too: the service fires once it has stopped (a counter-strafe).
-                        if (order) m_botReports.push_back({w.peer, ws.x, ws.y, ws.z, ws.yaw, walk.walker.z - half, walk.seen, std::hypot(ws.vx, ws.vy), ws.crouch});
+                        if (order) m_botReports.push_back({w.peer, ws.x, ws.y, ws.z, ws.yaw, walk.walker.z - half, walk.seen, std::hypot(ws.vx, ws.vy), ws.crouch, walk.look});
                         if (m_botOrders && m_botOrders->debug) DrawBotDebug(w.peer, walk, world, now);
                         // Every 5 s: what each bot is told and how far along it is.
                         if (order && now >= walk.nextStatusLog)
@@ -926,13 +936,17 @@ namespace aimmod
                                               b.target == bridge::ghost::Walker::NavTarget ? "walking" : b.target == -1 ? "standing" : "walking to a waypoint", b.navPath.size(), b.navIndex,
                                               b.navReached ? "" : " (not to the goal yet)", b.plansFound, b.plansPending, b.plansFailed, b.navBlocked);
                             else
-                                std::snprintf(line, sizeof(line), "avatars: bot %llu %s at (%.0f, %.0f, %.0f)%s", static_cast<unsigned long long>(w.peer), mode, b.x, b.y, b.z, order->face ? ", facing an enemy" : "");
+                                std::snprintf(line, sizeof(line), "avatars: bot %llu %s at (%.0f, %.0f, %.0f)%s", static_cast<unsigned long long>(w.peer), mode, b.x, b.y, b.z, order->face ? ", facing a point" : "");
                             // How it moves: gait, stance, peek, fight style, zones it keeps out of, speed and turning.
                             const char* peekName = b.peek == bridge::ghost::Walker::Peek::Jiggle ? "jiggle" : b.peek == bridge::ghost::Walker::Peek::Wide ? "wide" : b.peek == bridge::ghost::Walker::Peek::Crouch ? "crouch" : "none";
                             char moves[200];
                             std::snprintf(moves, sizeof(moves), "; %s, %s%s; peek %s; fight %.2f %s; avoid %zu; %.0f cm/s, yaw turning %.0f deg/s", b.walkGait ? "walk" : "run", b.crouchStance ? "crouched" : "standing",
                                           b.preaim ? ", pre-aiming" : "", peekName, b.fight, b.counterStrafe ? "counter" : "ad", b.avoid.size(), std::hypot(b.velX, b.velY), b.yawVel);
-                            m_log(std::string(line) + moves);
+                            // Where it looks and how far it sees that way.
+                            char looks[120] = "";
+                            if (b.lookAt) std::snprintf(looks, sizeof(looks), "; looking at (%.0f, %.0f, %.0f), %.0f cm clear ahead", (*b.lookAt)[0], (*b.lookAt)[1], (*b.lookAt)[2], walk.look);
+                            else std::snprintf(looks, sizeof(looks), "; looking about (yaw %.0f), %.0f cm clear ahead", b.yaw, walk.look);
+                            m_log(std::string(line) + moves + looks);
                         }
                         if (!wasPlaced && walk.walker.placed)
                             m_log("avatars: simulated player " + std::to_string(w.peer) + " placed at spawn " + std::to_string(walk.walker.at) + " z=" +
@@ -1047,6 +1061,7 @@ namespace aimmod
         }
         if (m_avatarMapDirty) WriteAvatarMap();
         WriteBotSight();
+        WriteSpots();
     }
 
     // bot-orders.tsv from the service. Older than 3 s: no orders (the bots walk on their own).
@@ -1267,6 +1282,71 @@ namespace aimmod
             m_log("avatars: nav grid " + std::to_string(m_nav->nodes.size()) + " points" + (m_nav->Done() ? " (done)" : " (growing, " + std::to_string(m_nav->frontier.size()) + " to check)") + ", " +
                   std::to_string(m_nav->traces) + " traces");
         }
+    }
+
+    // The areas the service asked for (bot-orders.tsv `area` rows): each worked out on the complete
+    // grid, one at a time, about 800 traces a tick; an area no longer asked for is dropped (a few kept).
+    void GhostDemo::StepAreas(UObject* character)
+    {
+        if (!m_botOrders || !m_nav || !m_nav->Done()) return;
+        const auto& wanted = m_botOrders->areas;
+        for (auto it = m_areas.begin(); it != m_areas.end();)
+        {
+            const bool asked = std::any_of(wanted.begin(), wanted.end(), [&](const bridge::bots::AreaRequest& r) { return r.key == it->first; });
+            if (!asked && m_areas.size() > 6)
+            {
+                it = m_areas.erase(it);
+                m_areasChanged = true;
+            }
+            else ++it;
+        }
+        const auto clear = [&](double ax, double ay, double az, double bx, double by, double bz) {
+            const double a[3]{ax, ay, az}, b[3]{bx, by, bz};
+            return !Trace(character, a, b, character, nullptr).has_value();
+        };
+        for (const auto& r : wanted)
+        {
+            const bridge::ghost::SpotArea::Request request{r.key, r.centre, r.rmin, r.rmax, r.entry, r.sources};
+            auto& area = m_areas[r.key];
+            if (!(area.request == request))
+            {
+                area.Start(request);
+                m_areasChanged = true;
+            }
+            if (area.Done()) continue;
+            if (area.Step(*m_nav, 800, clear))
+            {
+                m_areasChanged = true;
+                int bomb = 0, lurks = 0;
+                for (const auto& s : area.spots) bomb += s.bomb;
+                for (const auto& e : area.entrances) lurks += e.lurk.has_value();
+                m_log("avatars: holding spots for " + r.key + ": " +
+                      (area.noGrid ? std::string("no grid point there")
+                                   : std::to_string(area.entrances.size()) + " entrances, " + std::to_string(area.spots.size()) + " spots (" + std::to_string(bomb) + " see the centre), " +
+                                         std::to_string(lurks) + " lurk spots") +
+                      ", " + std::to_string(area.traces) + " traces");
+            }
+            break; // one area a tick
+        }
+    }
+
+    // bot-spots.tsv (SiteSpots.hpp FormatSpots), rewritten when an area changes.
+    void GhostDemo::WriteSpots()
+    {
+        if (!m_areasChanged || m_options.stateDir.empty()) return;
+        m_areasChanged = false;
+        FILETIME ft{};
+        GetSystemTimeAsFileTime(&ft);
+        const std::uint64_t ticks = (static_cast<std::uint64_t>(ft.dwHighDateTime) << 32) | ft.dwLowDateTime;
+        const auto unixMs = static_cast<std::int64_t>((ticks - 116444736000000000ull) / 10000ull);
+        const std::filesystem::path file = std::filesystem::path(m_options.stateDir) / L"bot-spots.tsv";
+        const std::wstring temp = file.wstring() + L".tmp";
+        {
+            std::ofstream out(temp, std::ios::binary | std::ios::trunc);
+            if (!out) return;
+            out << bridge::ghost::FormatSpots(unixMs, m_areas);
+        }
+        MoveFileExW(temp.c_str(), file.c_str(), MOVEFILE_REPLACE_EXISTING);
     }
 
     // spectate-view.tsv (service -> AimModSteam, BotOrders.hpp bridge::view): the peer to watch.
