@@ -179,10 +179,12 @@ sealed partial class MultiplayerService
     void CsHold(MatchSnapshot match, CsView cs, CsPlayerView me)
     {
         if (poseTracker?.Weapon is not { } slot || !me.Alive) return;
-        var key = match.Id + "#" + cs.Round + "#" + slot;
+        // With the grenade slot, which grenade is in hand (the host drops it if you go down holding it).
+        var grenade = slot == CsRules.GrenadeSlot ? grenadeHand : null;
+        var key = match.Id + "#" + cs.Round + "#" + slot + "#" + grenade;
         if (key == csHoldSent) return;
         csHoldSent = key;
-        Command("hold", JsonSerializer.SerializeToElement(new { slot }));
+        Command("hold", JsonSerializer.SerializeToElement(grenade is null ? new { slot } : (object)new { slot, grenade }));
     }
 
     // CS HUD for the notice layer, kept clear of the crosshair: the score strip and clocks at
@@ -200,7 +202,7 @@ sealed partial class MultiplayerService
         string? InSite = null, string? Callout = null, IReadOnlyList<CsMarker>? Sites = null,
         bool HasBomb = false, string? BombCarrier = null, string? Refused = null, string DropKey = CsDropKey, int TAlive = 0, int CtAlive = 0,
         IReadOnlyList<CsHurt>? Hurt = null, string? HitMarker = null, string? Watching = null, string? WatchHint = null,
-        IReadOnlyList<CsHudGrenade>? Grenades = null, double Flash = 0, double Smoke = 0, string GrenadeKey = CsGrenadeKey, CsFlashFx? FlashFx = null);
+        IReadOnlyList<CsHudGrenade>? Grenades = null, double Flash = 0, double Smoke = 0, string GrenadeKey = CsGrenadeKey, CsFlashFx? FlashFx = null, string? GrenadeHint = null);
     // The flash on your screen for the page to play smoothly between polls: which flash (Id), how long
     // ago it popped (Age, ms), how long the white holds and clears (ms) and how white it gets (Peak 0..1).
     internal sealed record CsFlashFx(long Id, long Age, int Hold, int Fade, double Peak);
@@ -297,7 +299,7 @@ sealed partial class MultiplayerService
             HurtMarkers(m, hostNow), HitMarker(m, hostNow),
             !me.Alive && deadWatch is { } watched ? Name(watched) : null,
             !me.Alive && deadWatch is not null ? (DeadWatchCandidates(cs, m.Players, SelfId).Count > 1 ? "Click or Space: next player · Right click: previous" : "The only player left") : null,
-            HudGrenades(me), GrenadeVeil(cs, me, hostNow).Flash, GrenadeVeil(cs, me, hostNow).Smoke, CsGrenadeKey, FlashFx(me, hostNow));
+            HudGrenades(me), GrenadeVeil(cs, me, hostNow).Flash, GrenadeVeil(cs, me, hostNow).Smoke, CsGrenadeKey, FlashFx(me, hostNow), HudGrenadeHint(me));
     }
 
     // The grenades you carry, in slot order, with the one key 4 has in hand.

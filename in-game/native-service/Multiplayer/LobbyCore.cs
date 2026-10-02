@@ -780,7 +780,8 @@ sealed class LobbyCore
             refused = args.ValueKind == JsonValueKind.Object && args.TryGetProperty("item", out var item) && item.ValueKind == JsonValueKind.String ? cs.Buy(member.Id, item.GetString() ?? "", clock()) : "unknown-item";
         else if (action == "drop") refused = cs.Drop(member.Id, clock());
         else if (action == "hold")
-            refused = args.ValueKind == JsonValueKind.Object && args.TryGetProperty("slot", out var slot) && slot.TryGetInt32(out var heldSlot) ? cs.Hold(member.Id, heldSlot) : "invalid";
+            refused = args.ValueKind == JsonValueKind.Object && args.TryGetProperty("slot", out var slot) && slot.TryGetInt32(out var heldSlot)
+                ? cs.Hold(member.Id, heldSlot, args.TryGetProperty("grenade", out var nade) && nade.ValueKind == JsonValueKind.String ? nade.GetString() : null) : "invalid";
         else if (action == "throw")
             refused = ThrowArgs(args) is { } t ? cs.Throw(member.Id, t.Kind, t.Strength, t.Origin, t.Pitch, t.Yaw, clock()) : "invalid";
         else

@@ -2,8 +2,8 @@ namespace AimMod.InGame.Multiplayer;
 
 // CS grenade sounds (game-modes.md 6.6.5), synthesised like the bomb's (BombSounds: sine tones,
 // noise and envelopes; nothing recorded or taken from a game): the pin, the throw, bounces, the HE
-// blast, the flash's pop and the ringing it leaves, the smoke's hiss, fire, and a decoy's fake
-// gunfire by weapon class. `--write-bomb-sounds <folder>` writes these too.
+// blast, the flash's pop and the ringing it leaves, the smoke's hiss, fire, and the decoy's last pop
+// (its fake shots are the other players' gunfire, GunSounds). `--write-bomb-sounds <folder>` writes these too.
 static class GrenadeSounds
 {
     const int Rate = BombSounds.Rate;
@@ -97,23 +97,6 @@ static class GrenadeSounds
         for (var k = 0; k < 14; k++) BombSounds.Burst(s, (pops.Next() + 1) / 2 * 1.4, 0.015, 0.6 + 0.3 * pops.Next(), 6000, 160u + (uint)k, 250);
         return BombSounds.Normalize(s, 0.4);
     }
-    // A decoy's fake shot: a thump and a noise crack, sized by the owner's weapon class.
-    public static float[] Shot(string weaponClass)
-    {
-        var (len, thump, crack, peak) = weaponClass switch
-        {
-            "sniper" => (0.5, 85.0, 4200.0, 0.85), "rifle" => (0.22, 110.0, 5200.0, 0.7), "smg" => (0.16, 140.0, 6000.0, 0.6), "heavy" => (0.3, 95.0, 3800.0, 0.75), _ => (0.18, 130.0, 5600.0, 0.6),
-        };
-        var s = BombSounds.Buffer(len); double phase = 0;
-        for (var i = 0; i < s.Length; i++)
-        {
-            var t = i / (double)Rate;
-            phase += 2 * Math.PI * thump * (1 + 2 * Math.Exp(-60 * t)) / Rate;
-            s[i] = (float)(0.8 * Math.Sin(phase) * Math.Exp(-25 * t) * Math.Min(1, t / 0.001));
-        }
-        BombSounds.Burst(s, 0, len, 1, crack, 163, 18 / len);
-        return BombSounds.Normalize(s, peak);
-    }
     // The decoy's last pop.
     public static float[] DecoyPop() { var s = BombSounds.Buffer(0.25); BombSounds.Burst(s, 0, 0.2, 1, 3000, 167, 25); BombSounds.Tone(s, 0, 0.1, 160, 0.6, 0.001, 0.08, 0.1); return BombSounds.Normalize(s, 0.5); }
 
@@ -121,25 +104,36 @@ static class GrenadeSounds
     {
         ["nade-pin"] = Pin, ["nade-throw"] = Throw, ["nade-bounce"] = Bounce, ["he-explosion"] = HeExplosion, ["flash-pop"] = FlashPop, ["flash-ring"] = FlashRing,
         ["smoke-hiss"] = SmokeHiss, ["fire-ignite"] = FireIgnite, ["fire-crackle"] = FireCrackle, ["fire-out"] = FireOut, ["decoy-pop"] = DecoyPop,
-        ["decoy-pistol"] = () => Shot("pistol"), ["decoy-smg"] = () => Shot("smg"), ["decoy-rifle"] = () => Shot("rifle"), ["decoy-sniper"] = () => Shot("sniper"), ["decoy-heavy"] = () => Shot("heavy"),
     };
 }
 
 // What the grenades sound like from one player's view: throws, bounces as the path passes them,
 // blasts, smokes, fires burning, decoys firing, and the ring after a hard flash. Pure (like
 // RoundSoundPlan); BombAudio plays the cues. A new match only sets the baseline.
+//  - Volumes (Gain, against the bomb's 1): the HE loudest, the flash's pop close behind; the pin,
+//    the throw and bounces small metal sounds; the smoke's hiss and the fire under them.
+//  - A decoy's shots are the other players' gunfire (GunSounds' "gun-<class>", at the gun volume and
+//    distance falloff), each scheduled at its own moment (Timed) so its fire rate holds between ticks.
 sealed class GrenadeSoundPlan
 {
     public const long CrackleMs = 1400;
+    public const double PinGain = 0.55, ThrowGain = 0.5, BounceGain = 0.55, HeGain = 1.3, FlashGain = 1.05, SmokeGain = 0.7, IgniteGain = 0.85, CrackleGain = 0.55, FireOutGain = 0.8,
+        DecoyPopGain = 0.6, DecoyShotGain = 0.9;
+    // How far ahead decoy shots are scheduled.
+    public const long DecoyAheadMs = 400;
     string? matchKey;
     readonly HashSet<long> seen = [];
     readonly Dictionary<long, int> bounces = new(), decoyShots = new();
     readonly Dictionary<long, long> crackleAt = new();
     long flashAt = -1;
+    // The decoys' shots of the last Update, at local unix ms (BombAudio.PlayAt).
+    public List<TimedCue> Timed { get; } = [];
 
-    public IReadOnlyList<RoundCue> Update(string matchId, CsView cs, string self, long hostNow)
+    // hostToLocal: host ms minus this machine's (decoy shots are timed on this clock).
+    public IReadOnlyList<RoundCue> Update(string matchId, CsView cs, string self, long hostNow, long hostToLocal = 0)
     {
         var cues = new List<RoundCue>();
+        Timed.Clear();
         var grenades = cs.Grenades ?? [];
         var baseline = matchKey != matchId;
         if (baseline) { matchKey = matchId; seen.Clear(); bounces.Clear(); decoyShots.Clear(); crackleAt.Clear(); }
@@ -152,41 +146,48 @@ sealed class GrenadeSoundPlan
                 case "flying":
                 {
                     var keys = GrenadePhysics.Unflat(g.Keys);
-                    if (isNew && !baseline && keys.Count > 0 && hostNow - g.At < 1000) cues.Add(new("nade-throw", g.Owner == self ? null : [keys[0].X, keys[0].Y, keys[0].Z], 0.8));
+                    // Your own throw's whoosh plays as you let go (MultiplayerService.Grenades.cs).
+                    if (isNew && !baseline && keys.Count > 0 && hostNow - g.At < 1000 && g.Owner != self) cues.Add(new("nade-throw", [keys[0].X, keys[0].Y, keys[0].Z], ThrowGain));
                     var played = bounces.GetValueOrDefault(g.Id);
                     for (var i = played + 1; i < keys.Count; i++)
                     {
                         if (g.At + keys[i].T > hostNow || (g.Ends is { } ends && g.At + keys[i].T > ends)) break;
-                        if (!baseline && keys[i].Impact != GrenadePhysics.NoImpact && hostNow - (g.At + keys[i].T) < 500) cues.Add(new("nade-bounce", [keys[i].X, keys[i].Y, keys[i].Z], 0.9));
+                        if (!baseline && keys[i].Impact != GrenadePhysics.NoImpact && hostNow - (g.At + keys[i].T) < 500) cues.Add(new("nade-bounce", [keys[i].X, keys[i].Y, keys[i].Z], BounceGain));
                         played = i;
                     }
                     bounces[g.Id] = played;
                     break;
                 }
                 case "blast" when isNew && !baseline && hostNow - g.At < 1000:
-                    var sound = g.Kind switch { GrenadeRules.He => "he-explosion", GrenadeRules.Flash => "flash-pop", GrenadeRules.Decoy => "decoy-pop", "extinguished" => "fire-out", _ => "fire-ignite" };
-                    cues.Add(new(sound, at, g.Kind == GrenadeRules.He ? 1.2 : 1));
+                    var (sound, gain) = g.Kind switch
+                    {
+                        GrenadeRules.He => ("he-explosion", HeGain), GrenadeRules.Flash => ("flash-pop", FlashGain), GrenadeRules.Decoy => ("decoy-pop", DecoyPopGain),
+                        "extinguished" => ("fire-out", FireOutGain), _ => ("fire-ignite", IgniteGain),
+                    };
+                    cues.Add(new(sound, at, gain));
                     break;
                 case "smoke" when isNew && !baseline && hostNow - g.At < 2000:
-                    cues.Add(new("smoke-hiss", at, 0.9));
+                    cues.Add(new("smoke-hiss", at, SmokeGain));
                     break;
                 case "fire":
-                    if (isNew && !baseline && hostNow - g.At < 1000) cues.Add(new("fire-ignite", at));
+                    if (isNew && !baseline && hostNow - g.At < 1000) cues.Add(new("fire-ignite", at, IgniteGain));
                     var next = crackleAt.TryGetValue(g.Id, out var c) ? c : g.At + 300;
                     if (hostNow >= next && g.Ends is { } fireEnds && hostNow < fireEnds - 300)
                     {
-                        if (!baseline) cues.Add(new("fire-crackle", at, 0.8));
+                        if (!baseline) cues.Add(new("fire-crackle", at, CrackleGain));
                         while (next <= hostNow) next += CrackleMs;
                     }
                     crackleAt[g.Id] = next;
                     break;
                 case "decoy":
                 {
-                    var shots = GrenadeRules.DecoyShots(g.Id, g.Weapon);
+                    // Scheduled a little ahead, each shot once; one already more than 300 ms past is skipped.
+                    var shots = GrenadeRules.DecoyShots(g.Id, g.Weapon, (g.Ends ?? g.At + GrenadeRules.DecoyMs) - g.At, g.Gun);
                     var done = decoyShots.TryGetValue(g.Id, out var d) ? d : -1;
-                    for (var i = done + 1; i < shots.Count && g.At + shots[i] <= hostNow; i++)
+                    var cls = DecoySoundClass(g);
+                    for (var i = done + 1; i < shots.Count && g.At + shots[i] <= hostNow + DecoyAheadMs; i++)
                     {
-                        if (!baseline && hostNow - (g.At + shots[i]) < 300) cues.Add(new("decoy-" + (g.Weapon is "rifle" or "smg" or "sniper" or "heavy" ? g.Weapon : "pistol"), at, 0.9));
+                        if (!baseline && hostNow - (g.At + shots[i]) < 300) Timed.Add(new TimedCue(new RoundCue("gun-" + cls, at, DecoyShotGain), g.At + shots[i] - hostToLocal));
                         done = i;
                     }
                     decoyShots[g.Id] = done;
@@ -202,5 +203,8 @@ sealed class GrenadeSoundPlan
         }
         return cues;
     }
-    static int StateCode(string state) => state switch { "flying" => 1, "smoke" => 2, "fire" => 3, "decoy" => 4, "blast" => 5, _ => 0 };
+    // The gunfire a decoy mimics: its owner's gun's sound class (GunSounds).
+    public static string DecoySoundClass(CsGrenadeView decoy) =>
+        GunSounds.ClassOf(decoy.Gun) ?? (decoy.Weapon == "heavy" ? "shotgun" : decoy.Weapon is "rifle" or "smg" or "sniper" ? decoy.Weapon : "pistol");
+    static int StateCode(string state) => state switch { "flying" => 1, "smoke" => 2, "fire" => 3, "decoy" => 4, "blast" => 5, "dropped" => 6, _ => 0 };
 }

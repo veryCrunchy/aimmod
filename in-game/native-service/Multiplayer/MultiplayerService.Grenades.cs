@@ -5,12 +5,14 @@ using System.Text.Json;
 namespace AimMod.InGame.Multiplayer;
 
 // CS grenades on this machine (game-modes.md 6.6.5):
-//  - the host trades with its own game (AimModSteam): grenade-sim.tsv asks for each throw's path and
-//    for line-of-sight traces from blasts, grenade-paths.tsv answers (GrenadeFiles);
+//  - the host trades with its own game (AimModSteam): grenade-sim.tsv asks for each throw's path, for
+//    line-of-sight traces from blasts and spreading fire and for floor heights, grenade-paths.tsv
+//    answers (GrenadeFiles);
 //  - every player: key 4 picks the grenade in hand (again: the next one), fire pulls the pin and
-//    throws on release, right mouse throws underhand, both buttons a medium throw ("throw" to the
-//    host); grenades.tsv tells AimModCore what to draw (the grenade in hand, grenades in flight,
-//    smokes, fires, decoys, blasts); the grenades' sounds.
+//    throws on release (GrenadeTrigger: CS's draw, pin and release timing), right mouse throws
+//    underhand, both buttons a medium throw ("throw" to the host); grenades.tsv tells AimModCore what
+//    to draw (the grenade in hand, grenades in flight, smokes, fires and their flames, decoys, blasts,
+//    dropped grenades); the grenades' sounds.
 sealed partial class MultiplayerService
 {
     public const string GrenadeSimFile = "grenade-sim.tsv", GrenadePathsFile = "grenade-paths.tsv", GrenadesFile = "grenades.tsv";
@@ -25,12 +27,12 @@ sealed partial class MultiplayerService
         {
             field.Trace ??= line => Console.Error.WriteLine("[grenades] " + line);
             ReadGrenadePaths(field);
-            var paths = field.PathRequests; var los = field.LosRequests;
-            var body = paths.Count + los.Count == 0 ? "" : GrenadeFiles.Sim(0, paths, los);
+            var paths = field.PathRequests; var los = field.LosRequests; var floors = field.FloorRequests;
+            var body = paths.Count + los.Count + floors.Count == 0 ? "" : GrenadeFiles.Sim(0, paths, los, floors);
             var now = clock();
             if (body == lastGrenadeSim && (body.Length == 0 || now - grenadeSimWrittenAt < 1000)) return;
             lastGrenadeSim = body; grenadeSimWrittenAt = now;
-            try { AtomicFile.WriteText(Path.Combine(outputFolder, GrenadeSimFile), body.Length == 0 ? "AIMMOD_GRENADESIM_1\t" + ++grenadeSimSequence + "\n" : GrenadeFiles.Sim(++grenadeSimSequence, paths, los)); }
+            try { AtomicFile.WriteText(Path.Combine(outputFolder, GrenadeSimFile), body.Length == 0 ? "AIMMOD_GRENADESIM_1\t" + ++grenadeSimSequence + "\n" : GrenadeFiles.Sim(++grenadeSimSequence, paths, los, floors)); }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
         });
     }
@@ -46,49 +48,51 @@ sealed partial class MultiplayerService
             if (GrenadeFiles.Paths(File.ReadAllText(path), clock()) is not { } answer) return;
             foreach (var (id, keys) in answer.Paths) field.SetPath(id, keys);
             foreach (var (tag, clear) in answer.Los) field.AnswerLos(tag, clear);
+            foreach (var (tag, z) in answer.Floors) field.AnswerFloor(tag, z);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
     }
 
     // ---- every player: the grenade in hand and throwing -----------------------------------------
-    string? grenadeHand; bool pinPulled, throwLeft, throwRight; long grenadeSlotSince = long.MaxValue, grenadeThrownAt;
+    string? grenadeHand; long grenadeSlotSince = long.MaxValue, grenadeThrownAt;
+    readonly GrenadeTrigger grenadeTrigger = new();
     string? grenadeRoundKey;
     internal string? GrenadeHand => grenadeHand;
 
     void CsGrenadeInput(MatchSnapshot match, CsView cs, CsPlayerView me, bool foreground)
     {
         var key = match.Id + "#" + cs.Round;
-        if (key != grenadeRoundKey) { grenadeRoundKey = key; pinPulled = false; grenadeThrownAt = 0; }
+        if (key != grenadeRoundKey) { grenadeRoundKey = key; grenadeTrigger.Reset(); grenadeThrownAt = 0; }
         var carried = me.Grenades ?? [];
         if (grenadeHand is null || !carried.Contains(grenadeHand)) grenadeHand = GrenadeRules.Sorted(carried).FirstOrDefault();
         var inHand = me.Alive && grenadeHand is not null && poseTracker?.Weapon == CsRules.GrenadeSlot;
         var now = clock();
-        if (!inHand) { grenadeSlotSince = long.MaxValue; pinPulled = false; }
+        if (!inHand) { grenadeSlotSince = long.MaxValue; grenadeTrigger.Reset(); }
         else if (grenadeSlotSince == long.MaxValue) grenadeSlotSince = now;
-        if (!foreground || buyOpen) { if (!foreground) pinPulled = false; return; }
+        if (!foreground || buyOpen) { if (!foreground) grenadeTrigger.Reset(); return; }
         // Key 4 again with a grenade already in hand: the next kind you carry (CS).
-        if (csKeys.Pressed('4') && inHand && now - grenadeSlotSince > 150 && !pinPulled) grenadeHand = GrenadeRules.Next(carried, grenadeHand);
+        if (csKeys.Pressed('4') && inHand && now - grenadeSlotSince > 150 && !grenadeTrigger.Pulled) grenadeHand = GrenadeRules.Next(carried, grenadeHand);
         var (left, leftTap) = csKeys.State((char)0x01); var (right, rightTap) = csKeys.State((char)0x02);
-        if (!inHand || cs.Phase is not ("live" or "planted")) { pinPulled = false; return; }
-        // A click shorter than a tick counts, but not one left over from the gun before the switch.
-        if (now - grenadeSlotSince < 150) { leftTap = false; rightTap = false; }
-        if (!pinPulled && (left || right || leftTap || rightTap))
-        {
-            pinPulled = true; throwLeft = left || leftTap; throwRight = right || rightTap;
-            roundAudio.Play(new RoundCue("nade-pin"), null);
-            if (left || right) return; // held: it goes when they let go
-        }
-        if (!pinPulled) return;
-        if (left || right) { throwLeft = left; throwRight = right; return; }
-        // Released: the throw, with the buttons last held (both: medium, right: underhand).
-        pinPulled = false;
-        var strength = throwLeft && throwRight ? 0.5 : throwRight ? 0 : 1;
+        if (!inHand || cs.Phase is not ("live" or "planted")) { grenadeTrigger.Reset(); return; }
+        var strength = grenadeTrigger.Step(now, grenadeSlotSince, left, right, leftTap, rightTap);
+        if (grenadeTrigger.TakePinSound()) roundAudio.Play(new RoundCue("nade-pin", null, GrenadeSoundPlan.PinGain), null);
+        if (strength is not { } s) return;
         if (ownRecent.Count == 0) { csRefusal = "AimMod can’t see where you are (no pose feed from AimModCore)."; csRefusalUntil = now + 2500; return; }
         var eye = ownRecent[^1];
         grenadeThrownAt = now;
-        roundAudio.Play(new RoundCue("nade-throw"), null);
-        CsCommand("throw", new { kind = grenadeHand, strength, o = new[] { Math.Round(eye.X, 1), Math.Round(eye.Y, 1), Math.Round(eye.Z, 1) }, r = new[] { Math.Round(eye.Pitch, 2), Math.Round(eye.Yaw, 2) } });
+        roundAudio.Play(new RoundCue("nade-throw", null, GrenadeSoundPlan.ThrowGain), null);
+        CsCommand("throw", new { kind = grenadeHand, strength = s, o = new[] { Math.Round(eye.X, 1), Math.Round(eye.Y, 1), Math.Round(eye.Z, 1) }, r = new[] { Math.Round(eye.Pitch, 2), Math.Round(eye.Yaw, 2) } });
     }
+
+    // The HUD's line under the grenades you carry: how to throw, or which throw you're holding.
+    internal static string? GrenadeHint(bool inHand, GrenadeTrigger trigger)
+    {
+        if (!inHand) return null;
+        if (!trigger.Pulled) return "Fire: throw · Right: underhand · Both: medium";
+        var throwName = trigger.Strength switch { 1 => "Full throw", 0 => "Underhand", _ => "Medium throw" };
+        return trigger.Released ? throwName + "…" : throwName + " · let go to throw";
+    }
+    internal string? HudGrenadeHint(CsPlayerView me) => GrenadeHint(me.Alive && grenadeHand is not null && poseTracker?.Weapon == CsRules.GrenadeSlot && (me.Grenades?.Count ?? 0) > 0, grenadeTrigger);
 
     // ---- grenades.tsv for AimModCore -------------------------------------------------------------
     //   AIMMOD_GRENADES_1\t<seq>
@@ -97,8 +101,10 @@ sealed partial class MultiplayerService
     //   fly\t<id>\t<kind>\t<thrown, local ms>\t<goes off, local ms, 0 unknown>\t<keys>\t<t x y z vx vy vz motion> x keys   (t: ms after the throw)
     //   smoke\t<id>\t<x>\t<y>\t<z>\t<start>\t<end>
     //   fire\t<id>\t<kind>\t<x>\t<y>\t<z>\t<radius>\t<start>\t<end>
+    //   flame\t<fire id>\t<x>\t<y>\t<z>\t<radius>\t<start>\t<end>   (each flame of the fire before it, on the floor)
     //   decoy\t<id>\t<x>\t<y>\t<z>\t<start>\t<end>
     //   blast\t<id>\t<kind>\t<x>\t<y>\t<z>\t<at>
+    //   dropped\t<id>\t<kind>\t<x>\t<y>\t<z>                        (a grenade on the floor to pick up)
     //   flash\t<id>\t<at>\t<hold ms>\t<fade ms>\t<peak 0..1>   (the flash that hit you: AimModCore's white and after-image)
     // Rewritten on change and every second (AimModCore drops it after 5 s).
     string? lastGrenades; long grenadesWrittenAt, grenadesSequence;
@@ -125,9 +131,20 @@ sealed partial class MultiplayerService
             {
                 var at = F(p[0]) + "\t" + F(p[1]) + "\t" + F(p[2]);
                 if (g.State == "smoke") sb.Append("smoke\t").Append(g.Id).Append('\t').Append(at).Append('\t').Append(L(start)).Append('\t').Append(L(end)).Append('\n');
-                else if (g.State == "fire") sb.Append("fire\t").Append(g.Id).Append('\t').Append(g.Kind).Append('\t').Append(at).Append('\t').Append(F(g.Radius)).Append('\t').Append(L(start)).Append('\t').Append(L(end)).Append('\n');
+                else if (g.State == "fire")
+                {
+                    sb.Append("fire\t").Append(g.Id).Append('\t').Append(g.Kind).Append('\t').Append(at).Append('\t').Append(F(Math.Clamp(g.Radius, 1, 2000))).Append('\t').Append(L(start)).Append('\t').Append(L(end)).Append('\n');
+                    var flames = g.Flames ?? [];
+                    for (var i = 0; i + 3 < flames.Length && i < 4 * GrenadeRules.MaxFlames; i += 4)
+                    {
+                        var fs = start + (long)flames[i + 3];
+                        sb.Append("flame\t").Append(g.Id).Append('\t').Append(F(flames[i])).Append('\t').Append(F(flames[i + 1])).Append('\t').Append(F(flames[i + 2])).Append('\t')
+                          .Append(F(GrenadeRules.FlameRadiusCm)).Append('\t').Append(L(fs)).Append('\t').Append(L(fs + GrenadeRules.FireMs)).Append('\n');
+                    }
+                }
                 else if (g.State == "decoy") sb.Append("decoy\t").Append(g.Id).Append('\t').Append(at).Append('\t').Append(L(start)).Append('\t').Append(L(end)).Append('\n');
                 else if (g.State == "blast") sb.Append("blast\t").Append(g.Id).Append('\t').Append(g.Kind).Append('\t').Append(at).Append('\t').Append(L(start)).Append('\n');
+                else if (g.State == "dropped" && GrenadeRules.Find(g.Kind) is not null) sb.Append("dropped\t").Append(g.Id).Append('\t').Append(g.Kind).Append('\t').Append(at).Append('\n');
             }
         }
         if (flash is not null)
@@ -143,7 +160,7 @@ sealed partial class MultiplayerService
     {
         if (outputFolder is null) return;
         var inHand = me.Alive && grenadeHand is not null && poseTracker?.Weapon == CsRules.GrenadeSlot;
-        var body = GrenadesBody(RoundScenario(match), inHand ? grenadeHand : null, inHand && pinPulled, grenadeThrownAt, cs.Grenades ?? [], HostOffset(), me.Alive ? me.Flash : null);
+        var body = GrenadesBody(RoundScenario(match), inHand ? grenadeHand : null, inHand && grenadeTrigger.Pulled, grenadeThrownAt, cs.Grenades ?? [], HostOffset(), me.Alive ? me.Flash : null);
         var now = clock();
         if (body == lastGrenades && now - grenadesWrittenAt < 1000) return;
         lastGrenades = body; grenadesWrittenAt = now;
@@ -156,7 +173,9 @@ sealed partial class MultiplayerService
     void GrenadeSoundCues(MatchSnapshot match, CsView cs)
     {
         (double X, double Y, double Yaw)? listener = ownRecent.Count > 0 ? (ownRecent[^1].X, ownRecent[^1].Y, ownRecent[^1].Yaw) : null;
-        foreach (var cue in grenadeSounds.Update(match.Id, cs, SelfId, clock() + HostOffset())) roundAudio.Play(cue, listener);
+        foreach (var cue in grenadeSounds.Update(match.Id, cs, SelfId, clock() + HostOffset(), HostOffset())) roundAudio.Play(cue, listener);
+        // A decoy's shots: gunfire at the gun volume, each at its own moment (its fire rate holds).
+        foreach (var timed in grenadeSounds.Timed) roundAudio.PlayAt(timed, listener);
     }
 
     long loggedFlashAt = -1;
@@ -209,5 +228,44 @@ sealed partial class MultiplayerService
         var step = (BotGrenadePolicy ?? botGrenades).Step(world);
         foreach (var (bot, item) in step.Buys) core.Apply(bot, "buy", JsonSerializer.SerializeToElement(new { item }, Protocol.Json), library);
         foreach (var t in step.Throws) core.BotThrow(t.Bot, t.Kind, t.From, t.Velocity);
+    }
+}
+
+// The grenade in hand and its buttons (CS): once the grenade is drawn (DrawMs; a click left over
+// from the gun before the switch doesn't count), fire or right mouse pulls the pin, which takes
+// PinMs; letting go throws it ReleaseMs later with the buttons last held (both: medium, right
+// alone: underhand). Let go before the pin is out (a tap), it goes as soon as it is.
+sealed class GrenadeTrigger
+{
+    public const long DrawMs = 300, PinMs = 350, ReleaseMs = 100;
+    bool left, right, pinSound;
+    public bool Pulled { get; private set; }
+    public bool Released { get; private set; }
+    public long PulledAt { get; private set; }
+    public long ReleasedAt { get; private set; }
+    // The throw the buttons say: 1 full, 0.5 both, 0 underhand.
+    public double Strength => left && right ? 0.5 : right ? 0 : 1;
+    public void Reset() { Pulled = false; Released = false; left = right = pinSound = false; }
+    // The pin was pulled since the last ask (its sound).
+    public bool TakePinSound() { var s = pinSound; pinSound = false; return s; }
+    // The strength when the grenade leaves the hand now, else null.
+    public double? Step(long now, long drawnAt, bool leftDown, bool rightDown, bool leftTap, bool rightTap)
+    {
+        if (!Pulled)
+        {
+            if (now - drawnAt < DrawMs || !(leftDown || rightDown || leftTap || rightTap)) return null;
+            Pulled = true; PulledAt = now; pinSound = true;
+            left = leftDown || leftTap; right = rightDown || rightTap;
+            if (!leftDown && !rightDown) { Released = true; ReleasedAt = now; }
+        }
+        if (!Released)
+        {
+            if (leftDown || rightDown) { left = leftDown; right = rightDown; return null; }
+            Released = true; ReleasedAt = now;
+        }
+        if (now < Math.Max(ReleasedAt, PulledAt + PinMs) + ReleaseMs) return null;
+        var strength = Strength;
+        Pulled = false; Released = false;
+        return strength;
     }
 }

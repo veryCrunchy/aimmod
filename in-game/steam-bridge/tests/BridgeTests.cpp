@@ -1196,6 +1196,25 @@ int main()
         const std::string out = FormatPaths(1234, {{3, {{0, 1, 2, 3, 4, 5, 6, Flight, NoImpact}, {500, 7, 8, 9, 0, 0, 0, Rest, FloorImpact}}}}, {{9, false}, {10, true}});
         Check(out == "AIMMOD_GRENADEPATHS_1\t1234\npath\t3\t2\t0.000\t1.000\t2.000\t3.000\t4.000\t5.000\t6.000\t0\t0\t500.000\t7.000\t8.000\t9.000\t0.000\t0.000\t0.000\t2\t2\nlos\t9\t0\nlos\t10\t1\n",
               "grenade-paths.tsv: each path's keys and each line of sight");
+        // The service's GrenadeThrowChecks: 1.25 times the thrower's run or jump, at most 15 m/s of it; underhand 12 units lower.
+        const Vec run = ThrowVelocity(0, 0, 1, {1000, 0, 0}), wild = ThrowVelocity(0, 0, 1, {1e6, 0, 0});
+        Check(std::fabs(run[0] - full[0] - 1250) < 1e-6 && run[2] == full[2] && std::fabs(wild[0] - full[0] - 1.25 * MaxInheritCm) < 1e-6 &&
+                  ThrowOrigin({0, 0, 180}, 0)[2] == 180 - 12 * Unit && ThrowOrigin({0, 0, 180}, 1)[2] == 180 &&
+                  Simulate({0, 0, 180}, run, Floor(0)).back().x > flat.back().x + 500,
+              "A throw carries the thrower's velocity (CS: 1.25 times it) and goes further on the run");
+        // Floors: the first surface down if it faces up; a wall or nothing is no floor.
+        const Trace step = [](const Vec& a, const Vec& b) -> std::optional<Hit> {
+            if (a[0] > 100) return Hit{{a[0], a[1], 0}, {1, 0, 0}}; // a wall face
+            const double z = a[1] > 150 ? -60 : 0;
+            if (a[2] < z || b[2] >= z) return std::nullopt;
+            return Hit{{a[0], a[1], z}, {0, 0, 1}};
+        };
+        Check(FloorHeight(step, 0, 0, 80, -200) == 0.0 && FloorHeight(step, 0, 300, 80, -200) == -60.0 && !FloorHeight(step, 200, 0, 80, -200) && !FloorHeight(step, 0, 300, 80, -50) &&
+                  !FloorHeight(step, 0, 0, -10, 10),
+              "Floor heights: a step down, none beyond the trace, a wall isn't a floor");
+        const auto fr = ParseSim("AIMMOD_GRENADESIM_1\t8\nfloor\t12\t100\t200\t260\t-150\nfloor\tx\t1\t2\t3\t4\nfloor\t13\t1\t2\t3\n");
+        Check(fr && fr->floors.size() == 1 && fr->floors[0].tag == 12 && fr->floors[0].y == 200 && fr->floors[0].bottom == -150 && fr->throws.empty(), "grenade-sim.tsv: floor requests");
+        Check(FormatPaths(1, {}, {}, {{12, -60.5}, {13, std::nullopt}}) == "AIMMOD_GRENADEPATHS_1\t1\nfloor\t12\t-60.5\nfloor\t13\t-\n", "grenade-paths.tsv: a floor's height, or none");
     }
     std::printf("%d/%d checks passed\n", checks - failures, checks);
     return failures == 0 ? 0 : 1;

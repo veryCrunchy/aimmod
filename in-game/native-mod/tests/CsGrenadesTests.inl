@@ -120,8 +120,27 @@ namespace csgrenades_checks
               "a strong flash leaves a frozen after-image that lingers into the fade; a glance leaves none");
     }
 
+    // The fire's flames over the floor, dropped grenades, and the size of a grenade in the world.
+    inline void FlamesAndDropped()
+    {
+        const auto s = ParseGrenades("AIMMOD_GRENADES_1\t4\nmatch\tA\nhand\t-\t0\t0\nfire\t7\tincendiary\t4\t5\t6\t300\t9000\t16160\nflame\t7\t4\t5\t6\t110\t9000\t16000\n"
+                                     "flame\t7\t189\t5\t-54\t110\t9160\t16160\ndropped\t9\tflash\t0\t0\t-18\n");
+        CHECK(s && s->fires.size() == 1 && s->fires[0].flames.size() == 2 && s->fires[0].flames[1].z == -54 && s->fires[0].flames[1].startMs == 9160 && s->dropped.size() == 1 &&
+                  s->dropped[0].kind == "flash" && s->dropped[0].z == -18,
+              "grenades.tsv: a fire's flames on the floor and a dropped grenade");
+        CHECK(!ParseGrenades("AIMMOD_GRENADES_1\t4\nmatch\tA\nflame\t7\t4\t5\t6\t110\t9000\t16000\n") &&
+                  !ParseGrenades("AIMMOD_GRENADES_1\t4\nmatch\tA\nfire\t7\tmolotov\t4\t5\t6\t300\t0\t1\nflame\t8\t4\t5\t6\t110\t0\t1\n") &&
+                  !ParseGrenades("AIMMOD_GRENADES_1\t4\nmatch\tA\ndropped\t9\tc4\t0\t0\t0\n"),
+              "a flame without its fire, or for another fire, and an unknown dropped item are refused");
+        CHECK(FlameLife(1000, 8000, 999) == 0 && FlameLife(1000, 8000, 1150) == 0.5 && FlameLife(1000, 8000, 4000) == 1 && FlameLife(1000, 8000, 7500) == 0.5 && FlameLife(1000, 8000, 8000) == 0,
+              "each flame grows in over 0.3 s and dies down in its last second");
+        CHECK(FireFlames(110, 1, 5, 3, 6).size() == 7 && FireFlames(110, 1, 5, 3).size() == 13, "one flame of a spreading fire is a pool and six tongues");
+        CHECK(WorldGrenadeScale > 1.7 && WorldGrenadeScale < 1.75 && GrenadeModel("he")[0].size[2] * WorldGrenadeScale > 12, "in the world a grenade is drawn at the map's scale (about 13 cm for an HE)");
+    }
+
     inline void Run()
     {
+        FlamesAndDropped();
         File();
         SmokeAndFlash();
         Paths();

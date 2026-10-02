@@ -10,10 +10,14 @@
 //   AIMMOD_GRENADESIM_1\t<seq>
 //   throw\t<id>\t<kind>\t<x>\t<y>\t<z>\t<vx>\t<vy>\t<vz>
 //   los\t<tag>\t<ax>\t<ay>\t<az>\t<bx>\t<by>\t<bz>
+//   floor\t<tag>\t<x>\t<y>\t<top z>\t<bottom z>      (a spreading flame, a dropped grenade)
 // grenade-paths.tsv (AimModSteam -> service):
 //   AIMMOD_GRENADEPATHS_1\t<unix ms>
 //   path\t<id>\t<keys>\t<t x y z vx vy vz motion impact> x keys
 //   los\t<tag>\t<0|1>
+//   floor\t<tag>\t<z|->                                  (-: no floor in between)
+// The traces leave out every pawn (Grenades.cpp): KovaaK's characters carry hitbox components that
+// would stop a line of sight at the thrower's own eye.
 
 #include <algorithm>
 #include <array>
@@ -38,6 +42,8 @@ namespace bridge::grenades
     constexpr int Flight = 0, Slide = 1, Rest = 2;
     constexpr int NoImpact = 0, WallImpact = 1, FloorImpact = 2;
     constexpr double ThrowSpeed = 750 * 0.9 * Unit;
+    // CS: a throw carries 1.25 times the thrower's velocity, at most MaxInheritCm of it.
+    constexpr double InheritShare = 1.25, MaxInheritCm = 1500;
 
     using Vec = std::array<double, 3>;
     // t: ms after the throw.
@@ -55,16 +61,26 @@ namespace bridge::grenades
 
     inline double Len(double x, double y, double z) { return std::sqrt(x * x + y * y + z * z); }
 
-    // The service's GrenadePhysics.ThrowVelocity (pitch up positive, degrees; strength 1 full, 0.5 both buttons, 0 underhand).
-    inline Vec ThrowVelocity(double pitch, double yaw, double strength)
+    // The service's GrenadePhysics.ThrowVelocity (pitch up positive, degrees; strength 1 full, 0.5 both
+    // buttons, 0 underhand; inherit: the thrower's velocity, cm/s).
+    inline Vec ThrowVelocity(double pitch, double yaw, double strength, const Vec& inherit = {0, 0, 0})
     {
         strength = std::clamp(strength, 0.0, 1.0);
         double p = std::clamp(pitch, -89.0, 89.0);
         p += (90 - std::fabs(p)) * 10 / 90;
         const double speed = ThrowSpeed * (0.3 + 0.7 * strength);
         const double pr = p * 3.14159265358979323846 / 180, yr = yaw * 3.14159265358979323846 / 180;
-        return {std::cos(pr) * std::cos(yr) * speed, std::cos(pr) * std::sin(yr) * speed, std::sin(pr) * speed};
+        Vec v{std::cos(pr) * std::cos(yr) * speed, std::cos(pr) * std::sin(yr) * speed, std::sin(pr) * speed};
+        if (std::isfinite(inherit[0]) && std::isfinite(inherit[1]) && std::isfinite(inherit[2]))
+        {
+            const double len = Len(inherit[0], inherit[1], inherit[2]);
+            const double k = len > MaxInheritCm ? MaxInheritCm / len : 1;
+            for (int i = 0; i < 3; ++i) v[i] += inherit[i] * k * InheritShare;
+        }
+        return v;
     }
+    // Where the grenade leaves the hand: the eye for a full throw, 12 units lower underhand.
+    inline Vec ThrowOrigin(const Vec& eye, double strength) { return {eye[0], eye[1], eye[2] + (std::clamp(strength, 0.0, 1.0) * 12 - 12) * Unit}; }
 
     inline Vec Pos(const Key& k, double tau)
     {
@@ -214,6 +230,18 @@ namespace bridge::grenades
         };
     }
 
+    // The floor under (x, y) between two heights: the first surface a trace down meets, if it is a
+    // floor (facing up, as a grenade lands on); nullopt for none or a wall.
+    inline std::optional<double> FloorHeight(const Trace& trace, double x, double y, double top, double bottom)
+    {
+        if (!(top > bottom)) return std::nullopt;
+        const auto hit = trace({x, y, top}, {x, y, bottom});
+        if (!hit) return std::nullopt;
+        const double l = Len(hit->normal[0], hit->normal[1], hit->normal[2]);
+        if (l < 1e-6 || hit->normal[2] / l <= FloorNz) return std::nullopt;
+        return hit->point[2];
+    }
+
     // ---- files -----------------------------------------------------------------------------------
     struct ThrowRequest
     {
@@ -226,11 +254,17 @@ namespace bridge::grenades
         int tag{};
         Vec from{}, to{};
     };
+    struct FloorRequest
+    {
+        int tag{};
+        double x{}, y{}, top{}, bottom{};
+    };
     struct Requests
     {
         std::int64_t sequence{};
         std::vector<ThrowRequest> throws;
         std::vector<LosRequest> los;
+        std::vector<FloorRequest> floors;
     };
 
     namespace detail
@@ -287,7 +321,7 @@ namespace bridge::grenades
         }
     } // namespace detail
 
-    // Lenient per row, strict on the header; at most 32 throws and 128 line-of-sight checks.
+    // Lenient per row, strict on the header; at most 32 throws, 128 line-of-sight checks and 64 floors.
     inline std::optional<Requests> ParseSim(std::string_view text)
     {
         if (text.size() > 64 * 1024) return std::nullopt;
@@ -327,12 +361,20 @@ namespace bridge::grenades
                 l.tag = static_cast<int>(*tag);
                 r.los.push_back(l);
             }
+            else if (p[0] == "floor" && p.size() == 6 && r.floors.size() < 64)
+            {
+                const auto tag = detail::Integer(p[1], 1'000'000'000);
+                const auto x = detail::Number(p[2]), y = detail::Number(p[3]), top = detail::Number(p[4]), bottom = detail::Number(p[5]);
+                if (!tag || !x || !y || !top || !bottom) continue;
+                r.floors.push_back({static_cast<int>(*tag), *x, *y, *top, *bottom});
+            }
         }
         if (!header) return std::nullopt;
         return r;
     }
 
-    inline std::string FormatPaths(std::int64_t unixMs, const std::map<std::int64_t, std::vector<Key>>& paths, const std::map<int, bool>& los)
+    inline std::string FormatPaths(std::int64_t unixMs, const std::map<std::int64_t, std::vector<Key>>& paths, const std::map<int, bool>& los,
+                                   const std::map<int, std::optional<double>>& floors = {})
     {
         std::string text = "AIMMOD_GRENADEPATHS_1\t" + std::to_string(unixMs) + "\n";
         char cell[64];
@@ -351,6 +393,11 @@ namespace bridge::grenades
             text += "\n";
         }
         for (const auto& [tag, clear] : los) text += "los\t" + std::to_string(tag) + "\t" + (clear ? "1" : "0") + "\n";
+        for (const auto& [tag, z] : floors)
+        {
+            if (z) std::snprintf(cell, sizeof(cell), "\t%.1f", *z);
+            text += "floor\t" + std::to_string(tag) + (z ? std::string(cell) : std::string("\t-")) + "\n";
+        }
         return text;
     }
 } // namespace bridge::grenades

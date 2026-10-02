@@ -60,6 +60,7 @@ namespace aimmod
         m_byObjects = m_trace.BindPath(STR("/Script/Engine.KismetSystemLibrary:LineTraceSingleForObjects"), Shape::Command);
         if (!m_byObjects) m_trace.BindPath(STR("/Script/Engine.KismetSystemLibrary:LineTraceSingle"), Shape::Command);
         m_kismet = UObjectGlobals::StaticFindObject<UObject*>(nullptr, nullptr, STR("/Script/Engine.Default__KismetSystemLibrary"));
+        m_getPawn.BindPath(STR("/Script/Engine.Controller:K2_GetPawn"), Shape::Object);
         for (const Param& p : m_trace.params())
             if (p.out && p.structType && p.name == "OutHit")
                 for (FProperty* member : p.structType->ForEachProperty())
@@ -69,7 +70,7 @@ namespace aimmod
                     if (member->GetName() == STR("bStartPenetrating")) m_startPenetrating = CastField<FBoolProperty>(member);
                 }
         m_ready = m_trace.ok() && m_kismet && m_impactPoint >= 0 && m_impactNormal >= 0;
-        m_log(m_ready ? std::string("grenades: line traces ready (") + (m_byObjects ? "world objects" : "visibility channel") + "); throws fly on this map"
+        m_log(m_ready ? std::string("grenades: line traces ready (") + (m_byObjects ? "world objects" : "visibility channel") + ", every pawn left out); throws fly on this map"
                       : "grenades: line traces unavailable (" + m_trace.error() + "); the service flies throws over a level floor");
         return m_ready;
     }
@@ -91,10 +92,39 @@ namespace aimmod
         return nullptr;
     }
 
+    void GrenadeSim::FindPawns(double now)
+    {
+        if (now < m_nextPawns) return;
+        m_nextPawns = now + 1.0;
+        m_pawns.clear();
+        // Every KovaaK's character (FindAllOf takes subclasses too: the local FPSCharacter, bots, avatars),
+        // and whatever the controllers possess besides.
+        std::set<UObject*> pawns;
+        std::vector<UObject*> found;
+        UObjectGlobals::FindAllOf(STR("MetaCharacter"), found);
+        for (UObject* character : found)
+            if (game::IsLiveInstance(character)) pawns.insert(character);
+        if (m_getPawn.ok())
+            for (const wchar_t* type : {STR("MetaPlayerController"), STR("TheMetaAIController")})
+            {
+                found.clear();
+                UObjectGlobals::FindAllOf(type, found);
+                for (UObject* controller : found)
+                    if (game::IsLiveInstance(controller))
+                        if (UObject* pawn = m_getPawn.Object(controller); pawn && game::IsLiveInstance(pawn)) pawns.insert(pawn);
+            }
+        for (UObject* pawn : pawns)
+            if (m_pawns.size() < 64) m_pawns.emplace_back(pawn);
+    }
+
     std::optional<g::Hit> GrenadeSim::Trace(UObject* context, const g::Vec& a, const g::Vec& b)
     {
+        // No pawn stops a grenade or a line of sight: every player's and bot's body is left out, its
+        // hitbox components too (they block line traces under their own object type).
         TArray<AActor*> ignore;
-        // Every object type but pawns (2): no player or avatar stops a grenade or a line of sight.
+        for (const FWeakObjectPtr& weak : m_pawns)
+            if (UObject* pawn = weak.Get(); pawn && game::IsLiveInstance(pawn)) ignore.Add(static_cast<AActor*>(pawn));
+        // Every object type but pawns (2).
         TArray<std::uint8_t> objectTypes;
         for (std::uint8_t t = 0; t < 32; ++t)
             if (t != 2) objectTypes.Add(t);
@@ -145,14 +175,16 @@ namespace aimmod
         const auto requests = g::ParseSim(text);
         if (!requests || requests->sequence == m_sequence) return;
         m_sequence = requests->sequence;
-        if (requests->throws.empty() && requests->los.empty())
+        if (requests->throws.empty() && requests->los.empty() && requests->floors.empty())
         {
             m_paths.clear();
             m_los.clear();
+            m_floors.clear();
             return;
         }
         UObject* context = Context();
         if (!Bind() || !context) return; // the service's level-floor fallback flies them
+        FindPawns(now);
         const auto trace = [&](const g::Vec& a, const g::Vec& b) { return Trace(context, a, b); };
         // Fly each new throw once; keep answers only for what is still asked.
         std::set<std::int64_t> ids;
@@ -169,17 +201,25 @@ namespace aimmod
             if (!m_los.contains(l.tag)) m_los[l.tag] = !Trace(context, l.from, l.to).has_value();
         }
         std::erase_if(m_los, [&](const auto& kv) { return !tags.contains(kv.first); });
+        std::set<int> floorTags;
+        for (const auto& f : requests->floors)
+        {
+            floorTags.insert(f.tag);
+            if (!m_floors.contains(f.tag)) m_floors[f.tag] = g::FloorHeight(trace, f.x, f.y, f.top, f.bottom);
+        }
+        std::erase_if(m_floors, [&](const auto& kv) { return !floorTags.contains(kv.first); });
         if (!m_logged)
         {
             m_logged = true;
-            m_log("grenades: first answers (" + std::to_string(m_paths.size()) + " path(s), " + std::to_string(m_los.size()) + " line(s) of sight, " + std::to_string(m_traces) + " traces)");
+            m_log("grenades: first answers (" + std::to_string(m_paths.size()) + " path(s), " + std::to_string(m_los.size()) + " line(s) of sight, " + std::to_string(m_floors.size()) +
+                  " floor(s), " + std::to_string(m_traces) + " traces; " + std::to_string(m_pawns.size()) + " pawn(s) left out)");
         }
         const std::filesystem::path out = std::filesystem::path(m_stateDir) / L"grenade-paths.tsv";
         const std::wstring temp = out.wstring() + L".tmp";
         {
             std::ofstream o(temp, std::ios::binary | std::ios::trunc);
             if (!o) return;
-            o << g::FormatPaths(UnixMs(), m_paths, m_los);
+            o << g::FormatPaths(UnixMs(), m_paths, m_los, m_floors);
         }
         MoveFileExW(temp.c_str(), out.c_str(), MOVEFILE_REPLACE_EXISTING);
     }

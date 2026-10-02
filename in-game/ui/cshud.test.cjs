@@ -124,6 +124,14 @@ test('grenades: a Grenades buy category, what you carry with the one in hand, an
   assert.deepEqual(nades.map(n=>n.textContent),['HE','FL ×2']);assert.match(nades[1].className,/hand/);
   const flash=s.walk(s.root).find(e=>e.className==='cs-flash'),fog=s.walk(s.root).find(e=>e.className==='cs-smoke');
   assert.equal(flash.style.opacity,'0.8');assert.equal(fog.style.opacity,String(0.5*0.97));
+  s.hud.render(s.root,Object.assign({},base,{buyOpen:false,phase:'live',grenades:[{id:'flash',label:'FL',count:1,inHand:true}],grenadeHint:'Fire: throw · Right: underhand · Both: medium'}),()=>{});
+  let hint=s.walk(s.root).find(e=>/cs-nade-hint/.test(e.className));
+  assert.equal(hint.textContent,'Fire: throw · Right: underhand · Both: medium');assert.doesNotMatch(hint.className,/armed/);
+  s.hud.render(s.root,Object.assign({},base,{buyOpen:false,phase:'live',grenades:[{id:'flash',label:'FL',count:1,inHand:true}],grenadeHint:'Underhand · let go to throw'}),()=>{});
+  hint=s.walk(s.root).find(e=>/cs-nade-hint/.test(e.className));
+  assert.equal(hint.textContent,'Underhand · let go to throw');assert.match(hint.className,/armed/,'the throw you hold stands out');
+  s.hud.render(s.root,Object.assign({},base,{buyOpen:false,phase:'live',grenades:[{id:'he',label:'HE',count:1,inHand:false}]}),()=>{});
+  assert.ok(!s.walk(s.root).some(e=>/cs-nade-hint/.test(e.className)),'no hint without a grenade in hand');
   s.hud.render(s.root,Object.assign({},base,{buyOpen:false,phase:'live',flash:0,smoke:0}),()=>{});
   assert.ok(!s.walk(s.root).some(e=>e.className==='cs-flash'||e.className==='cs-smoke'),'no overlay once it clears');
 });

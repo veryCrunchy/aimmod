@@ -214,7 +214,8 @@ sealed record MapObjectives(IReadOnlyList<ObjectiveZone> Zones, IReadOnlyList<Ob
 // InBuyZone: inside one of the side's buy zones now (null when the map has none, so buying works anywhere).
 // Grenades: what they carry (GrenadeRules ids, in slot order); Flash: the last flash that hit them.
 sealed record CsPlayerView(string Member, int Team, string Side, int Money, bool Alive, double Health, double Armor, bool Helmet, bool Kit, string? Primary, string? Secondary, int Kills, int Deaths,
-    bool? InBuyZone = null, string? Site = null, string? Callout = null, string? Holding = null, IReadOnlyList<string>? Grenades = null, CsFlashView? Flash = null);
+    bool? InBuyZone = null, string? Site = null, string? Callout = null, string? Holding = null, IReadOnlyList<string>? Grenades = null, CsFlashView? Flash = null,
+    string? HeldGrenade = null);
 // A bomb site's centre (world units), for the HUD's site markers.
 sealed record CsSiteView(string Name, double X, double Y, double Z);
 sealed record CsBombView(string State, string? Carrier, string? Site, double[]? Position, long? ExplodesAt, string? Planter, long? PlantDoneAt, string? Defuser, long? DefuseDoneAt);
@@ -231,6 +232,7 @@ sealed class CsMatch
         public CsWeapon? Primary, Secondary; public double Armor; public bool Helmet, Kit; public int Kills, Deaths;
         public int Held = -1; // the weapon slot the player says they hold (-1: not told yet)
         public readonly List<string> Grenades = []; public CsFlashView? Flash;
+        public string? HeldGrenade; // the grenade in their hand while they hold the grenade slot (their client says)
     }
     readonly Dictionary<string, P> players = new();
     readonly MapObjectives? map;
@@ -314,7 +316,13 @@ sealed class CsMatch
             // CS2: a team kill costs $300 and isn't a kill.
             else if (v0 is not null && v0.Team == k.Team) { k.Kills = Math.Max(0, k.Kills - 1); k.Money = Math.Max(0, k.Money - CsRules.TeamKillPenalty); Event("money", now, killer, "team-kill", -CsRules.TeamKillPenalty); }
         }
-        if (players.TryGetValue(victim, out var v)) { v.Deaths++; v.Primary = null; v.Secondary = null; v.Armor = 0; v.Helmet = false; v.Kit = false; v.Grenades.Clear(); }
+        if (players.TryGetValue(victim, out var v))
+        {
+            // CS: the grenade in their hand (else their best one) falls where they went down, for anyone to pick up.
+            if (GrenadeRules.DropOnDeath(v.Grenades, v.Held == CsRules.GrenadeSlot ? v.HeldGrenade : null) is { } dropped && Combat.Position(victim) is { } at && Phase is "live" or "planted")
+                Grenades.DropItem(victim, dropped, [at.X, at.Y, at.Z], now);
+            v.Deaths++; v.Primary = null; v.Secondary = null; v.Armor = 0; v.Helmet = false; v.Kit = false; v.Grenades.Clear(); v.HeldGrenade = null;
+        }
         // Text: killer, the weapon's id and whether it was a headshot (tab-separated).
         var teamKill = players.TryGetValue(victim, out var vt) && players.TryGetValue(killer, out var kt) && vt.Team == kt.Team && victim != killer;
         Event("kill", now, victim, killer + "\t" + (CsRules.ByProfile(weapon.Name)?.Id ?? "") + "\t" + (head ? "1" : "0") + (teamKill ? "\tTK" : ""));
@@ -491,13 +499,31 @@ sealed class CsMatch
         }
     }
 
+    // A dropped grenade goes to the first alive player who walks over it and may carry it (either side:
+    // a Terrorist can pick up an incendiary).
+    void PickUpGrenades()
+    {
+        foreach (var (id, kind, spot) in Grenades.Items)
+            foreach (var p in players.Values)
+                if (Combat.Alive(p.Id) && Combat.Position(p.Id) is { } at && GrenadeRules.CarryProblem(p.Grenades, kind) is null
+                    && Math.Sqrt((at.X - spot[0]) * (at.X - spot[0]) + (at.Y - spot[1]) * (at.Y - spot[1])) <= GrenadeRules.PickupCm
+                    && at.Z - GrenadeRules.EyeHeightCm is var feet && feet >= spot[2] - 120 && feet <= spot[2] + 120 && Grenades.TakeItem(id))
+                {
+                    p.Grenades.Add(kind);
+                    var sorted = GrenadeRules.Sorted(p.Grenades); p.Grenades.Clear(); p.Grenades.AddRange(sorted);
+                    Event("grenade-picked", Combat.Position(p.Id)?.T ?? 0, p.Id, kind);
+                    break;
+                }
+    }
+
     // The weapon slot a player switched to (their own client says so), for the item other players see in
     // their hands. Only what the player has: an empty slot or another player's bomb falls back.
-    public string? Hold(string id, int slot)
+    public string? Hold(string id, int slot, string? grenade = null)
     {
         if (!players.TryGetValue(id, out var p)) return "not-playing";
         if (slot is < 0 or > 7) return "invalid";
         p.Held = slot;
+        p.HeldGrenade = slot == CsRules.GrenadeSlot && grenade is not null && p.Grenades.Contains(grenade) ? grenade : null;
         return null;
     }
     // What a player holds: the slot they said, if it has an item for them, else their best weapon.
@@ -515,7 +541,8 @@ sealed class CsMatch
         if (origin is not { Length: 3 } || origin.Any(v => !double.IsFinite(v) || Math.Abs(v) > 1e7) || !double.IsFinite(pitch) || !double.IsFinite(yaw) || Math.Abs(pitch) > 90.5 || !double.IsFinite(strength)) return "invalid";
         if (Combat.Position(id) is not { } at) return "no-track";
         if (Math.Sqrt((at.X - origin[0]) * (at.X - origin[0]) + (at.Y - origin[1]) * (at.Y - origin[1]) + (at.Z - origin[2]) * (at.Z - origin[2])) > ThrowOriginToleranceCm) return "origin";
-        return Release(p, kind, origin, GrenadePhysics.ThrowVelocity(pitch, yaw, strength), now);
+        // CS: underhand leaves the hand lower, and a throw carries the thrower's own velocity (their track).
+        return Release(p, kind, GrenadePhysics.ThrowOrigin(origin, strength), GrenadePhysics.ThrowVelocity(pitch, yaw, strength, Combat.Velocity(id)), now, origin);
     }
     // A host-run bot's throw (BotGrenades): the velocity it aimed, at most a full throw.
     public string? BotThrow(string id, string kind, double[] origin, double[] velocity, long now)
@@ -527,12 +554,13 @@ sealed class CsMatch
         var speed = Math.Sqrt(velocity.Sum(v => v * v));
         return Release(p, kind, origin, speed > GrenadePhysics.ThrowSpeed ? velocity.Select(x => x * GrenadePhysics.ThrowSpeed / speed).ToArray() : velocity, now);
     }
-    string? Release(P p, string kind, double[] origin, double[] velocity, long now)
+    string? Release(P p, string kind, double[] origin, double[] velocity, long now, double[]? eye = null)
     {
         p.Grenades.Remove(kind);
-        // A decoy sounds like its owner's gun.
-        var weapon = kind == GrenadeRules.Decoy ? (p.Primary ?? p.Secondary)?.Class ?? "pistol" : null;
-        Grenades.Throw(p.Id, kind, origin, velocity, now, weapon);
+        if (!p.Grenades.Contains(kind) && p.HeldGrenade == kind) p.HeldGrenade = null;
+        // A decoy sounds like its owner's gun: its sound class and the gun itself (its fire rate).
+        var gun = kind == GrenadeRules.Decoy ? p.Primary ?? p.Secondary ?? CsRules.DefaultPistol(SideOf(p.Team)) : null;
+        Grenades.Throw(p.Id, kind, origin, velocity, now, gun?.Class, gun?.Id, eye);
         return null;
     }
 
@@ -573,6 +601,7 @@ sealed class CsMatch
                 }
             }
             PickUp(now);
+            PickUpGrenades();
             var tAlive = Side(CsRules.T).Count(p => Combat.Alive(p.Id)); var ctAlive = Side(CsRules.CT).Count(p => Combat.Alive(p.Id));
             if (Phase == "planted")
             {
@@ -659,7 +688,8 @@ sealed class CsMatch
 
     public CsView View() => new(Round, Phase, PhaseEndsAt, LiveAt, [score[0], score[1]], SideOf(1), HalfRounds, Overtime,
         players.Values.Select(p => new CsPlayerView(p.Id, p.Team, SideOf(p.Team), p.Money, Combat.Alive(p.Id), Math.Round(Combat.Health(p.Id), 1), Math.Round(p.Armor, 1), p.Helmet, p.Kit,
-            p.Primary?.Id, p.Secondary?.Id, p.Kills, p.Deaths, InBuyZone(p), SiteOf(p), CalloutOf(p), Holding(p).Id, p.Grenades.Count > 0 ? p.Grenades.ToArray() : null, p.Flash)).ToArray(),
+            p.Primary?.Id, p.Secondary?.Id, p.Kills, p.Deaths, InBuyZone(p), SiteOf(p), CalloutOf(p), Holding(p).Id, p.Grenades.Count > 0 ? p.Grenades.ToArray() : null, p.Flash,
+            p.Held == CsRules.GrenadeSlot ? p.HeldGrenade : null)).ToArray(),
         new CsBombView(bombState, carrier, site, bombAt, explodesAt, planter, plantDoneAt, defuser, defuseDoneAt), lastWinner, lastReason, WinnerTeam, events.TakeLast(16).ToArray(),
         roundSpawns.Count > 0 ? new Dictionary<string, double[]>(roundSpawns) : null,
         map?.BombSites.Select(z => new CsSiteView(z.Name, Math.Round((z.Min[0] + z.Max[0]) / 2), Math.Round((z.Min[1] + z.Max[1]) / 2), Math.Round((z.Min[2] + z.Max[2]) / 2))).ToArray(),

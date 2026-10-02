@@ -116,6 +116,22 @@ namespace aimmod::cs
                 a.kind = std::string(c[2]);
                 s.fires.push_back(a);
             }
+            else if (c[0] == "flame" && c.size() == 8)
+            {
+                GrenadeState::Flame f;
+                std::int64_t id = 0;
+                if (!Int(c[1], id) || s.fires.empty() || s.fires.back().id != id || s.fires.back().flames.size() >= 32 || !Xyz(c, 2, f.x, f.y, f.z) || !Num(c[5], f.radius) || f.radius <= 0 ||
+                    f.radius > 1000 || !Int(c[6], f.startMs) || !Int(c[7], f.endMs))
+                    return bad(line);
+                s.fires.back().flames.push_back(f);
+            }
+            else if (c[0] == "dropped" && c.size() == 6)
+            {
+                GrenadeState::Dropped d;
+                if (!Int(c[1], d.id) || !KnownGrenade(c[2]) || !Xyz(c, 3, d.x, d.y, d.z) || s.dropped.size() >= 48) return bad(line);
+                d.kind = std::string(c[2]);
+                s.dropped.push_back(d);
+            }
             else if (c[0] == "blast" && c.size() == 7)
             {
                 GrenadeState::Blast b;
@@ -326,14 +342,20 @@ namespace aimmod::cs
         return u >= 1 ? 0 : 0.85 * std::pow(1 - u, 1.5);
     }
 
-    std::vector<Flame> FireFlames(double radius, double seconds, double secondsLeft, std::int64_t seed)
+    double FlameLife(std::int64_t startMs, std::int64_t endMs, std::int64_t nowMs)
+    {
+        if (nowMs < startMs || nowMs >= endMs) return 0;
+        return std::clamp(std::min((nowMs - startMs) / 300.0, (endMs - nowMs) / 1000.0), 0.0, 1.0);
+    }
+
+    std::vector<Flame> FireFlames(double radius, double seconds, double secondsLeft, std::int64_t seed, int count)
     {
         std::vector<Flame> flames;
         const double life = std::clamp(std::min(seconds / 0.3, secondsLeft), 0.0, 1.0);
         if (life <= 0) return flames;
         // The burning pool on the ground.
         flames.push_back({{0, 0, 1.5}, {radius * 2 * (0.6 + 0.4 * life), radius * 2 * (0.6 + 0.4 * life), 2.5}, {0.55, 0.16, 0.02}});
-        constexpr int Count = 12;
+        const int Count = std::clamp(count, 1, 24);
         constexpr double Golden = 2.39996322972865332;
         for (int i = 0; i < Count; ++i)
         {

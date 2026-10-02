@@ -108,7 +108,9 @@
     var gun=[c.primary,c.secondary].filter(function(x){return !!x;}).join(' · ');if(gun)me.appendChild(node('div','cs-guns',gun));
     // Grenades you carry (slot 4: the key cycles them), the one in hand marked.
     if(c.grenades&&c.grenades.length){var nades=node('div','cs-nades');nades.appendChild(node('span','cs-nade-key',c.grenadeKey||'4'));
-      c.grenades.forEach(function(g){nades.appendChild(node('span','cs-nade'+(g.inHand?' hand':'')+' '+g.id,g.label+(g.count>1?' ×'+g.count:'')));});me.appendChild(nades);}
+      c.grenades.forEach(function(g){nades.appendChild(node('span','cs-nade'+(g.inHand?' hand':'')+' '+g.id,g.label+(g.count>1?' ×'+g.count:'')));});me.appendChild(nades);
+      // With one in hand: how to throw it, or which throw you're holding (full, medium, underhand).
+      if(c.grenadeHint)me.appendChild(node('div','cs-nade-hint'+(/let go|…/.test(c.grenadeHint)?' armed':''),c.grenadeHint));}
     // The bomb: yours (with the drop key), or which teammate has it.
     if(c.hasBomb){var bomb=node('div','cs-bomb');bomb.appendChild(node('span','cs-bomb-icon','C4'));bomb.appendChild(node('span','','You have the bomb · '+(c.dropKey||'G')+' drops it'));me.appendChild(bomb);}
     else if(c.bombCarrier)me.appendChild(node('div','cs-bomb mate','Bomb: '+c.bombCarrier));

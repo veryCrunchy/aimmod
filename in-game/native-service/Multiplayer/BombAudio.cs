@@ -262,6 +262,8 @@ sealed class RoundSoundPlan
                 case "defused": cues.Add(new("defuse-done")); break;
                 case "exploded": cues.Add(new("explosion", cs.Bomb.Position)); break;
                 case "bomb-dropped" or "bomb-picked" when me?.Side == CsRules.T: cues.Add(new(e.Kind == "bomb-dropped" ? "dropped" : "picked")); break;
+                // A grenade you picked up off the floor (CsMatch.PickUpGrenades): the same small pickup click.
+                case "grenade-picked" when mine: cues.Add(new("picked", null, 0.6)); break;
             }
         }
         lastEvent = Math.Max(lastEvent, latest);

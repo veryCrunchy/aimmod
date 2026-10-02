@@ -2,8 +2,8 @@
 // CS grenades in the world and in the hand (in-game/docs/game-modes.md 6.6.5), the engine-free half:
 // the service's grenades.tsv, where a grenade in flight is (the host's path, the same formulas as the
 // service's GrenadePhysics), and AimMod's own simple models: the six grenades (engine basic shapes,
-// tinted), the smoke cloud's puffs, the fire's flames and the blasts. AimModCore's CsGrenades draws
-// them; only in AimMod match scenarios with a CS round.
+// tinted), the smoke cloud's puffs, the fire's flames over the floor and the blasts. AimModCore's
+// CsGrenades draws them; only in AimMod match scenarios with a CS round.
 #include <aimmod/CsGear.hpp>
 
 #include <cstdint>
@@ -34,8 +34,11 @@ namespace aimmod::cs
     //   fly\t<id>\t<kind>\t<thrown ms>\t<goes off ms, 0>\t<keys>\t<t x y z vx vy vz motion> x keys
     //   smoke\t<id>\t<x>\t<y>\t<z>\t<start ms>\t<end ms>
     //   fire\t<id>\t<kind>\t<x>\t<y>\t<z>\t<radius>\t<start ms>\t<end ms>
+    //   flame\t<fire id>\t<x>\t<y>\t<z>\t<radius>\t<start ms>\t<end ms>   (each flame of the fire line before it)
     //   decoy\t<id>\t<x>\t<y>\t<z>\t<start ms>\t<end ms>
     //   blast\t<id>\t<kind>\t<x>\t<y>\t<z>\t<at ms>
+    //   dropped\t<id>\t<kind>\t<x>\t<y>\t<z>                     (a grenade on the floor to pick up)
+    //   flash\t<id>\t<at ms>\t<hold ms>\t<fade ms>\t<peak>
     struct GrenadeState
     {
         std::uint64_t sequence{};
@@ -53,12 +56,25 @@ namespace aimmod::cs
             std::int64_t startMs{}, endMs{};
             std::vector<GrenadeKey> keys;
         };
+        // A fire's flame on the floor (it spreads ring by ring: each has its own start and end).
+        struct Flame
+        {
+            double x{}, y{}, z{}, radius{};
+            std::int64_t startMs{}, endMs{};
+        };
         struct Area
         {
             std::int64_t id{};
             std::string kind; // smoke, decoy, or the fire's grenade (molotov, incendiary)
             double x{}, y{}, z{}, radius{};
             std::int64_t startMs{}, endMs{};
+            std::vector<Flame> flames; // a fire's flames (none from an older service: one pool of `radius`)
+        };
+        struct Dropped
+        {
+            std::int64_t id{};
+            std::string kind;
+            double x{}, y{}, z{};
         };
         struct Blast
         {
@@ -77,6 +93,7 @@ namespace aimmod::cs
         std::vector<Flying> flying;
         std::vector<Area> smokes, fires, decoys;
         std::vector<Blast> blasts;
+        std::vector<Dropped> dropped;
         std::optional<Flash> flash;
     };
     // Validated; nullopt for a bad header or row (the whole file is ignored). `why`: the first bad line.
@@ -90,8 +107,12 @@ namespace aimmod::cs
     };
     Point GrenadeAt(const std::vector<GrenadeKey>& keys, double ms);
 
-    // AimMod's grenade models, about 7-12 cm (x up the grenade's length, resting upright).
+    // AimMod's grenade models, about 7-12 cm (x up the grenade's length, resting upright): their real
+    // size, right for the first-person hand.
     const std::vector<Part>& GrenadeModel(std::string_view kind);
+    // In the world (in flight, lying on the floor) a grenade is drawn this much larger: the CS ports
+    // are 4.4 cm a unit, 1.73 times real size, so a grenade keeps its size against the map and players.
+    constexpr double WorldGrenadeScale = 4.4 / 2.54;
     // The grenade in the hand: at rest, the pin pulled (raised back, ready), and gone for a moment after a throw.
     Hold GrenadeInHand(bool pin);
     constexpr double ThrownHideSeconds = 0.35;
@@ -137,7 +158,10 @@ namespace aimmod::cs
     {
         double offset[3], size[3], colour[3];
     };
-    std::vector<Flame> FireFlames(double radius, double seconds, double secondsLeft, std::int64_t seed);
+    // count: the tongues of flame around the pool (one flame of a spreading fire has fewer).
+    std::vector<Flame> FireFlames(double radius, double seconds, double secondsLeft, std::int64_t seed, int count = 12);
+    // How big one flame of a fire is (0..1): growing in over 0.3 s from its own start, dying down in its last second.
+    double FlameLife(std::int64_t startMs, std::int64_t endMs, std::int64_t nowMs);
 
     // A blast's sphere: its diameter (cm) `seconds` after it went off and its colour; 0 when it's over.
     double BlastSize(std::string_view kind, double seconds);

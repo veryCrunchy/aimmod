@@ -57,11 +57,11 @@ namespace aimmod
             }();
             return parts;
         }
-        std::vector<cs::Part> FireParts(double radius, std::int64_t seed)
+        std::vector<cs::Part> FireParts(double radius, std::int64_t seed, int count = 12)
         {
             std::vector<cs::Part> list;
             bool pool = true;
-            for (const cs::Flame& f : cs::FireFlames(radius, 1.0, 10.0, seed))
+            for (const cs::Flame& f : cs::FireFlames(radius, 1.0, 10.0, seed, count))
             {
                 list.push_back({pool ? Cylinder : Sphere, {f.offset[0], f.offset[1], f.offset[2]}, {f.size[0], f.size[1], f.size[2]}, {0, 0, 0}, {f.colour[0], f.colour[1], f.colour[2]}, false});
                 pool = false;
@@ -283,6 +283,13 @@ namespace aimmod
                 s.scale = sz == sx ? sx : -1;
             }
         };
+        // A grenade in the world: its model at the map's scale (set once, on the new actor).
+        const double world[3] = {cs::WorldGrenadeScale, cs::WorldGrenadeScale, cs::WorldGrenadeScale};
+        auto grenade = [&](const std::string& key, const std::string& kind, double x, double y, double z) -> Shown* {
+            Shown* s = Ensure(key, character, x, y, z, cs::GrenadeModel(kind));
+            if (s && s->scale != cs::WorldGrenadeScale) scaleTo(*s, world[0], world[1], world[2]);
+            return s;
+        };
         if (m_state)
         {
             for (const auto& f : m_state->flying)
@@ -294,7 +301,7 @@ namespace aimmod
                 const cs::GrenadeKey* key = &f.keys.front();
                 for (const auto& k : f.keys)
                     if (k.t <= ms) key = &k;
-                if (Shown* s = Ensure("fly:" + std::to_string(f.id), character, p.x, p.y, p.z, cs::GrenadeModel(f.kind)))
+                if (Shown* s = grenade("fly:" + std::to_string(f.id), f.kind, p.x, p.y, p.z))
                 {
                     const bool flying = key->motion == cs::GrenadeFlight;
                     Move(s->actor.Get(), p.x, p.y, p.z + (flying ? 0 : 3), flying ? std::fmod(ms * 0.9, 360.0) : 90, std::fmod(ms * (flying ? 0.4 : 0) + f.id * 47.0, 360.0));
@@ -302,7 +309,7 @@ namespace aimmod
             }
             for (const auto& a : m_state->smokes)
             {
-                if (Shown* can = Ensure("smoke-can:" + std::to_string(a.id), character, a.x, a.y, a.z + 3, cs::GrenadeModel("smoke"))) Move(can->actor.Get(), a.x, a.y, a.z + 3, 90, a.id * 47.0);
+                if (Shown* can = grenade("smoke-can:" + std::to_string(a.id), "smoke", a.x, a.y, a.z + 4)) Move(can->actor.Get(), a.x, a.y, a.z + 4, 90, a.id * 47.0);
                 if (now < a.startMs || now >= a.endMs) continue;
                 const cs::Point c = cs::SmokeCentre(a.x, a.y, a.z);
                 if (Shown* s = Ensure("smoke:" + std::to_string(a.id), character, c.x, c.y, c.z, PuffParts(), true))
@@ -311,6 +318,24 @@ namespace aimmod
             for (const auto& a : m_state->fires)
             {
                 if (now < a.startMs || now >= a.endMs) continue;
+                // A spreading fire: each flame on the floor where the host found it, growing in and dying down on its own.
+                if (!a.flames.empty())
+                {
+                    for (std::size_t i = 0; i < a.flames.size(); ++i)
+                    {
+                        const auto& f = a.flames[i];
+                        const double life = cs::FlameLife(f.startMs, f.endMs, now);
+                        if (life <= 0) continue;
+                        const double t = (now - f.startMs) / 1000.0;
+                        if (Shown* s = Ensure("flame:" + std::to_string(a.id) + ":" + std::to_string(i), character, f.x, f.y, f.z, FireParts(f.radius, a.id * 31 + static_cast<std::int64_t>(i), 6)))
+                        {
+                            const double flicker = 0.8 + 0.2 * std::sin(t * 9.1 + i) * std::sin(t * 5.3 + 1.0 + i);
+                            const double l = std::max(0.05, life);
+                            scaleTo(*s, l * (0.97 + 0.03 * std::sin(t * 4.0 + i)), l * (0.97 + 0.03 * std::cos(t * 3.7 + i)), l * flicker);
+                        }
+                    }
+                    continue;
+                }
                 const double t = (now - a.startMs) / 1000.0, left = (a.endMs - now) / 1000.0;
                 if (Shown* s = Ensure("fire:" + std::to_string(a.id), character, a.x, a.y, a.z, FireParts(a.radius, a.id)))
                 {
@@ -322,7 +347,10 @@ namespace aimmod
             }
             for (const auto& a : m_state->decoys)
                 if (now >= a.startMs && now < a.endMs)
-                    if (Shown* s = Ensure("decoy:" + std::to_string(a.id), character, a.x, a.y, a.z + 3, cs::GrenadeModel("decoy"))) Move(s->actor.Get(), a.x, a.y, a.z + 3, 90, a.id * 47.0);
+                    if (Shown* s = grenade("decoy:" + std::to_string(a.id), "decoy", a.x, a.y, a.z + 4)) Move(s->actor.Get(), a.x, a.y, a.z + 4, 90, a.id * 47.0);
+            // Grenades dropped by players who went down, lying on their side until someone picks them up.
+            for (const auto& d : m_state->dropped)
+                if (Shown* s = grenade("dropped:" + std::to_string(d.id), d.kind, d.x, d.y, d.z + 4)) Move(s->actor.Get(), d.x, d.y, d.z + 4, 90, d.id * 47.0);
             for (const auto& b : m_state->blasts)
             {
                 const double size = cs::BlastSize(b.kind, (now - b.atMs) / 1000.0);

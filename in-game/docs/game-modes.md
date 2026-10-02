@@ -1681,30 +1681,43 @@ AimMod's own: procedural models of engine basic shapes and synthesised sounds.
 
 | Grenade | Price | Side | Carry | What it does |
 | --- | --- | --- | --- | --- |
-| HE Grenade | $300 | both | 1 | Goes off 1.5 s after the throw: 98 damage at the blast, a bell falloff to nothing at 15.4 m (350 units); half reaches health through armour; no damage through walls |
-| Flashbang | $200 | both | 2 | Pops at 1.5 s: blinds everyone (teammates and the thrower too) by how directly they look at it and how far it is, if nothing blocks the line |
-| Smoke Grenade | $300 | both | 1 | Pops once it lies still (at least 1 s in): a cloud 12.4 m across and 6 m tall for 18 s (grows in over 1.5 s, thins over the last 2 s) |
-| Molotov | $400 | T | 1 | Catches where it first lands on a floor within 2 s (else bursts in the air): a 2.5 m fire for 7 s, 40 damage a second in 0.25 s ticks, armour doesn't help |
+| HE Grenade | $300 | both | 1 | Goes off 1.6 s after the throw (CS's first 0.2 s think after 1.5 s): 98 damage at the blast, a bell falloff to nothing at 15.4 m (350 units); half reaches health through armour; no damage through walls |
+| Flashbang | $200 | both | 2 | Pops at 1.6 s: blinds everyone (teammates and the thrower too) by how directly they look at it and how far it is, if nothing blocks the line |
+| Smoke Grenade | $300 | both | 1 | Pops at the first 0.2 s think once it lies still: a cloud 12.4 m across and 6 m tall for 18 s (grows in over 1 s, thins over the last 2 s) |
+| Molotov | $400 | T | 1 | Catches where it first lands on a floor within 2 s (else bursts in the air): up to 16 flames spreading over the floor (below), 7 s each, 40 damage a second in 0.25 s ticks, armour doesn't help |
 | Incendiary Grenade | $600 | CT | 1 | The same fire |
-| Decoy Grenade | $50 | both | 1 | Once it lies still: 15 s of fake gunfire that sounds like its owner's weapon, then a small pop |
+| Decoy Grenade | $50 | both | 1 | At the first think once it lies still: 15 s of bursts of its owner's gun at that gun's fire rate, then a small pop |
 
 - **Carrying.** Four grenades in all, one of each but two flashbangs, and
   one fire grenade (`GrenadeRules.CarryProblem`). They stay through rounds
-  you survive and are lost when you die or at halftime. Buying is the usual
-  `buy {item}` (the buy menu has a Grenades column; refused: `owned`,
-  `carry-limit`, `side`, `money`).
+  you survive and at halftime are gone. Buying is the usual `buy {item}`
+  (the buy menu has a Grenades column; refused: `owned`, `carry-limit`,
+  `side`, `money`).
+- **Dropped on death.** A player going down drops the grenade in their hand
+  (the client's `hold {slot, grenade}` says which), else their most valuable
+  one (`GrenadeRules.DropOnDeath`); the rest are lost. It lies on the floor
+  under them (the game's `floor` trace; eye height below without one) as a
+  `dropped` grenade, and the first alive player who walks over it (within
+  0.9 m) and may carry it picks it up, either side (`grenade-picked` event).
+  Dropped grenades are gone with the round.
 - **In the hand.** Slot 4 (key 4) holds one profile, `AimMod CS Grenade`
   (Blank viewmodel, no shot sound, never hits: the client drops its claims,
   the host refuses slot 3). Which grenade is in hand is the service's: key 4
   again with a grenade in hand picks the next one you carry (HE, flash, smoke,
-  fire, decoy). The service reads the buttons like the other CS keys: fire or
-  right mouse pulls the pin; letting go throws: fire alone a full throw, right
-  mouse alone underhand (30 %), both a medium throw (65 %). The client sends
+  fire, decoy). The service reads the buttons like the other CS keys
+  (`GrenadeTrigger`): once the grenade is drawn (0.3 s; a click left over
+  from the gun doesn't count) fire or right mouse pulls the pin, which takes
+  0.35 s; letting go throws it 0.1 s later (a tap: as soon as the pin is out)
+  with the buttons last held: fire alone a full throw, right mouse alone
+  underhand (30 %), both a medium throw (65 %). The client sends
   `throw {kind, strength, o: camera, r: [pitch, yaw]}`; the host checks the
   round is on (not in freeze time), you carry it and the throw starts within
   1.5 m of your own camera track. The throw is CS's: 675 units/s at full
-  strength, aimed 10 degrees up at level. The last grenade thrown empties the
-  slot and AimModCore draws your best weapon.
+  strength, aimed 10 degrees up at level, underhand from 12 units lower, plus
+  1.25 times the thrower's own velocity from their track (running and jumping
+  throws go further; at most 15 m/s of it; bot throws are aimed as given).
+  The last grenade thrown empties the slot and AimModCore draws your best
+  weapon.
 - **Flight** (`GrenadePhysics`, the same steps in AimModSteam's
   `GrenadePhysics.hpp`): gravity 0.4 of CS's 800 units/s², 1/64 s steps, a
   bounce off whatever a line trace hits keeps 45 % of the speed, a floor
@@ -1713,40 +1726,61 @@ AimMod's own: procedural models of engine basic shapes and synthesised sounds.
   so a key list draws the same everywhere.
   - The host asks its own game for the path (`grenade-sim.tsv`: `throw` rows);
     AimModSteam flies it with the map's line traces (world static and dynamic
-    objects, no pawns) and answers in `grenade-paths.tsv` (`path` rows, 9
-    numbers a key). No answer in 350 ms: the host flies it over a level floor
-    under the thrower. Both implementations are checked against the same
-    numbers.
+    objects; every pawn, the players' and the bots' bodies with their hitbox
+    components, is left out) and answers in `grenade-paths.tsv` (`path` rows,
+    9 numbers a key). No answer in 350 ms: the host flies it over a level
+    floor eye height under the thrower. Both implementations are checked
+    against the same numbers.
   - The host broadcasts the path with the grenade (`CsView.Grenades`, state
     `flying`, `Keys`, `Ends`), and when it went off: every peer draws the same
-    bounces, and the pop where the host says.
+    bounces, and the pop where the host says (checked: the broadcast keys and
+    `grenades.tsv` stay within a centimetre of the host's own path).
 - **Line of sight.** An HE or flash blast asks the game (`los` rows) whether
   the line from the blast to each player in reach (eye, and the body for HE)
   is clear; the answers come back in `grenade-paths.tsv`, and a blast waits
   300 ms for them (then counts the line as clear). A smoke between the flash
-  and you also keeps you from being blinded.
+  and you also keeps you from being blinded. Build 50's "my own flash doesn't
+  blind me": KovaaK's characters carry hitbox components that block line
+  traces under their own object type, so the line to the thrower's own eye
+  (which sits inside their body) always hit them and they read "behind a
+  wall" (the same for bots). The traces now leave every pawn out.
 - **Flashes.** The amount (0..1): full when you look within about 53 degrees
   of the pop, less to the side, 0.1 behind you; full within 400 units
   (17.6 m), nothing at 1500 (66 m). The screen stays white for
-  2.5 s × amount², then clears over 2.8 s × amount (`CsPlayerView.Flash`):
-  about 5 s in all for a flash in your face, 2-3 s from the side or further
-  off. The white reaches your screen twice: AimModCore's flash layer (above
-  every view, from the `flash` line of `grenades.tsv`, with the frozen
-  after-image of the moment of the flash under it for a strong one) and the
-  notice page's top layer (`#cs-flash`, played from `cs.flashFx`). A hard
-  flash also rings in your ears. A flashed bot sees nothing. The host logs
-  what each flash did (`[grenades] flash #…`: who it blinded, by how much,
-  and whether the game answered the sight lines) and each player's service
-  logs `[grenades] you were flashed`.
+  2.5 s × amount², then clears over 2.8 s × amount (`CsPlayerView.Flash`),
+  at a white of 1.6 × amount (fully white from 0.6, a light veil for a glance
+  or a flash behind you): about 5 s in all for a flash in your face, 2-3 s
+  from the side or further off, under half a second looking away. The white
+  reaches your screen twice: AimModCore's flash layer (above every view, from
+  the `flash` line of `grenades.tsv`, with the frozen after-image of the
+  moment of the flash under it for a strong one) and the notice page's top
+  layer (`#cs-flash`, played from `cs.flashFx`). A hard flash also rings in
+  your ears. A flashed bot sees nothing. The host logs what each flash did
+  (`[grenades] flash #…`: who it blinded, by how much, and whether the game
+  answered the sight lines) and each player's service logs `[grenades] you
+  were flashed`.
 - **Smoke.** It blocks sight for bots (the service drops their sight of
   anyone behind it), enemy name tags (no `world-tags.tsv` row for an enemy
   behind it from your camera) and flashes; shots go through it, as in CS. It
   spreads to its full size (about 12 m across, a chokepoint or a doorway and
   its sides) over 1 s. Inside it AimModCore flattens the picture to grey (a
   post-process blended in by how deep the camera is) and the HUD's veil greys
-  the view under the HUD.
-  A smoke puts out a fire it covers, and a fire grenade landing in a smoke
-  never catches (an `extinguished` blast with a hiss).
+  the view under the HUD. A smoke puts out the flames it covers (the rest of
+  the fire burns on), a fire grenade landing in a smoke never catches, and a
+  fire never spreads into one (an `extinguished` blast with a hiss).
+- **Fire** (CS's inferno). Where a molotov or incendiary lands it catches as
+  one flame on the floor; every 0.16 s a new ring spreads from the last one:
+  six spots a flame (42 units, 1.85 m) apart around each flame, each needing
+  a floor (a `floor` row: the game's trace down) at most 50 cm above or 2 m
+  below the flame it comes from (fire runs down steps and slopes, hardly up),
+  a clear line from it (a `los` row: no wall in between) and no smoke over
+  it; at most 16 flames within 150 units (6.6 m) of where it caught, four
+  rings. Without answers in 300 ms a spot counts as level and clear. Each
+  flame covers 1.1 m and burns 7 s from its own start; the fire is over when
+  its last flame dies. The view: state `fire`, `Pos` where it caught,
+  `Radius` how far its flames reach, `Flames` (4 numbers a flame: x, y, z of
+  the floor, ms after `At` it starts); `grenades.tsv` has a `flame` line for
+  each.
 - **Damage** goes through the host's `CombatMatch.AreaHit`: the CS armour
   model, friendly fire at the lobby's team share, your own grenade can hurt
   and kill you (that takes a kill away), and the kill feed names the grenade
@@ -1758,18 +1792,28 @@ AimMod's own: procedural models of engine basic shapes and synthesised sounds.
   40 overlapping grey puffs (engine spheres, squashed, lighter on top) that
   come out of the canister, spread over a second, drift and billow slowly and
   thin out from the edge (one actor and 40 mesh components per smoke, posed
-  at 30 Hz), the smoke canister and decoys lying
-  where they stopped, a burning pool with flickering flames, and blasts (an HE
-  fireball, the flash's white pop, a fire grenade bursting or put out).
+  at 30 Hz), the smoke canister, decoys and dropped grenades lying where they
+  stopped, each flame of a fire (a burning pool and six flickering tongues,
+  growing in and dying down on its own), and blasts (an HE fireball, the
+  flash's white pop, a fire grenade bursting or put out). A grenade in the
+  world is drawn at the map's scale (`WorldGrenadeScale`, 1.73: the ports are
+  4.4 cm a unit), the one in hand at its real size.
 - **Sounds** (`GrenadeSounds`, in `--write-bomb-sounds`): the pin, the throw,
   bounces as the path reaches them, the HE blast, the flash's pop and ringing,
   the smoke's hiss, fire catching and crackling, a fire put out, and the
-  decoy's shots by weapon class (pistol, SMG, rifle, sniper, heavy), all
-  positional at the "Bomb and round sounds" volume.
+  decoy's last pop, all positional at the "Bomb and round sounds" volume
+  (`GrenadeSoundPlan`'s gains: the HE 1.3, the flash 1.05, fire catching
+  0.85, a fire put out 0.8, the smoke 0.7, the decoy's pop 0.6, the pin,
+  bounces and crackling 0.55, the throw 0.5). A decoy's shots are the other
+  players' gunfire itself (`gun-<class>` of its owner's gun, at the gunfire
+  volume and distance), each scheduled at its own moment so its fire rate
+  holds.
 - **HUD.** The grenades you carry under your guns, the one in hand marked
-  with key 4; the flash's white and the smoke's grey veil; the kill feed's
-  grenade names. Teammates' name tags show their grenades as small chips
-  (gear `g=he,flash,flash,smoke`).
+  with key 4, and under them how to throw (`grenadeHint`: "Fire: throw ·
+  Right: underhand · Both: medium") or, with the pin pulled, which throw you
+  hold ("Medium throw · let go to throw"); the flash's white and the smoke's
+  grey veil; the kill feed's grenade names. Teammates' name tags show their
+  grenades as small chips (gear `g=he,flash,flash,smoke`).
 - **Bots** (`BotGrenades`, after `BotBrain` each tick). Buys in freeze time
   with the money left after guns and armour: Easy a flash; Normal a smoke, a
   flash and an HE; Hard a smoke, a flash, a fire grenade, an HE and a second
@@ -1783,17 +1827,46 @@ AimMod's own: procedural models of engine basic shapes and synthesised sounds.
   `GrenadeAim.Timed` (the velocity that lands a grenade on a point, or has it
   there when it goes off), and `LobbyCore.BotThrow` (any carried grenade at
   any velocity up to a full throw).
+- **For the bot logic** (`GrenadeIntel`, read-only over a `CsView`, host
+  ms): `Blind(cs, member, t)` (how white their screen is, 0..1) and
+  `BlindUntil(cs, member, threshold = 0.6)` (until when; a bot sees nothing
+  from 0.6, `MultiplayerService.GrenadeSight`); `Smokes(cs, t)` (each cloud's
+  centre, radius, half height and size now, 0..1) and `SmokeBlocks`;
+  `Fires(cs, t)` (each fire's flames burning at `t`, their radius, start and
+  end) and `InFire(cs, feet, t)`; `Sounds(cs, from, to)` (grenade sounds in a
+  window, in time order: a decoy's shots as `gunfire` with `Decoy: true` and
+  the gun it mimics, so a bot may know what players can't; bounces, blasts,
+  smokes and fires catching); `Dropped(cs)` (grenades on the floor to pick
+  up). The view's shapes are unchanged apart from additions: `CsGrenadeView`
+  gained `Gun` (a decoy's owner's weapon id) and `Flames` (a fire's flames),
+  and the state `dropped`; `CsPlayerView` gained `HeldGrenade` (the grenade
+  in their hand while they hold the slot); `Radius` of a fire is now how far
+  its flames reach (`GrenadeRules.FireRadiusCm`: two rings on open floor,
+  about 4.8 m).
 - **Checks:** prices, sides and carry limits, the cycle order, buying,
-  throws (freeze time, the grenade, the origin), HE falloff, armour and line
-  of sight, flash amounts and timings, teammates and the thrower flashed,
-  smoke blocking lines, bot sight and flashes, fire damage over time, fire
-  put out by smoke and never catching in one, kills and the kill feed, the
-  deterministic path (the same twice, bounces off a wall, exact between keys,
-  the level-floor numbers both implementations share), the files, sounds,
-  name-tag chips, the HUD, and the bots' buys, aim and throws.
-- **Not yet:** grenades dropped on death for others to pick up, grenade
-  models in others' hands (avatars), the radar, smoke that bends around walls
-  (it is an ellipsoid), and fire that spreads over the floor's shape.
+  throws (freeze time, the grenade, the origin), throw strengths, the
+  underhand drop and the thrower's run and jump carried into the throw, the
+  pin and release timing and the HUD's hint, bounces keeping 45 % and the
+  slide stopping evenly, fuses (1.6 s, a smoke and a decoy at the first think
+  at rest, a molotov on landing or bursting at 2 s), HE falloff, armour and
+  line of sight, flash amounts and timings, the thrower looking at their own
+  flash fully blinded and looking away barely touched, teammates flashed,
+  nothing through a wall, smoke blocking lines, bot sight and flashes, fire
+  spreading ring by ring over the floor the game traces (never through a
+  wall, down a step, not up a ledge), damage in any flame, a smoke putting out
+  only the flames it covers, kills and the kill feed, grenades dropped on
+  death and picked up (not past the carry limits), the decoy's bursts at its
+  gun's fire rate played as that gun's gunfire at their own moments, the
+  sounds' volume order, `GrenadeIntel`, the deterministic path (the same
+  twice, bounces off a wall, exact between keys, the level-floor numbers both
+  implementations share, host and client within a centimetre), the files
+  (with `floor` rows, `flame` and `dropped` lines), name-tag chips, the HUD,
+  and the bots' buys, aim and throws.
+- **Not yet:** grenades in other players' hands (KovaaK's has no
+  third-person grenade, and avatars are AimModSteam's: others hold their gun
+  while they throw), the radar, smoke that bends around walls (it is an
+  ellipsoid), and a molotov that steeper floors (CS: over 30 degrees) bounce
+  off rather than catch on (here any surface a grenade lands on).
 
 ### 6.7 Capture the flag
 

@@ -176,6 +176,16 @@ sealed class CombatMatch
         var dt = Math.Max(1, last.T - before.T) / 1000.0;
         return Math.Sqrt((last.X - before.X) * (last.X - before.X) + (last.Y - before.Y) * (last.Y - before.Y)) / dt;
     }
+    // Velocity over the last `spanMs` (cm/s: x, y, z) from the player's own track: what a grenade
+    // thrown on the run or in a jump carries. Zero without two samples close enough.
+    public double[] Velocity(string id, long spanMs = 100)
+    {
+        if (!players.TryGetValue(id, out var p) || p.Track.Count < 2) return [0, 0, 0];
+        var last = p.Track[^1]; var before = At(p.Track, last.T - spanMs) ?? p.Track[^2];
+        var dt = (last.T - before.T) / 1000.0;
+        if (dt < 0.02 || dt > 0.5) return [0, 0, 0];
+        return [(last.X - before.X) / dt, (last.Y - before.Y) / dt, (last.Z - before.Z) / dt];
+    }
     // Round start: everyone alive at full health, spawn-protected for a moment, scores kept.
     public void Revive(string id, long now, double health, long protectMs = 0)
     {

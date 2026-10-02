@@ -21,9 +21,16 @@ sealed record CsFlashView(long At, int HoldMs, int FadeMs, double Amount);
 
 // A grenade in the CS view (clients mirror it, AimModCore and the HUD draw it):
 //  - flying: At = thrown (host ms), Keys = its path (GrenadePhysics.Flat), Ends = when it goes off (null until known);
-//  - smoke, fire, decoy: At = start, Ends = end, Pos = where it is (fire: Radius);
-//  - blast: an HE explosion, a flash pop, a molotov that burst in the air or fizzled in smoke, a decoy's last pop.
-sealed record CsGrenadeView(long Id, string Kind, string Owner, string State, long At, long? Ends = null, double[]? Pos = null, double[]? Keys = null, string? Weapon = null, double Radius = 0);
+//  - smoke, decoy: At = start, Ends = end, Pos = where it lies;
+//  - fire: At = when it caught, Ends = when its last flame dies, Pos = where it caught, Radius = how far
+//    its flames reach from there, Flames = the flames on the floor (4 numbers each: x, y, z of the
+//    floor, ms after At it starts; each burns GrenadeRules.FireMs);
+//  - blast: an HE explosion, a flash pop, a molotov that burst in the air or fizzled in smoke, a decoy's last pop;
+//  - dropped: a grenade a player dropped when they went down (Pos on the floor), there to pick up.
+// Weapon: a decoy's sound class (pistol, smg, rifle, sniper, heavy); Gun: the owner's weapon id it
+// mimics (its fire rate).
+sealed record CsGrenadeView(long Id, string Kind, string Owner, string State, long At, long? Ends = null, double[]? Pos = null, double[]? Keys = null, string? Weapon = null, double Radius = 0,
+    string? Gun = null, double[]? Flames = null);
 
 static class GrenadeRules
 {
@@ -32,7 +39,9 @@ static class GrenadeRules
     public const int MaxCarried = 4;
     // HE (CS2 98 damage, 350 units at 4.4 cm): falls off with distance, half reaches health through armour.
     public const double HeDamage = 98, HeRadiusCm = 350 * GrenadePhysics.Unit, HeArmorPenetration = 0.5;
-    public const long HeFuseMs = 1500, FlashFuseMs = 1500, FireFuseMs = 2000;
+    // CS: HE and flash go off at the grenade's first 0.2 s think after 1.5 s (1.6 s); a fire grenade
+    // bursts in the air at 2 s; a smoke and a decoy at the first think once they lie still.
+    public const long HeFuseMs = 1600, FlashFuseMs = 1600, FireFuseMs = 2000, ThinkMs = 200;
     // Flash (CS-like): full effect within 400 units (17.6 m), none beyond 1500 (66 m); looking at it
     // close up: 2.5 s of full white, then 2.8 s clearing (about 5 s in all); less by angle and distance.
     public const double FlashNearCm = 400 * GrenadePhysics.Unit, FlashFarCm = 1500 * GrenadePhysics.Unit;
@@ -40,11 +49,21 @@ static class GrenadeRules
     // Smoke: a cloud about 12 m across and 6 m tall for 18 s; it spreads out over 1 s and thins over the last 2 s.
     public const double SmokeRadiusCm = 620, SmokeHalfHeightCm = 300;
     public const long SmokeMs = 18_000, SmokeGrowMs = 1000, SmokeFadeMs = 2000;
-    // Fire: a 2.5 m pool for 7 s, 40 damage a second (in 0.25 s ticks), armour doesn't help; a smoke puts it out.
-    public const double FireRadiusCm = 250, FireDps = 40;
+    // Fire (CS's inferno): up to 16 flames 42 units apart, spreading over the floor from where it
+    // caught (within 150 units, never through a wall, down steps and slopes more easily than up),
+    // one ring of flames every 0.16 s; each flame covers 1.1 m and burns 7 s; 40 damage a second
+    // (0.25 s ticks) to anyone standing in one, armour doesn't help; a smoke puts out what it covers.
+    public const double FlameRadiusCm = 110, FlameSpacingCm = 42 * GrenadePhysics.Unit, FireRangeCm = 150 * GrenadePhysics.Unit, FireStepUpCm = 50, FireStepDownCm = 200;
+    public const int MaxFlames = 16, MaxFireRings = 4;
+    public const long FlameSpreadMs = 160;
+    // How far a fire reaches on open floor (two rings of flames): what a bot can assume a fire covers.
+    public const double FireRadiusCm = 2 * FlameSpacingCm + FlameRadiusCm;
+    public const double FireDps = 40;
     public const long FireMs = 7_000, FireTickMs = 250;
     // Decoy: fake gunfire for 15 s.
     public const long DecoyMs = 15_000;
+    // A dropped grenade is picked up by walking over it (within this of its spot).
+    public const double PickupCm = 90;
     // The player's eye above their feet (KovaaK's body: capsule half height 115 + eye 64).
     public const double EyeHeightCm = 180;
     public const int KillReward = 300;
@@ -86,6 +105,10 @@ static class GrenadeRules
         var at = current is null ? -1 : kinds.IndexOf(current);
         return kinds[(at + 1) % kinds.Count];
     }
+    // What falls from a player who goes down (CS): the grenade in their hand, else their most
+    // valuable one (null: none).
+    public static string? DropOnDeath(IReadOnlyList<string> carried, string? inHand) =>
+        inHand is not null && carried.Contains(inHand) ? inHand : carried.Where(k => Find(k) is not null).OrderByDescending(k => Find(k)!.Price).ThenBy(Order).FirstOrDefault();
 
     // HE damage at a distance (cm) from the blast: a bell falloff (CS2), nothing past the radius.
     public static double HeDamageAt(double distanceCm)
@@ -105,8 +128,9 @@ static class GrenadeRules
     }
     public static CsFlashView? FlashFor(long at, double amount) =>
         amount < 0.05 ? null : new CsFlashView(at, (int)Math.Round(FlashHoldMaxMs * amount * amount), (int)Math.Round(FlashFadeMaxMs * amount), amount);
-    // The white over the screen `now`: full (by amount) while held, then clearing.
-    public static double FlashPeak(CsFlashView f) => Math.Round(Math.Min(1, 0.35 + f.Amount), 2);
+    // How white the screen gets: fully white from about 0.6 (looking near the pop, or from the side
+    // close up), a light veil for a glance or a flash behind you.
+    public static double FlashPeak(CsFlashView f) => Math.Round(Math.Min(1, 1.6 * f.Amount), 2);
     public static double FlashAlpha(CsFlashView? f, long now)
     {
         if (f is null || now < f.At) return 0;
@@ -166,32 +190,58 @@ static class GrenadeRules
         var x = p.X + dx * t; var y = p.Y + dy * t; var z = p.Z + dz * t;
         return Math.Sqrt(x * x + y * y + z * z);
     }
-    // A fire goes out when a smoke covers it (the cloud's foot reaches the fire's middle).
+    // A smoke covers a spot on the floor (a flame, a fire grenade landing): within its footprint, from
+    // a little below where it lay to its top.
     public static bool Extinguishes(double[] smoke, double[] fire) =>
-        Math.Sqrt((smoke[0] - fire[0]) * (smoke[0] - fire[0]) + (smoke[1] - fire[1]) * (smoke[1] - fire[1])) <= SmokeRadiusCm + FireRadiusCm * 0.5 && Math.Abs(smoke[2] - fire[2]) <= 300;
-    // Whether a player's feet are in a fire.
+        Math.Sqrt((smoke[0] - fire[0]) * (smoke[0] - fire[0]) + (smoke[1] - fire[1]) * (smoke[1] - fire[1])) <= SmokeRadiusCm + FlameRadiusCm * 0.5
+        && fire[2] >= smoke[2] - 150 && fire[2] <= smoke[2] + 2 * SmokeHalfHeightCm;
+    // Whether a player's feet are in a fire's flame (a disc of `radius` on the floor at `fire`).
     public static bool InFire(double[] fire, double radius, double eyeX, double eyeY, double eyeZ)
     {
         var feet = eyeZ - EyeHeightCm;
         return Math.Sqrt((eyeX - fire[0]) * (eyeX - fire[0]) + (eyeY - fire[1]) * (eyeY - fire[1])) <= radius && feet >= fire[2] - 80 && feet <= fire[2] + 120;
     }
-
-    // The decoy's fake gunfire: bursts of the owner's weapon, the same on every machine (seeded by
-    // its id). Offsets in ms from the decoy's start.
-    public static IReadOnlyList<long> DecoyShots(long id, string? weaponClass, long durationMs = DecoyMs)
+    // The flames of a fire burning at `now` (x, y, z of each): those started and not yet out.
+    public static IEnumerable<double[]> Burning(CsGrenadeView fire, long now)
     {
-        var (gap, burst, pause) = weaponClass switch
+        if (fire.State != "fire") yield break;
+        if (fire.Flames is not { Length: >= 4 } f)
         {
-            "rifle" => (100, 4, 900), "smg" => (75, 6, 800), "sniper" => (1500, 1, 1400), "heavy" => (250, 2, 1200), _ => (180, 3, 1000),
+            if (fire.Pos is { Length: 3 } p && now >= fire.At && (fire.Ends is not { } e || now < e)) yield return p;
+            yield break;
+        }
+        for (var i = 0; i + 3 < f.Length; i += 4)
+        {
+            var start = fire.At + (long)f[i + 3];
+            if (now >= start && now < start + FireMs) yield return [f[i], f[i + 1], f[i + 2]];
+        }
+    }
+
+    // The decoy's fake gunfire (CS): bursts of the owner's gun at its own fire rate (an automatic
+    // 3-7 shots, a semi-automatic 1-3 taps, a sniper one shot) with pauses of 0.6-2.6 s between, the
+    // same on every machine (seeded by its id). Offsets in ms from the decoy's start. `gun`: the
+    // owner's weapon id (its interval and whether it's automatic); without it the class decides.
+    public static IReadOnlyList<long> DecoyShots(long id, string? weaponClass, long durationMs = DecoyMs, string? gun = null)
+    {
+        var (gap, auto) = weaponClass switch
+        {
+            "rifle" => (100.0, true), "smg" => (75.0, true), "sniper" => (1500.0, false), "heavy" => (250.0, false), _ => (180.0, false),
         };
+        if (CsRules.Find(gun) is { } w) { gap = Math.Max(60, w.Combat.TimeBetweenShots * 1000); auto = w.Combat.FullyAuto; }
+        var single = weaponClass == "sniper" || gap >= 900;
+        if (!auto) gap = Math.Max(gap, 220);
         var random = new Random(unchecked((int)(id * 2654435761L)));
         var list = new List<long>();
-        long t = 300;
-        while (t < durationMs - 200 && list.Count < 200)
+        double t = 400;
+        while (t < durationMs - 300 && list.Count < 200)
         {
-            var shots = Math.Max(1, burst + random.Next(-1, 2));
-            for (var i = 0; i < shots && t < durationMs - 200; i++, t += gap) list.Add(t);
-            t += pause + random.Next(0, 900);
+            var shots = single ? 1 : auto ? random.Next(3, 8) : random.Next(1, 4);
+            for (var i = 0; i < shots && t < durationMs - 300; i++)
+            {
+                list.Add((long)Math.Round(t));
+                t += gap + (auto ? 0 : random.Next(0, 90));
+            }
+            t += 600 + random.Next(0, 2000);
         }
         return list;
     }
@@ -213,6 +263,9 @@ static class GrenadePhysics
     public const int NoImpact = 0, WallImpact = 1, FloorImpact = 2;
     // CS throw: 675 units/s at full strength (left mouse), 0.3 of it underhand (right), between with both.
     public const double ThrowSpeed = 750 * 0.9 * Unit;
+    // CS: a throw carries 1.25 times the thrower's own velocity (running and jumping throws go
+    // further), at most this much of it (cm/s).
+    public const double InheritShare = 1.25, MaxInheritCm = 1500;
 
     // T: ms after the throw. Motion: Flight, Slide or Rest. Impact: what it just hit (sounds, molotov).
     public readonly record struct Key(double T, double X, double Y, double Z, double Vx, double Vy, double Vz, int Motion, int Impact);
@@ -220,16 +273,26 @@ static class GrenadePhysics
     public delegate (double[] Point, double[] Normal)? Trace(double[] a, double[] b);
 
     // The throw velocity for a view (Unreal pitch up positive, yaw degrees) and strength (1 full,
-    // 0.5 both buttons, 0 underhand): aimed a little up as CS does (10 degrees at level).
-    public static double[] ThrowVelocity(double pitch, double yaw, double strength)
+    // 0.5 both buttons, 0 underhand): aimed a little up as CS does (10 degrees at level), plus 1.25
+    // times the thrower's velocity (`inherit`, cm/s; at most MaxInheritCm of it).
+    public static double[] ThrowVelocity(double pitch, double yaw, double strength, double[]? inherit = null)
     {
         strength = Math.Clamp(strength, 0, 1);
         var p = Math.Clamp(pitch, -89, 89);
         p += (90 - Math.Abs(p)) * 10 / 90;
         var speed = ThrowSpeed * (0.3 + 0.7 * strength);
         var pr = p * Math.PI / 180; var yr = yaw * Math.PI / 180;
-        return [Math.Cos(pr) * Math.Cos(yr) * speed, Math.Cos(pr) * Math.Sin(yr) * speed, Math.Sin(pr) * speed];
+        var v = new[] { Math.Cos(pr) * Math.Cos(yr) * speed, Math.Cos(pr) * Math.Sin(yr) * speed, Math.Sin(pr) * speed };
+        if (inherit is { Length: 3 } && inherit.All(double.IsFinite))
+        {
+            var len = Math.Sqrt(inherit.Sum(x => x * x));
+            var k = len > MaxInheritCm ? MaxInheritCm / len : 1;
+            for (var i = 0; i < 3; i++) v[i] += inherit[i] * k * InheritShare;
+        }
+        return v;
     }
+    // Where the grenade leaves the hand (CS): at the eye for a full throw, 12 units lower underhand.
+    public static double[] ThrowOrigin(double[] eye, double strength) => [eye[0], eye[1], eye[2] + (Math.Clamp(strength, 0, 1) * 12 - 12) * Unit];
 
     public static double[] Pos(Key k, double tau)
     {
@@ -370,10 +433,13 @@ static class GrenadePhysics
     }
     static double R(double v) => Math.Round(v, 1);
 
+    // The first 0.2 s think after `t` (ms): when a grenade that came to rest at `t` notices.
+    public static double NextThink(double t) => (Math.Floor(t / GrenadeRules.ThinkMs) + 1) * GrenadeRules.ThinkMs;
+
     // When and where a grenade of `kind` goes off on this path (ms after the throw), and whether it
     // does its work (a molotov that never reached the floor in time bursts in the air):
-    //  - HE and flash: 1.5 s after the throw, wherever they are;
-    //  - smoke and decoy: once they lie still (a smoke at least 1 s in);
+    //  - HE and flash: 1.6 s after the throw, wherever they are;
+    //  - smoke and decoy: at the first think once they lie still;
     //  - molotov and incendiary: on the first landing on a floor within 2 s, else in the air at 2 s.
     public static (double T, double[] At, bool Works) Detonation(string kind, IReadOnlyList<Key> keys)
     {
@@ -382,8 +448,7 @@ static class GrenadePhysics
         {
             case GrenadeRules.He: return (GrenadeRules.HeFuseMs, At(keys, GrenadeRules.HeFuseMs), true);
             case GrenadeRules.Flash: return (GrenadeRules.FlashFuseMs, At(keys, GrenadeRules.FlashFuseMs), true);
-            case GrenadeRules.Smoke: return (Math.Max(rest.T, 1000) + 250, [rest.X, rest.Y, rest.Z], true);
-            case GrenadeRules.Decoy: return (Math.Max(rest.T, 800) + 200, [rest.X, rest.Y, rest.Z], true);
+            case GrenadeRules.Smoke or GrenadeRules.Decoy: return (NextThink(rest.T), [rest.X, rest.Y, rest.Z], true);
         }
         foreach (var k in keys.Skip(1))
         {
@@ -397,28 +462,37 @@ static class GrenadePhysics
 // What the host asks its game to trace for grenades, and the answers (MultiplayerService.Grenades.cs).
 sealed record GrenadePathRequest(long Id, string Kind, double[] Origin, double[] Velocity);
 sealed record GrenadeLosRequest(int Tag, double[] From, double[] To);
+// The floor under (X, Y) between two heights: a fire's flame spreading, a dropped grenade landing.
+sealed record GrenadeFloorRequest(int Tag, double X, double Y, double Top, double Bottom);
 
-// The host's grenades in one CS match: throws, paths, detonations and effects. CsMatch owns it and
-// hands it the players and the damage and flash rules.
+// The host's grenades in one CS match: throws, paths, detonations and effects, dropped grenades.
+// CsMatch owns it and hands it the players and the damage and flash rules.
 sealed class CsGrenadeField
 {
     // How long a path from the game may take before the level-floor fallback flies it, and how long a
-    // blast waits for its line-of-sight answers (then: clear).
+    // blast (or a spreading flame, or a dropped grenade) waits for its trace answers (then: clear, level).
     public const long PathWaitMs = 350, LosWaitMs = 300;
     sealed class Thrown
     {
-        public long Id; public required string Kind, Owner; public string? Weapon; public long At; public required double[] Origin, Velocity;
+        public long Id; public required string Kind, Owner; public string? Weapon, Gun; public long At; public required double[] Origin, Velocity, Eye;
         public IReadOnlyList<GrenadePhysics.Key> Keys = []; public bool Final; public long? GoesOff; public double[]? Where; public bool Works; public bool Done;
     }
-    sealed class Effect { public long Id; public required string Kind, Owner, State; public required double[] At; public long Starts, Ends, NextTick; public string? Weapon; }
+    sealed class Effect { public long Id; public required string Kind, Owner, State; public required double[] At; public long Starts, Ends, NextTick; public string? Weapon, Gun; public Fire? Fire; }
+    // A fire's flames on the floor and the spots it is still finding out about (floor, wall).
+    sealed class Flame { public required double[] At; public long Starts; public int Ring; }
+    sealed class Probe { public int Ring; public required double[] From; public double X, Y; public int FloorTag, LosTag; public double? Floor; public bool FloorAnswered; public bool? Clear; public long Asked; }
+    sealed class Fire { public readonly List<Flame> Flames = []; public readonly List<Probe> Probes = []; public int Ring; public Random Random = new(1); }
     sealed class Blast
     {
         public long Id; public required string Kind, Owner; public required double[] At; public long T;
         public List<(string Victim, int Tag, double[] Point, bool? Clear)> Checks = []; public long Deadline; public bool Applied;
     }
+    sealed class Item { public long Id; public required string Kind, Owner; public required double[] At; public long Since; public int FloorTag; public bool Settled; }
     readonly List<Thrown> thrown = [];
     readonly List<Effect> effects = [];
     readonly List<Blast> blasts = [];
+    readonly List<Item> items = [];
+    readonly Dictionary<int, double?> floors = new();
     long nextId; int nextTag;
     public int Revision { get; private set; }
     void Changed() => Revision++;
@@ -432,9 +506,10 @@ sealed class CsGrenadeField
     // A level floor under a throw when the game can't trace (eye height below the thrower).
     public Func<double[], GrenadePhysics.Trace> Fallback = o => GrenadePhysics.Floor(o[2] - GrenadeRules.EyeHeightCm);
 
-    public long Throw(string owner, string kind, double[] origin, double[] velocity, long now, string? weaponClass)
+    // eye: the thrower's eye (the fallback's floor is eye height under it; an underhand throw starts lower).
+    public long Throw(string owner, string kind, double[] origin, double[] velocity, long now, string? weaponClass, string? gun = null, double[]? eye = null)
     {
-        var g = new Thrown { Id = ++nextId, Kind = kind, Owner = owner, Weapon = weaponClass, At = now, Origin = origin, Velocity = velocity };
+        var g = new Thrown { Id = ++nextId, Kind = kind, Owner = owner, Weapon = weaponClass, Gun = gun, At = now, Origin = origin, Velocity = velocity, Eye = eye ?? origin };
         g.Keys = [new GrenadePhysics.Key(0, origin[0], origin[1], origin[2], velocity[0], velocity[1], velocity[2], GrenadePhysics.Flight, GrenadePhysics.NoImpact)];
         thrown.Add(g);
         Changed();
@@ -457,39 +532,136 @@ sealed class CsGrenadeField
     }
 
     public IReadOnlyList<GrenadePathRequest> PathRequests => thrown.Where(t => !t.Final && !t.Done).Select(t => new GrenadePathRequest(t.Id, t.Kind, t.Origin, t.Velocity)).ToArray();
-    public IReadOnlyList<GrenadeLosRequest> LosRequests => blasts.Where(b => !b.Applied).SelectMany(b => b.Checks.Where(c => c.Clear is null).Select(c => new GrenadeLosRequest(c.Tag, b.At, c.Point))).ToArray();
+    public IReadOnlyList<GrenadeLosRequest> LosRequests =>
+        blasts.Where(b => !b.Applied).SelectMany(b => b.Checks.Where(c => c.Clear is null).Select(c => new GrenadeLosRequest(c.Tag, b.At, c.Point)))
+            .Concat(effects.Where(e => e.Fire is not null).SelectMany(e => e.Fire!.Probes.Where(p => p.Clear is null)
+                .Select(p => new GrenadeLosRequest(p.LosTag, [p.From[0], p.From[1], p.From[2] + 30], [p.X, p.Y, p.From[2] + 30])))).ToArray();
+    public IReadOnlyList<GrenadeFloorRequest> FloorRequests =>
+        effects.Where(e => e.Fire is not null).SelectMany(e => e.Fire!.Probes.Where(p => !p.FloorAnswered)
+                .Select(p => new GrenadeFloorRequest(p.FloorTag, p.X, p.Y, p.From[2] + GrenadeRules.FireStepUpCm + 30, p.From[2] - GrenadeRules.FireStepDownCm)))
+            .Concat(items.Where(i => !i.Settled).Select(i => new GrenadeFloorRequest(i.FloorTag, i.At[0], i.At[1], i.At[2] + GrenadeRules.EyeHeightCm - 40, i.At[2] - 400))).ToArray();
     public void AnswerLos(int tag, bool clear)
     {
         foreach (var b in blasts)
             for (var i = 0; i < b.Checks.Count; i++)
                 if (b.Checks[i].Tag == tag && b.Checks[i].Clear is null) b.Checks[i] = b.Checks[i] with { Clear = clear };
+        foreach (var e in effects)
+            if (e.Fire is { } f)
+                foreach (var p in f.Probes)
+                    if (p.LosTag == tag && p.Clear is null) p.Clear = clear;
+    }
+    // The floor's height under a floor request (null: nothing there).
+    public void AnswerFloor(int tag, double? z)
+    {
+        foreach (var e in effects)
+            if (e.Fire is { } f)
+                foreach (var p in f.Probes)
+                    if (p.FloorTag == tag && !p.FloorAnswered) { p.Floor = z; p.FloorAnswered = true; }
+        foreach (var i in items)
+            if (i.FloorTag == tag && !i.Settled)
+            {
+                if (z is { } floor) i.At = [i.At[0], i.At[1], floor + GrenadePhysics.Lift];
+                i.Settled = true;
+                Changed();
+            }
     }
 
     // Round over: nothing carries into the next one.
-    public void Clear() { if (thrown.Count + effects.Count + blasts.Count == 0) return; thrown.Clear(); effects.Clear(); blasts.Clear(); Changed(); }
+    public void Clear() { if (thrown.Count + effects.Count + blasts.Count + items.Count == 0) return; thrown.Clear(); effects.Clear(); blasts.Clear(); items.Clear(); Changed(); }
+
+    // ---- dropped grenades -----------------------------------------------------------------------
+    // A grenade that falls from a player going down: on the floor under their eye (the game's floor
+    // once it answers, else eye height below).
+    public long DropItem(string owner, string kind, double[] eye, long now)
+    {
+        var item = new Item { Id = ++nextId, Kind = kind, Owner = owner, At = [eye[0], eye[1], eye[2] - GrenadeRules.EyeHeightCm + GrenadePhysics.Lift], Since = now, FloorTag = ++nextTag };
+        items.Add(item);
+        Changed();
+        return item.Id;
+    }
+    public IReadOnlyList<(long Id, string Kind, double[] At)> Items => items.Select(i => (i.Id, i.Kind, i.At)).ToArray();
+    public bool TakeItem(long id) { if (items.RemoveAll(i => i.Id == id) == 0) return false; Changed(); return true; }
 
     public void Tick(long now)
     {
         foreach (var g in thrown.Where(t => !t.Done).ToArray())
         {
-            if (!g.Final && now - g.At >= PathWaitMs) Settle(g, GrenadePhysics.Simulate(g.Origin, g.Velocity, Fallback(g.Origin)));
+            if (!g.Final && now - g.At >= PathWaitMs) Settle(g, GrenadePhysics.Simulate(g.Origin, g.Velocity, Fallback(g.Eye)));
             if (g.GoesOff is { } at && now >= at) GoOff(g, at);
         }
         thrown.RemoveAll(t => t.Done && now - t.At > 30_000);
         foreach (var b in blasts.Where(b => !b.Applied))
             if (now >= b.Deadline || b.Checks.All(c => c.Clear is not null)) Apply(b, now);
+        // A dropped grenade waits for its floor, then lies there (level under the eye without an answer).
+        foreach (var i in items.Where(i => !i.Settled && now - i.Since >= LosWaitMs)) { i.Settled = true; Changed(); }
         var players = Players().ToList();
         foreach (var e in effects.ToArray())
         {
+            if (e.Fire is { } fire) Spread(e, fire, now);
             if (now >= e.Ends) { effects.Remove(e); if (e.Kind == GrenadeRules.Decoy) AddBlast(e.Kind, e.Owner, e.At, e.Ends); Changed(); continue; }
             if (e.State != "fire" || now < e.NextTick) continue;
             for (; e.NextTick <= now; e.NextTick += GrenadeRules.FireTickMs)
                 foreach (var p in players)
-                    if (p.Alive && p.At is { } eye && GrenadeRules.InFire(e.At, GrenadeRules.FireRadiusCm, eye.X, eye.Y, eye.Z) && GrenadeRules.Find(e.Kind) is { } kind)
+                    if (p.Alive && p.At is { } eye && InFlames(e, e.NextTick, eye) && GrenadeRules.Find(e.Kind) is { } kind)
                         Damage(e.Owner, p.Id, GrenadeRules.FireDps * GrenadeRules.FireTickMs / 1000.0, kind, now, null);
         }
         if (blasts.RemoveAll(b => b.Applied && now - b.T > 1500) > 0) Changed();
     }
+
+    static bool InFlames(Effect e, long t, TrackSample eye) =>
+        e.Fire is { } f ? f.Flames.Any(fl => t >= fl.Starts && t < fl.Starts + GrenadeRules.FireMs && GrenadeRules.InFire(fl.At, GrenadeRules.FlameRadiusCm, eye.X, eye.Y, eye.Z))
+            : GrenadeRules.InFire(e.At, GrenadeRules.FlameRadiusCm, eye.X, eye.Y, eye.Z);
+
+    // A fire spreads ring by ring: around each flame of the last ring, six spots a flame apart (in a
+    // turned order of its own); each needs a floor within a step up or down of the flame it comes from
+    // and a clear line from it (no wall), and no smoke over it; at most 16 flames within range.
+    void Spread(Effect e, Fire fire, long now)
+    {
+        // Answers in (or the wait over: a level floor, a clear line): take the spots that have a floor.
+        if (fire.Probes.Count > 0)
+        {
+            var due = fire.Probes.All(p => p.FloorAnswered && p.Clear is not null) || now - fire.Probes[0].Asked >= LosWaitMs;
+            if (!due) return;
+            var smokes = effects.Where(x => x.State == "smoke").Select(x => x.At).ToArray();
+            foreach (var p in fire.Probes)
+            {
+                double? floor = p.FloorAnswered ? p.Floor : LevelFloor(p);
+                if (floor is not { } z || p.Clear == false || fire.Flames.Count >= GrenadeRules.MaxFlames) continue;
+                var at = new[] { p.X, p.Y, z };
+                if (z - p.From[2] > GrenadeRules.FireStepUpCm || p.From[2] - z > GrenadeRules.FireStepDownCm || smokes.Any(s => GrenadeRules.Extinguishes(s, at))) continue;
+                if (fire.Flames.Any(f => Flat(f.At, at) < GrenadeRules.FlameSpacingCm * 0.7 && Math.Abs(f.At[2] - z) < 120)) continue;
+                fire.Flames.Add(new Flame { At = at, Starts = Math.Max(now, e.Starts + p.Ring * GrenadeRules.FlameSpreadMs), Ring = p.Ring });
+            }
+            fire.Probes.Clear();
+            e.Ends = fire.Flames.Max(f => f.Starts) + GrenadeRules.FireMs;
+            Changed();
+        }
+        if (fire.Ring >= GrenadeRules.MaxFireRings || fire.Flames.Count >= GrenadeRules.MaxFlames) return;
+        var ring = fire.Ring + 1;
+        var from = fire.Flames.Where(f => f.Ring == fire.Ring).ToList();
+        if (from.Count == 0) { fire.Ring = GrenadeRules.MaxFireRings; return; }
+        var turn = fire.Random.NextDouble() * Math.PI / 3;
+        var spots = new List<Probe>();
+        foreach (var f in from.OrderBy(_ => fire.Random.Next()))
+            for (var k = 0; k < 6; k++)
+            {
+                var a = turn + k * Math.PI / 3;
+                var x = f.At[0] + Math.Cos(a) * GrenadeRules.FlameSpacingCm; var y = f.At[1] + Math.Sin(a) * GrenadeRules.FlameSpacingCm;
+                if (Flat(e.At, [x, y]) > GrenadeRules.FireRangeCm) continue;
+                if (fire.Flames.Any(o => Flat(o.At, [x, y]) < GrenadeRules.FlameSpacingCm * 0.7) || spots.Any(o => Flat([o.X, o.Y], [x, y]) < GrenadeRules.FlameSpacingCm * 0.7)) continue;
+                spots.Add(new Probe { Ring = ring, From = f.At, X = x, Y = y, FloorTag = ++nextTag, LosTag = ++nextTag, Asked = now });
+            }
+        fire.Ring = ring;
+        // Never more spots than flames still allowed (nearest the middle first).
+        fire.Probes.AddRange(spots.OrderBy(s => Flat(e.At, [s.X, s.Y])).Take(GrenadeRules.MaxFlames - fire.Flames.Count));
+        if (fire.Probes.Count == 0) fire.Ring = GrenadeRules.MaxFireRings;
+    }
+    double? LevelFloor(Probe p)
+    {
+        var trace = Fallback([p.X, p.Y, p.From[2] + GrenadeRules.EyeHeightCm]);
+        return trace([p.X, p.Y, p.From[2] + GrenadeRules.FireStepUpCm + 30], [p.X, p.Y, p.From[2] - GrenadeRules.FireStepDownCm]) is { } hit ? hit.Point[2] : null;
+    }
+    static double Flat(double[] a, double[] b) => Math.Sqrt((a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1]));
 
     Blast AddBlast(string kind, string owner, double[] at, long t)
     {
@@ -508,8 +680,8 @@ sealed class CsGrenadeField
         {
             case GrenadeRules.He or GrenadeRules.Flash:
             {
-                // The blast: line-of-sight traces to everyone it could reach, answered by the game (or
-                // clear after a moment), then the damage or the blindness.
+                // The blast: line-of-sight traces to everyone it could reach (the thrower too), answered by
+                // the game (or clear after a moment), then the damage or the blindness.
                 var blast = AddBlast(g.Kind, g.Owner, [where[0], where[1], where[2] + 10], at);
                 blast.Applied = false;
                 var reach = g.Kind == GrenadeRules.He ? GrenadeRules.HeRadiusCm : GrenadeRules.FlashFarCm;
@@ -523,22 +695,34 @@ sealed class CsGrenadeField
             }
             case GrenadeRules.Smoke:
                 effects.Add(new Effect { Id = g.Id, Kind = g.Kind, Owner = g.Owner, State = "smoke", At = where, Starts = at, Ends = at + GrenadeRules.SmokeMs });
-                // A smoke puts out the fires it covers.
-                foreach (var fire in effects.Where(e => e.State == "fire" && GrenadeRules.Extinguishes(where, e.At)).ToArray())
+                // A smoke puts out the flames it covers (the rest of a fire burns on).
+                foreach (var fire in effects.Where(e => e.State == "fire").ToArray())
                 {
-                    effects.Remove(fire);
-                    AddBlast("extinguished", fire.Owner, fire.At, at);
+                    var flames = fire.Fire?.Flames ?? [];
+                    var out_ = flames.Where(f => GrenadeRules.Extinguishes(where, f.At)).ToList();
+                    if (fire.Fire is null ? !GrenadeRules.Extinguishes(where, fire.At) : out_.Count == 0) continue;
+                    var spot = out_.Count > 0 ? new[] { out_.Average(f => f.At[0]), out_.Average(f => f.At[1]), out_.Average(f => f.At[2]) } : fire.At;
+                    flames.RemoveAll(out_.Contains);
+                    fire.Fire?.Probes.RemoveAll(p => GrenadeRules.Extinguishes(where, [p.X, p.Y, p.From[2]]));
+                    if (flames.Count == 0) effects.Remove(fire);
+                    else fire.Ends = flames.Max(f => f.Starts) + GrenadeRules.FireMs;
+                    AddBlast("extinguished", fire.Owner, spot, at);
                 }
                 break;
             case GrenadeRules.Decoy:
-                effects.Add(new Effect { Id = g.Id, Kind = g.Kind, Owner = g.Owner, State = "decoy", At = where, Starts = at, Ends = at + GrenadeRules.DecoyMs, Weapon = g.Weapon });
+                effects.Add(new Effect { Id = g.Id, Kind = g.Kind, Owner = g.Owner, State = "decoy", At = where, Starts = at, Ends = at + GrenadeRules.DecoyMs, Weapon = g.Weapon, Gun = g.Gun });
                 break;
             default:
+            {
                 // Fire on the ground, unless it burst in the air or lands in a smoke.
                 if (!g.Works) { AddBlast(g.Kind, g.Owner, where, at); break; }
                 if (effects.Any(e => e.State == "smoke" && GrenadeRules.Extinguishes(e.At, where))) { AddBlast("extinguished", g.Owner, where, at); break; }
-                effects.Add(new Effect { Id = g.Id, Kind = g.Kind, Owner = g.Owner, State = "fire", At = where, Starts = at, Ends = at + GrenadeRules.FireMs, NextTick = at });
+                var floor = new[] { where[0], where[1], where[2] - GrenadePhysics.Lift };
+                var fire = new Fire { Random = new Random(unchecked((int)(g.Id * 2654435761L))) };
+                fire.Flames.Add(new Flame { At = floor, Starts = at, Ring = 0 });
+                effects.Add(new Effect { Id = g.Id, Kind = g.Kind, Owner = g.Owner, State = "fire", At = floor, Starts = at, Ends = at + GrenadeRules.FireMs, NextTick = at, Fire = fire });
                 break;
+            }
         }
     }
 
@@ -591,11 +775,21 @@ sealed class CsGrenadeField
     {
         var list = new List<CsGrenadeView>();
         foreach (var g in thrown.Where(t => !t.Done))
-            list.Add(new CsGrenadeView(g.Id, g.Kind, g.Owner, "flying", g.At, g.GoesOff, null, GrenadePhysics.Flat(g.Keys), g.Weapon));
+            list.Add(new CsGrenadeView(g.Id, g.Kind, g.Owner, "flying", g.At, g.GoesOff, null, GrenadePhysics.Flat(g.Keys), g.Weapon, Gun: g.Gun));
         foreach (var e in effects)
-            list.Add(new CsGrenadeView(e.Id, e.Kind, e.Owner, e.State, e.Starts, e.Ends, R(e.At), null, e.Weapon, e.State == "fire" ? GrenadeRules.FireRadiusCm : e.State == "smoke" ? GrenadeRules.SmokeRadiusCm : 0));
+        {
+            if (e.Fire is { } fire)
+            {
+                var reach = fire.Flames.Max(f => Flat(e.At, f.At)) + GrenadeRules.FlameRadiusCm;
+                var flames = fire.Flames.SelectMany(f => new[] { Math.Round(f.At[0], 1), Math.Round(f.At[1], 1), Math.Round(f.At[2], 1), f.Starts - e.Starts }).ToArray();
+                list.Add(new CsGrenadeView(e.Id, e.Kind, e.Owner, e.State, e.Starts, e.Ends, R(e.At), null, null, Math.Round(reach, 1), Flames: flames));
+            }
+            else list.Add(new CsGrenadeView(e.Id, e.Kind, e.Owner, e.State, e.Starts, e.Ends, R(e.At), null, e.Weapon, e.State == "smoke" ? GrenadeRules.SmokeRadiusCm : 0, e.Gun));
+        }
         foreach (var b in blasts)
             list.Add(new CsGrenadeView(b.Id, b.Kind, b.Owner, "blast", b.T, null, R(b.At)));
+        foreach (var i in items)
+            list.Add(new CsGrenadeView(i.Id, i.Kind, i.Owner, "dropped", i.Since, null, R(i.At)));
         return list;
     }
     static double[] R(double[] v) => v.Select(x => Math.Round(x, 1)).ToArray();
@@ -630,39 +824,114 @@ static class GrenadeAim
     }
 }
 
+// What grenades mean for the bots, read-only over the CS view (game-modes.md 6.6.5, "For the bot
+// logic"): how blind a player is and until when, the smoke clouds over time, the fires' flames, the
+// grenade sounds in a time window (a decoy's shots tagged as a decoy: to players they are gunfire),
+// and the grenades lying on the floor. All times are host ms.
+static class GrenadeIntel
+{
+    // A smoke cloud: its centre, its horizontal radius and half height at full size, and its size now (0..1).
+    public sealed record SmokeCloud(long Id, string Owner, double[] Centre, double Radius, double HalfHeight, double Scale, long Starts, long Ends);
+    // A fire: the flames burning now (x, y, z of the floor; each FlameRadius round), when it caught and
+    // when its last flame dies.
+    public sealed record FireArea(long Id, string Owner, string Kind, IReadOnlyList<double[]> Flames, double FlameRadius, long Starts, long Ends);
+    // A grenade sound: "gunfire" (Decoy: true, a decoy mimicking Weapon), "he", "flash", "bounce",
+    // "smoke", "fire", "decoy-pop", "extinguished"; where and when (host ms), and whose grenade.
+    public sealed record Sound(long T, string Kind, double[] At, string Owner, bool Decoy = false, string? Weapon = null, long Grenade = 0);
+
+    // How white a player's screen is at `t` (0..1).
+    public static double Blind(CsView cs, string member, long t) => GrenadeRules.FlashAlpha(cs.Players.FirstOrDefault(p => p.Member == member)?.Flash, t);
+    // Until when a player stays at least `threshold` white (null: not blinded that much). Bots in the
+    // service see nothing from 0.6 (MultiplayerService.GrenadeSight).
+    public static long? BlindUntil(CsView cs, string member, double threshold = 0.6)
+    {
+        if (cs.Players.FirstOrDefault(p => p.Member == member)?.Flash is not { } f) return null;
+        var peak = GrenadeRules.FlashPeak(f);
+        if (peak < threshold) return null;
+        // peak * (1 - u)^2 = threshold during the fade.
+        var u = 1 - Math.Sqrt(threshold / peak);
+        return f.At + f.HoldMs + (long)Math.Round(u * f.FadeMs);
+    }
+    public static IReadOnlyList<SmokeCloud> Smokes(CsView cs, long t) =>
+        (cs.Grenades ?? []).Where(g => g.State == "smoke" && g.Pos is { Length: 3 } && g.Ends is { } e && t < e)
+            .Select(g => new SmokeCloud(g.Id, g.Owner, GrenadeRules.SmokeCentre(g.Pos!), GrenadeRules.SmokeRadiusCm, GrenadeRules.SmokeHalfHeightCm, GrenadeRules.SmokeScale(g, t), g.At, g.Ends!.Value)).ToArray();
+    public static bool SmokeBlocks(CsView cs, double[] a, double[] b, long t) => GrenadeRules.SmokeBlocks(cs.Grenades, a, b, t);
+    public static IReadOnlyList<FireArea> Fires(CsView cs, long t) =>
+        (cs.Grenades ?? []).Where(g => g.State == "fire" && (g.Ends is not { } e || t < e))
+            .Select(g => new FireArea(g.Id, g.Owner, g.Kind, GrenadeRules.Burning(g, t).ToArray(), GrenadeRules.FlameRadiusCm, g.At, g.Ends ?? g.At + GrenadeRules.FireMs)).ToArray();
+    // Whether feet at `feet` stand in a burning flame at `t`.
+    public static bool InFire(CsView cs, double[] feet, long t) =>
+        Fires(cs, t).Any(f => f.Flames.Any(fl => GrenadeRules.InFire(fl, f.FlameRadius, feet[0], feet[1], feet[2] + GrenadeRules.EyeHeightCm)));
+    public static IReadOnlyList<CsGrenadeView> Dropped(CsView cs) => (cs.Grenades ?? []).Where(g => g.State == "dropped").ToArray();
+
+    // The sounds grenades make in [from, to): the decoys' shots (as players hear them: gunfire), bounces,
+    // blasts, smokes and fires catching.
+    public static IReadOnlyList<Sound> Sounds(CsView cs, long from, long to)
+    {
+        var list = new List<Sound>();
+        foreach (var g in cs.Grenades ?? [])
+        {
+            switch (g.State)
+            {
+                case "decoy" when g.Pos is { Length: 3 } at:
+                    foreach (var s in GrenadeRules.DecoyShots(g.Id, g.Weapon, (g.Ends ?? g.At + GrenadeRules.DecoyMs) - g.At, g.Gun))
+                        if (g.At + s >= from && g.At + s < to) list.Add(new Sound(g.At + s, "gunfire", at, g.Owner, true, g.Gun ?? g.Weapon, g.Id));
+                    break;
+                case "flying":
+                    foreach (var k in GrenadePhysics.Unflat(g.Keys))
+                        if (k.Impact != GrenadePhysics.NoImpact && g.At + (long)k.T >= from && g.At + (long)k.T < to && (g.Ends is not { } ends || g.At + (long)k.T <= ends))
+                            list.Add(new Sound(g.At + (long)k.T, "bounce", [k.X, k.Y, k.Z], g.Owner, Grenade: g.Id));
+                    break;
+                case "blast" when g.Pos is { Length: 3 } at && g.At >= from && g.At < to:
+                    list.Add(new Sound(g.At, g.Kind switch { GrenadeRules.He => "he", GrenadeRules.Flash => "flash", GrenadeRules.Decoy => "decoy-pop", "extinguished" => "extinguished", _ => "fire" }, at, g.Owner, Grenade: g.Id));
+                    break;
+                case "smoke" or "fire" when g.Pos is { Length: 3 } at && g.At >= from && g.At < to:
+                    list.Add(new Sound(g.At, g.State, at, g.Owner, Grenade: g.Id));
+                    break;
+            }
+        }
+        return list.OrderBy(s => s.T).ToArray();
+    }
+}
+
 // The grenade files between the host's service and its game (AimModSteam, GrenadePhysics.hpp):
 //   grenade-sim.tsv (service -> AimModSteam), while something waits for an answer:
 //     AIMMOD_GRENADESIM_1\t<seq>
 //     throw\t<id>\t<kind>\t<x>\t<y>\t<z>\t<vx>\t<vy>\t<vz>      fly it with line traces
 //     los\t<tag>\t<ax>\t<ay>\t<az>\t<bx>\t<by>\t<bz>          is the line clear?
+//     floor\t<tag>\t<x>\t<y>\t<top z>\t<bottom z>             the floor's height under x, y
 //   grenade-paths.tsv (AimModSteam -> service):
 //     AIMMOD_GRENADEPATHS_1\t<unix ms>
 //     path\t<id>\t<keys>\t<t x y z vx vy vz motion impact> x keys
 //     los\t<tag>\t<0|1>
+//     floor\t<tag>\t<z|->                                     (-: no floor in between)
 static class GrenadeFiles
 {
     static string F(double v) => Math.Round(v, 1).ToString("0.#", CultureInfo.InvariantCulture);
-    public static string Sim(long sequence, IEnumerable<GrenadePathRequest> paths, IEnumerable<GrenadeLosRequest> los)
+    public static string Sim(long sequence, IEnumerable<GrenadePathRequest> paths, IEnumerable<GrenadeLosRequest> los, IEnumerable<GrenadeFloorRequest>? floors = null)
     {
         var sb = new StringBuilder("AIMMOD_GRENADESIM_1\t").Append(sequence).Append('\n');
         foreach (var p in paths.Take(32))
             sb.Append("throw\t").Append(p.Id).Append('\t').Append(p.Kind).Append('\t').Append(string.Join('\t', p.Origin.Concat(p.Velocity).Select(F))).Append('\n');
         foreach (var l in los.Take(128))
             sb.Append("los\t").Append(l.Tag).Append('\t').Append(string.Join('\t', l.From.Concat(l.To).Select(F))).Append('\n');
+        foreach (var f in (floors ?? []).Take(64))
+            sb.Append("floor\t").Append(f.Tag).Append('\t').Append(F(f.X)).Append('\t').Append(F(f.Y)).Append('\t').Append(F(f.Top)).Append('\t').Append(F(f.Bottom)).Append('\n');
         return sb.ToString();
     }
 
-    public static (Dictionary<long, IReadOnlyList<GrenadePhysics.Key>> Paths, Dictionary<int, bool> Los)? Paths(string text, long now)
+    public static (Dictionary<long, IReadOnlyList<GrenadePhysics.Key>> Paths, Dictionary<int, bool> Los, Dictionary<int, double?> Floors)? Paths(string text, long now)
     {
         var lines = text.Replace("\r", "").Split('\n');
         if (lines.Length == 0 || !lines[0].StartsWith("AIMMOD_GRENADEPATHS_1\t", StringComparison.Ordinal)) return null;
         if (!long.TryParse(lines[0][22..], NumberStyles.Integer, CultureInfo.InvariantCulture, out var at) || Math.Abs(now - at) > 10_000) return null;
-        var paths = new Dictionary<long, IReadOnlyList<GrenadePhysics.Key>>(); var los = new Dictionary<int, bool>();
+        var paths = new Dictionary<long, IReadOnlyList<GrenadePhysics.Key>>(); var los = new Dictionary<int, bool>(); var floors = new Dictionary<int, double?>();
         static double? Num(string s) => double.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out var v) && double.IsFinite(v) && Math.Abs(v) < 1e7 ? v : null;
         foreach (var line in lines.Skip(1).Take(512))
         {
             var p = line.Split('\t');
             if (p.Length == 3 && p[0] == "los" && int.TryParse(p[1], NumberStyles.None, CultureInfo.InvariantCulture, out var tag) && p[2] is "0" or "1") los[tag] = p[2] == "1";
+            else if (p.Length == 3 && p[0] == "floor" && int.TryParse(p[1], NumberStyles.None, CultureInfo.InvariantCulture, out var ftag) && (p[2] == "-" || Num(p[2]) is not null)) floors[ftag] = p[2] == "-" ? null : Num(p[2]);
             else if (p.Length >= 3 && p[0] == "path" && long.TryParse(p[1], NumberStyles.None, CultureInfo.InvariantCulture, out var id)
                 && int.TryParse(p[2], NumberStyles.None, CultureInfo.InvariantCulture, out var n) && n is >= 2 and <= GrenadePhysics.MaxKeys + 1 && p.Length == 3 + n * 9)
             {
@@ -678,6 +947,6 @@ static class GrenadeFiles
                 if (keys.Count == n) paths[id] = keys;
             }
         }
-        return (paths, los);
+        return (paths, los, floors);
     }
 }
