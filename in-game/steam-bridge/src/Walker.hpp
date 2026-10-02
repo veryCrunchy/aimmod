@@ -8,6 +8,12 @@
 // clear there, so a goal is reached by a route over the waypoints: the straight walks between
 // them are checked lazily, a few per step, and remembered for the map (LinkCache, shared by every
 // walker on it).
+//
+// They move like players: the body speeds up and slows down instead of starting and stopping dead,
+// curves through the corners of its path (it steers for a point a little ahead on it), slows for
+// sharp corners and doorways, and turns with an eased, slightly overshooting flick of the view
+// instead of at a constant rate. In a fight they counter-strafe (strafe, a dead stop to shoot, the
+// other way) or strafe side to side; holding an angle they can jiggle, wide or crouch peek it.
 
 #include "GhostMath.hpp"
 #include "NavGrid.hpp"
@@ -49,6 +55,7 @@ namespace bridge::ghost
         static constexpr double JumpHeight = 50, JumpTime = 0.55;
         static constexpr int PlanBudget = 6;         // straight-walk checks per planning step
         static constexpr int PlanFanout = 10;        // neighbours tried from each waypoint
+        static constexpr double Pi = 3.14159265358979;
 
         double speed = Speed, stepUp = StepUp, stepDown = StepDown, arrive = Arrive, strafe = StrafeAmplitude;
 
@@ -103,6 +110,10 @@ namespace bridge::ghost
         std::array<double, 3> legFrom{};             // where the current path leg starts
         bool navEndsShort = false;                   // the path stops short of the goal (stop, via)
         double exactUntil = -1;                      // grid steps only (no string-pulling) until then
+        // Narrow passages along the path (a doorway, a gap between props: the floor a cell or two
+        // wide): no corner near them is cut, and it slows down going in and out.
+        std::vector<bool> navExact;                  // per path point: steer to it exactly
+        std::vector<std::array<double, 2>> navNarrow, navNarrowEnds;
         // Orders beyond walk-and-stay: walk only `goalStop` of the way (a default or post-plant spot);
         // first a detour `via` (x, y, z, fraction of the way to it), then the goal.
         double goalStop = 1;
@@ -122,6 +133,44 @@ namespace bridge::ghost
         int stuckLevel = 0;
         double stuckX = 1e30, stuckY = 1e30;
 
+        // How it walks (the `move` order): run, shift-walk (silent, 52% of the run speed as in CS) or
+        // crouch-walk (34%, the body crouched); `preaim` looks round the next corner of its path.
+        static constexpr double WalkFactor = 0.52, CrouchFactor = 0.34;
+        bool walkGait = false, crouchStance = false, preaim = false;
+        double GaitSpeed() const { return speed * (crouchStance ? CrouchFactor : walkGait ? WalkFactor : 1.0); }
+        // The body's velocity (cm/s): it reaches full speed in AccelTime, stops in DecelTime, and
+        // a counter-strafe stops it dead in CounterTime.
+        static constexpr double AccelTime = 0.2, DecelTime = 0.15, CounterTime = 0.08;
+        double velX = 0, velY = 0;
+        // Eased turning (the `aim` order): the view's angular velocity changes no faster than aimAccel
+        // (deg/s^2; 0: AccelPerRate x turnRate) up to turnRate, and overshoots the target by about
+        // `overshoot` of the turn (of its last part, on a long one) before it settles.
+        static constexpr double AccelPerRate = 6, Overshoot = 0.05;
+        double aimAccel = 0, overshoot = Overshoot;
+        double yawVel = 0, pitchVel = 0;
+        double TurnAccel() const { return aimAccel > 0 ? aimAccel : AccelPerRate * turnRate; }
+        // Peeking an angle while holding (the `peek` order): from where it holds (the anchor) out to one
+        // side of the point and back quickly (jiggle), out wide and stay (wide), or a step out and down.
+        enum class Peek { None, Jiggle, Wide, Crouch };
+        Peek peek = Peek::None;
+        std::array<double, 3> peekAt{};
+        static constexpr double JiggleOut = 60, JiggleFar = 90, WideOut = 250, CrouchOut = 100, PeekTest = 120;
+        std::optional<std::array<double, 3>> peekFor; // the point the side was chosen for
+        std::array<double, 2> peekSide{};
+        double peekFlipAt = 0, peekReach = 0;
+        bool peekOut = false, peekCrouched = false;
+        // A fight's style: counter-strafing (strafe 0.2-0.45 s, a dead stop, still 0.25-0.6 s to shoot,
+        // the other way) or plain side to side.
+        bool counterStrafe = false;
+        int strafePhase = 0; // counter-strafing: 0 strafing, 1 stopped
+        double phaseUntil = 0;
+        // Zones to keep out of (x, y, z, radius, cost per grid step: a smoke, a fire), and the ones the
+        // current path was planned around. Waypoint routes (no grid) ignore them.
+        NavGrid::Avoid avoid, planAvoid;
+        double avoidCheckAt = 0;
+        // Where it looks this step (a face order, the peeked point, the corner it pre-aims), for the debug overlay.
+        std::optional<std::array<double, 3>> lookAt;
+
         std::uint32_t Next()
         {
             seed ^= seed << 13;
@@ -140,7 +189,15 @@ namespace bridge::ghost
             navPath.clear();
             navIndex = 0;
             navReached = false;
+            navExact.clear();
+            navNarrow.clear();
+            navNarrowEnds.clear();
             if (target == NavTarget) target = -1;
+        }
+        void Halt()
+        {
+            velX = velY = 0;
+            yawVel = pitchVel = 0;
         }
         // The waypoint it stands at (within `arrive`), or -1.
         int NodeAt(double px, double py) const
@@ -166,6 +223,7 @@ namespace bridge::ghost
             target = -1;
             blocked = 0;
             placed = true;
+            Halt();
             ForgetRoute();
             return true;
         }
@@ -188,6 +246,7 @@ namespace bridge::ghost
             blocked = 0;
             placed = true;
             nextChoose = 0;
+            Halt();
             ForgetRoute();
         }
         std::array<double, 3> Point(int i) const
@@ -325,6 +384,35 @@ namespace bridge::ghost
             }
         }
 
+        // The narrow passages along a planned grid path (before string-pulling, so every cell it
+        // walks is seen), and which points of the walked path lie near one.
+        void MarkNarrow(const std::vector<int>& raw)
+        {
+            navNarrow.clear();
+            navNarrowEnds.clear();
+            bool inside = false;
+            const auto at2 = [&](int id) { const auto& p = nav->nodes[static_cast<std::size_t>(id)]; return std::array<double, 2>{p.x, p.y}; };
+            for (std::size_t k = 1; k + 1 < raw.size(); ++k)
+            {
+                const bool narrow = nav->Narrow(raw[k - 1], raw[k], raw[k + 1]);
+                if (narrow) navNarrow.push_back(at2(raw[k]));
+                if (narrow != inside) navNarrowEnds.push_back(at2(narrow ? raw[k] : raw[k - 1]));
+                inside = narrow;
+            }
+            if (inside) navNarrowEnds.push_back(at2(raw[raw.size() - 2]));
+            navExact.assign(navPath.size(), false);
+            const double within = nav->spacing * 1.5;
+            for (std::size_t i = 0; i < navPath.size(); ++i)
+                navExact[i] = Near(navNarrow, navPath[i][0], navPath[i][1], within);
+        }
+        bool Exact(std::size_t i) const { return i < navExact.size() && navExact[i]; }
+        static bool Near(const std::vector<std::array<double, 2>>& points, double px, double py, double within)
+        {
+            for (const auto& p : points)
+                if (std::hypot(p[0] - px, p[1] - py) < within) return true;
+            return false;
+        }
+
         // The next point to walk to. With a goal: straight there when it can, else the next waypoint
         // of a route to it; without one (roam), a random other waypoint reachable in a straight line.
         // Returns true while a route is still being worked out (call again soon).
@@ -351,16 +439,19 @@ namespace bridge::ghost
                     const std::array<double, 3> dest = viaLeg ? std::array<double, 3>{(*via)[0], (*via)[1], (*via)[2]} : g;
                     const double fraction = viaLeg ? (*via)[3] : goalStop;
                     bool reached = false;
-                    auto ids = nav->PathNodes({x, y, z}, dest, reached);
+                    planAvoid = avoid;
+                    auto ids = nav->PathNodes({x, y, z}, dest, reached, planAvoid);
                     if (!ids.empty())
                     {
                         const bool shortened = reached && fraction < 0.999;
                         if (shortened) ids.resize(std::max<std::size_t>(1, static_cast<std::size_t>(std::ceil(ids.size() * std::clamp(fraction, 0.0, 1.0)))));
-                        if (clockNow >= exactUntil) ids = nav->Smooth(ids);
+                        const std::vector<int> raw = ids;
+                        if (clockNow >= exactUntil) ids = nav->Smooth(ids, planAvoid);
                         navNodes = ids;
                         navPath.clear();
                         for (const int id : ids) navPath.push_back({nav->nodes[static_cast<std::size_t>(id)].x, nav->nodes[static_cast<std::size_t>(id)].y, nav->nodes[static_cast<std::size_t>(id)].z});
                         if (reached && !shortened && !viaLeg) { navPath.push_back(g); navNodes.push_back(-1); }
+                        MarkNarrow(raw);
                         navIndex = 0;
                         while (navIndex + 1 < navPath.size() && std::hypot(navPath[navIndex][0] - x, navPath[navIndex][1] - y) < NavArrive()) ++navIndex;
                         legFrom = {x, y, z};
@@ -403,6 +494,20 @@ namespace bridge::ghost
             return false;
         }
 
+        // The zones to keep out of changed enough to plan again (one appeared or went, moved or grew
+        // by over half a metre, or costs something else).
+        bool AvoidChanged() const
+        {
+            if (avoid.size() != planAvoid.size()) return true;
+            for (std::size_t i = 0; i < avoid.size(); ++i)
+            {
+                const auto& a = avoid[i];
+                const auto& b = planAvoid[i];
+                if (std::hypot(std::hypot(a[0] - b[0], a[1] - b[1]), a[2] - b[2]) > 50 || std::fabs(a[3] - b[3]) > 50 || std::fabs(a[4] - b[4]) > 1e-6) return true;
+            }
+            return false;
+        }
+
         // Stuck recovery: no progress for StuckSeconds while walking. Each time it happens again
         // the next step is tried: 1 hop and back off to the last point, 2 take the link it can't pass
         // out of the grid and plan again without shortcuts, 3 the same for the grid point beyond it,
@@ -416,16 +521,23 @@ namespace bridge::ghost
             if (level == 0)
             {
                 jumpStart = now; // a hop over whatever the feet caught on
-                if (target == NavTarget && navIndex > 0) --navIndex;
+                if (target == NavTarget && navIndex > 0)
+                {
+                    --navIndex;
+                    legFrom = navIndex > 0 ? navPath[navIndex - 1] : std::array<double, 3>{x, y, z - halfHeight};
+                }
             }
             else if (level == 1 || level == 2)
             {
                 // First the link it can't pass, then the grid point beyond it, out of the grid.
-                if (nav && target == NavTarget && navIndex > 0 && navIndex < navNodes.size() && navNodes[navIndex - 1] >= 0 && navNodes[navIndex] >= 0 &&
-                    nav->Dir(navNodes[navIndex - 1], navNodes[navIndex]) >= 0)
+                if (nav && target == NavTarget && navIndex > 0 && navIndex < navNodes.size() && navNodes[navIndex - 1] >= 0 && navNodes[navIndex] >= 0)
                 {
-                    if (level == 1) nav->Block(navNodes[navIndex - 1], navNodes[navIndex]);
-                    else nav->BlockNode(navNodes[navIndex]);
+                    const int a = navNodes[navIndex - 1], b = navNodes[navIndex];
+                    if (nav->Adjacent(a, b))
+                    {
+                        if (level == 1) nav->Block(a, b);
+                        else nav->BlockNode(b);
+                    }
                 }
                 exactUntil = now + 10; // grid steps only for a while (no shortcut past the snag)
                 ForgetRoute();
@@ -434,6 +546,7 @@ namespace bridge::ghost
             }
             else
             {
+                velX = velY = 0;
                 // Hop over to the next point of the path when it is close (the grid says the floor goes on
                 // there; whatever the traces disagree about is jumped), else onto the nearest grid point.
                 if (target == NavTarget && navIndex < navPath.size() && navIndex < navNodes.size() && navNodes[navIndex] >= 0 && std::hypot(navPath[navIndex][0] - x, navPath[navIndex][1] - y) < (nav ? nav->spacing * 2.5 : 0))
@@ -469,21 +582,47 @@ namespace bridge::ghost
             return std::hypot(a[0] + dx * u - px, a[1] + dy * u - py);
         }
 
-        static double Approach(double from, double to, double maxStep)
+        // One step of eased turning from `angle` toward `goal` (degrees; `wrap`: a yaw, the short way
+        // round). The angular velocity `vel` heads for the fastest speed that can still stop in time,
+        // a little faster (overshoot), at most `rate`, and changes by no more than accel x dt a step:
+        // the view speeds up, flicks across, overshoots a touch and settles. Never a snap.
+        static double Ease(double angle, double goal, double& vel, double rate, double accel, double over, double dt, bool wrap)
         {
-            const double d = WrapAngle(to - from);
-            return from + std::clamp(d, -maxStep, maxStep);
+            if (dt <= 0) return angle;
+            const double err = wrap ? WrapAngle(goal - angle) : goal - angle;
+            if (std::fabs(err) < 0.05 && std::fabs(vel) <= accel * dt) { vel = 0; return angle; } // settled
+            // The fastest it can go and still stop in time, stepping dt at a time (v^2 / 2a + v dt / 2 = err).
+            const double h = accel * dt / 2, stop = std::sqrt(h * h + 2 * accel * std::fabs(err)) - h;
+            double want = std::min({rate, stop * (1 + over), std::fabs(err) / dt * (1 + over)});
+            if (err < 0) want = -want;
+            vel += std::clamp(want - vel, -accel * dt, accel * dt);
+            const double next = angle + vel * dt;
+            return wrap ? WrapAngle(next) : next;
+        }
+
+        // The body's velocity toward `want` no faster than a body can change it: speeding up or curving
+        // at `up`, slowing down or reversing at `down` (cm/s per second).
+        static void Accelerate(double& vx, double& vy, double wx, double wy, double up, double down, double dt)
+        {
+            const double dvx = wx - vx, dvy = wy - vy, dv = std::hypot(dvx, dvy);
+            if (dv < 1e-9 || dt <= 0) return;
+            const bool slowing = std::hypot(wx, wy) < std::hypot(vx, vy) - 1e-6 || vx * wx + vy * wy < 0;
+            const double step = std::min(dv, (slowing ? down : up) * dt);
+            vx += dvx / dv * step;
+            vy += dvy / dv * step;
         }
 
         // Moves by (vx, vy) for dt if the floor and walls allow; `trust` (on a grid link) walks on
-        // where the step checks are stricter than the grid's. Returns whether it moved.
-        bool Move(double vx, double vy, double dt, double halfHeight, const Floor& floor, const Clear& clear, bool trust, double trustZ)
+        // where the step checks are stricter than the grid's. The wall check looks a little ahead,
+        // never further than `reach` (the point it walks to: a wall just past it is no obstacle).
+        // Returns whether it moved.
+        bool Move(double vx, double vy, double dt, double halfHeight, const Floor& floor, const Clear& clear, bool trust, double trustZ, double reach = 1e9)
         {
             const double nx = x + vx * dt, ny = y + vy * dt;
             const auto ground = floor(nx, ny, z + stepUp);
             const double nz = ground ? *ground + halfHeight : 0;
             const double moving = std::max(1.0, std::hypot(vx, vy));
-            const double ahead = std::max(50.0, std::min(arrive * 0.7, moving * 0.12));
+            const double ahead = std::min(std::max(50.0, std::min(arrive * 0.7, moving * 0.12)), std::max({25.0, moving * dt * 1.5, reach}));
             // The look ahead follows the slope under the feet (stairs, ramps), so the steps ahead
             // don't read as a wall.
             const double stepLen = std::max(1e-6, std::hypot(nx - x, ny - y));
@@ -505,9 +644,192 @@ namespace bridge::ghost
             return true;
         }
 
+        // How far ahead on its path it steers: a grid step, or 0.15 s at its speed.
+        double Lookahead() const { return std::max(nav ? nav->spacing : 120.0, std::hypot(velX, velY) * 0.15); }
+
+        // Along the path: on to the next point once there, or once it is round a corner it cuts (nearer
+        // the next leg than this one; never at a narrow passage). The end of the path ends the walk.
+        void AdvancePath()
+        {
+            for (int guard = 0; guard < 64 && target == NavTarget && navIndex < navPath.size(); ++guard)
+            {
+                const auto& end = navPath[navIndex];
+                const double dEnd = std::hypot(end[0] - x, end[1] - y);
+                bool next = dEnd < NavArrive();
+                if (!next && navIndex + 1 < navPath.size() && !Exact(navIndex))
+                {
+                    double u1 = 0, u2 = 0;
+                    const double onThis = SegmentDistance(x, y, legFrom, end, u1), onNext = SegmentDistance(x, y, end, navPath[navIndex + 1], u2);
+                    next = onNext < onThis && dEnd < Lookahead() * 1.5;
+                }
+                if (!next) return;
+                legFrom = navPath[navIndex];
+                ++navIndex;
+                if (navIndex >= navPath.size())
+                {
+                    navPath.clear();
+                    navNodes.clear();
+                    navExact.clear();
+                    target = -1;
+                    at = NodeAt(x, y);
+                    if (via && !viaDone) { viaDone = true; nextChoose = 0; }  // the detour done: on to the goal
+                    else if (navEndsShort && goal) stoppedFor = *goal;          // as far as it was told to go
+                    return;
+                }
+            }
+        }
+
+        // Pure pursuit along the path: the way to steer (hx, hy) is toward the point Lookahead() on
+        // from the nearest point of this leg (no further than a narrow passage's point, close to one only
+        // a little ahead); `desired` slows down for a sharp corner ahead, a narrow passage and the path's
+        // end; `reach` is how far the steering point is.
+        void Steer(double cruise, double& hx, double& hy, double& desired, double& reach) const
+        {
+            const auto& end = navPath[navIndex];
+            const double spacing = nav ? nav->spacing : 120.0;
+            const bool narrow = Near(navNarrow, x, y, spacing * 1.5);
+            const double pace = Near(navNarrowEnds, x, y, spacing * 1.5) ? 0.7 : 1.0;
+            double look = narrow ? spacing * 0.25 : Lookahead();
+            double u = 0;
+            SegmentDistance(x, y, legFrom, end, u);
+            double cx = legFrom[0] + (end[0] - legFrom[0]) * u, cy = legFrom[1] + (end[1] - legFrom[1]) * u;
+            for (std::size_t i = navIndex; i < navPath.size(); ++i)
+            {
+                const double l = std::hypot(navPath[i][0] - cx, navPath[i][1] - cy);
+                if (l >= look) { cx += (navPath[i][0] - cx) / l * look; cy += (navPath[i][1] - cy) / l * look; break; }
+                look -= l;
+                cx = navPath[i][0];
+                cy = navPath[i][1];
+                if (Exact(i)) break;
+            }
+            double dx = cx - x, dy = cy - y, d = std::hypot(dx, dy);
+            if (d < 1)
+            {
+                dx = end[0] - x;
+                dy = end[1] - y;
+                d = std::max(1e-6, std::hypot(dx, dy));
+            }
+            hx = dx / d;
+            hy = dy / d;
+            reach = d;
+            desired = cruise * pace;
+            const double brake = speed / DecelTime * 0.5;
+            const double dEnd = std::hypot(end[0] - x, end[1] - y);
+            if (navIndex + 1 < navPath.size())
+            {
+                // Into a corner no faster than it can take it: slower the sharper it turns.
+                const auto& next = navPath[navIndex + 1];
+                const double ax = end[0] - legFrom[0], ay = end[1] - legFrom[1], bx = next[0] - end[0], by = next[1] - end[1];
+                const double la = std::hypot(ax, ay), lb = std::hypot(bx, by);
+                if (la > 1e-6 && lb > 1e-6)
+                {
+                    const double turn = std::acos(std::clamp((ax * bx + ay * by) / (la * lb), -1.0, 1.0)) * 180.0 / Pi;
+                    const double corner = cruise * std::clamp(1 - turn / 180.0 * 1.1, 0.4, 1.0) * (Exact(navIndex) ? 0.7 : 1.0);
+                    desired = std::min(desired, std::sqrt(corner * corner + 2 * brake * dEnd));
+                }
+            }
+            else desired = std::min(desired, std::sqrt(2 * brake * std::max(0.0, dEnd - NavArrive() * 0.5)) + 60); // the end of the path: slow to a stop
+        }
+
+        // Holding with the peek order: out to one side of the peeked point and back (jiggle), out wide
+        // (wide) or a step out and down (crouch), from where it holds. The side is the one from which
+        // the point can be seen (else the more open one); the velocity it wants is (wx, wy).
+        void PeekStep(double now, const Clear& clear, double& wx, double& wy)
+        {
+            const auto& anchor = *holdAnchor;
+            if (!peekFor || std::hypot((*peekFor)[0] - peekAt[0], (*peekFor)[1] - peekAt[1]) > 50)
+            {
+                peekFor = peekAt;
+                peekOut = false;
+                peekFlipAt = now;
+                const double dx = peekAt[0] - anchor[0], dy = peekAt[1] - anchor[1], d = std::max(1.0, std::hypot(dx, dy));
+                const double sx = -dy / d, sy = dx / d;
+                const double eye = z + EyeAbove;
+                const bool left = clear(anchor[0] + sx * PeekTest, anchor[1] + sy * PeekTest, eye, peekAt[0], peekAt[1], peekAt[2]);
+                const bool right = clear(anchor[0] - sx * PeekTest, anchor[1] - sy * PeekTest, eye, peekAt[0], peekAt[1], peekAt[2]);
+                double sign = (Next() & 1) ? 1 : -1;
+                if (left != right) sign = left ? 1 : -1;
+                else if (!left && nav && !nav->nodes.empty())
+                    if (const int n = nav->Nearest(anchor[0], anchor[1], z); n >= 0)
+                    {
+                        const int d1 = std::fabs(sx) > std::fabs(sy) ? (sx > 0 ? 0 : 1) : (sy > 0 ? 2 : 3);
+                        const int a = nav->Openness(n, d1, 4), b = nav->Openness(n, NavGrid::Opposite[d1], 4);
+                        if (a != b) sign = a > b ? 1 : -1;
+                    }
+                peekSide = {sx * sign, sy * sign};
+            }
+            double out = 0;
+            if (peek == Peek::Jiggle)
+            {
+                if (now >= peekFlipAt)
+                {
+                    peekOut = !peekOut;
+                    peekFlipAt = now + Uniform(0.2, 0.3);
+                    if (peekOut) peekReach = Uniform(JiggleOut, JiggleFar);
+                }
+                out = peekOut ? peekReach : 0;
+            }
+            else out = peek == Peek::Wide ? WideOut : CrouchOut;
+            const double tx = anchor[0] + peekSide[0] * out - x, ty = anchor[1] + peekSide[1] * out - y, d = std::hypot(tx, ty);
+            peekCrouched = peek == Peek::Crouch && d < 30;
+            if (d < 2) return;
+            const double sp = std::min(speed, std::sqrt(2 * speed / DecelTime * 0.8 * d));
+            wx = tx / d * sp;
+            wy = ty / d * sp;
+        }
+
+        // Holding in a fight: across the line to the enemy, near where it holds. Counter-strafing:
+        // strafe, a dead stop (the shooting window), the other way; else plain side to side. The
+        // velocity it wants is (wx, wy); `down` is how hard it may stop.
+        void FightStep(double now, double& wx, double& wy, double& down)
+        {
+            const auto& f = *face;
+            const auto& anchor = *holdAnchor;
+            const double fdx = f[0] - x, fdy = f[1] - y, fd = std::max(1.0, std::hypot(fdx, fdy));
+            const double sx = -fdy / fd, sy = fdx / fd;
+            // Where it would come to a stop from here: out of range, it turns back (or stops) in time.
+            const double v = std::hypot(velX, velY), stopIn = v / (2 * (counterStrafe ? speed / CounterTime : speed / DecelTime));
+            const double px = x + velX * stopIn - anchor[0], py = y + velY * stopIn - anchor[1];
+            const bool away = (sx * strafeSign) * (x - anchor[0]) + (sy * strafeSign) * (y - anchor[1]) > 0;
+            const bool beyond = std::hypot(px, py) > StrafeRange * 0.9 && away;
+            if (counterStrafe)
+            {
+                down = speed / CounterTime;
+                if (now >= phaseUntil || (strafePhase == 0 && beyond))
+                {
+                    if (strafePhase == 0)
+                    {
+                        strafePhase = 1;
+                        phaseUntil = now + CounterTime + Uniform(0.25, 0.6);
+                    }
+                    else
+                    {
+                        strafePhase = 0;
+                        strafeSign = -strafeSign;
+                        // Far out to one side already: back the other way.
+                        if (sx * strafeSign * (x - anchor[0]) + sy * strafeSign * (y - anchor[1]) > StrafeRange * 0.4) strafeSign = -strafeSign;
+                        phaseUntil = now + Uniform(0.2, 0.45);
+                    }
+                }
+                if (strafePhase == 0)
+                {
+                    const double sp = GaitSpeed() * (0.6 + 0.4 * std::clamp(fight, 0.0, 1.0));
+                    wx = sx * strafeSign * sp;
+                    wy = sy * strafeSign * sp;
+                }
+                return;
+            }
+            if (now >= strafeFlipAt) { strafeSign = -strafeSign; strafeFlipAt = now + Uniform(0.35, 0.9); }
+            else if (beyond) { strafeSign = -strafeSign; strafeFlipAt = now + Uniform(0.35, 0.9); }
+            const double sp = speed * 0.55 * std::clamp(fight, 0.0, 1.0);
+            wx = sx * strafeSign * sp;
+            wy = sy * strafeSign * sp;
+        }
+
         // One step of `dt` seconds at time `now` (seconds). Never moves through a wall, off a
-        // ledge or up a step higher than stepUp (on a grid link it trusts the grid); turns no faster
-        // than turnRate, keeps clear of other bodies, looks around while holding and strafes in a fight.
+        // ledge or up a step higher than stepUp (on a grid link it trusts the grid); turns with an
+        // eased flick no faster than turnRate, keeps clear of other bodies, looks around while holding,
+        // peeks and strafes in a fight.
         RemoteTransform Step(double now, double dt, double halfHeight, const Floor& floor, const Clear& clear)
         {
             RemoteTransform s;
@@ -556,95 +878,124 @@ namespace bridge::ghost
                 target = -1;
                 nextChoose = 0;
             }
+            // The zones to keep out of changed (a smoke went up, a fire burnt out): the way there is
+            // planned again around them, at most twice a second.
+            if (now >= avoidCheckAt && AvoidChanged())
+            {
+                avoidCheckAt = now + 0.5;
+                planAvoid = avoid;
+                if (target == NavTarget)
+                {
+                    ForgetRoute();
+                    nextChoose = 0;
+                }
+            }
             if (target == -1 && now >= nextChoose && !hold)
             {
                 const bool pending = Choose(clear, floor, halfHeight);
                 if (target < 0) nextChoose = now + (pending ? 0.15 : 1.0); // nothing reachable from here: look again soon
             }
-            double vx = 0, vy = 0;
             if (hold && target != -1) { target = -1; }
-            if (!hold) holdAnchor.reset();
-            bool walking = false;
+            if (!hold)
+            {
+                holdAnchor.reset();
+                peekFor.reset();
+                strafePhase = 0;
+            }
+            if (!hold || peek != Peek::Crouch) peekCrouched = false;
+            const double up = speed / AccelTime;
+            double down = speed / DecelTime;
+            double wantX = 0, wantY = 0; // the velocity it wants
+            bool walking = false, moved = false;
             if (target != -1 && grounded && !hold)
             {
-                const auto dest = Point(target);
-                const double dx = dest[0] - x, dy = dest[1] - y, d = std::hypot(dx, dy);
-                if (target == NavTarget && d < NavArrive())
-                {
-                    legFrom = navPath[navIndex];
-                    ++navIndex;
-                    if (navIndex >= navPath.size())
-                    {
-                        navPath.clear();
-                        navNodes.clear();
-                        target = -1;
-                        at = NodeAt(x, y);
-                        if (via && !viaDone) { viaDone = true; nextChoose = 0; }  // the detour done: on to the goal
-                        else if (navEndsShort && goal) stoppedFor = *goal;          // as far as it was told to go
-                    }
-                }
-                else if (target != NavTarget && d < arrive)
+                if (target == NavTarget) AdvancePath();
+                else if (const auto dest = Point(target); std::hypot(dest[0] - x, dest[1] - y) < arrive)
                 {
                     at = target == GoalTarget ? -1 : target;
                     if (!route.empty() && route.front() == target) route.erase(route.begin());
                     // Straight on to the next waypoint of the route, or the goal.
                     target = route.empty() ? -1 : route.front();
                 }
+            }
+            if (target != -1 && grounded && !hold)
+            {
+                const auto dest = Point(target);
+                const double dx = dest[0] - x, dy = dest[1] - y, d = std::max(1e-6, std::hypot(dx, dy));
+                const double fx = dx / d, fy = dy / d; // straight for the point
+                const double cruise = GaitSpeed();
+                double hx = fx, hy = fy, desired = cruise, reach = 1e9, side = 0;
+                if (target == NavTarget) Steer(cruise, hx, hy, desired, reach);
                 else
                 {
-                    const double fx = dx / d, fy = dy / d;
                     // Strafe left and right while roaming, like a bot dodging; never along a nav path.
                     walkedFor += dt;
-                    const double w = 2 * 3.14159265358979 / StrafePeriod;
-                    const double side = target == NavTarget ? 0 : strafe * w * std::cos(walkedFor * w) * std::min(1.0, d / (arrive * 3));
-                    vx = fx * speed - fy * side;
-                    vy = fy * speed + fx * side;
-                    // Keep clear of other bodies: slow down behind one ahead (single file through a
-                    // door), step aside from one alongside; never walk into them.
-                    double pace = 1;
+                    const double w = 2 * Pi / StrafePeriod;
+                    side = strafe * w * std::cos(walkedFor * w) * std::min(1.0, d / (arrive * 3));
+                }
+                wantX = hx * desired - hy * side;
+                wantY = hy * desired + hx * side;
+                // Keep clear of other bodies: slow down behind one ahead (single file through a
+                // door), step aside from one alongside; never walk into them.
+                double pace = 1;
+                // Behind someone it starts slowing down early enough to stop in time from its speed.
+                const double braking = std::hypot(velX, velY) * DecelTime * 0.5;
+                for (const auto& o : others)
+                {
+                    const double ox = x - o[0], oy = y - o[1], od = std::hypot(ox, oy);
+                    if (od >= Separation + braking || od < 1) continue;
+                    const double aheadOf = -(ox * hx + oy * hy) / od; // 1: right in front
+                    if (aheadOf > 0.3) pace = std::min(pace, std::clamp((od - braking - Separation * 0.55) / (Separation * 0.45), 0.0, 1.0));
+                    if (od >= Separation) continue;
+                    const double push = (Separation - od) / Separation * speed * 0.6;
+                    const double across = (ox * -hy + oy * hx) / od;
+                    const double sign = across >= 0 ? 1 : -1;
+                    wantX += -hy * sign * push;
+                    wantY += hx * sign * push;
+                }
+                wantX -= hx * desired * (1 - pace);
+                wantY -= hy * desired * (1 - pace);
+                // At the goal with someone already standing there: stop alongside instead.
+                if (target == NavTarget && navIndex + 1 >= navPath.size() && d < Separation * 2)
                     for (const auto& o : others)
-                    {
-                        const double ox = x - o[0], oy = y - o[1], od = std::hypot(ox, oy);
-                        if (od >= Separation || od < 1) continue;
-                        const double aheadOf = -(ox * fx + oy * fy) / od; // 1: right in front
-                        if (aheadOf > 0.3) pace = std::min(pace, std::clamp((od - Separation * 0.55) / (Separation * 0.45), 0.0, 1.0));
-                        const double push = (Separation - od) / Separation * speed * 0.6;
-                        const double across = (ox * -fy + oy * fx) / od;
-                        const double sign = across >= 0 ? 1 : -1;
-                        vx += -fy * sign * push;
-                        vy += fx * sign * push;
-                    }
-                    vx -= fx * speed * (1 - pace);
-                    vy -= fy * speed * (1 - pace);
-                    // At the goal with someone already standing there: stop alongside instead.
-                    if (target == NavTarget && navIndex + 1 >= navPath.size() && d < Separation * 2)
-                        for (const auto& o : others)
-                            if (std::hypot(o[0] - dest[0], o[1] - dest[1]) < Separation * 0.8 && std::hypot(x - o[0], y - o[1]) < Separation * 1.3)
-                            {
-                                navPath.clear();
-                                navNodes.clear();
-                                target = -1;
-                                if (goal) stoppedFor = *goal;
-                                break;
-                            }
-                    if (target == -1) { vx = vy = 0; }
+                        if (std::hypot(o[0] - dest[0], o[1] - dest[1]) < Separation * 0.8 && std::hypot(x - o[0], y - o[1]) < Separation * 1.3)
+                        {
+                            navPath.clear();
+                            navNodes.clear();
+                            navExact.clear();
+                            target = -1;
+                            if (goal) stoppedFor = *goal;
+                            break;
+                        }
+                if (target != -1)
+                {
+                    moved = true;
+                    Accelerate(velX, velY, wantX, wantY, up, down, dt);
                     // On a grid link (near the segment from the last point to this one) the grid's checks hold.
                     // Only a single grid step is trusted: a string-pulled leg is checked like any walk.
                     double u = 1;
                     const bool gridStep = nav && navIndex > 0 && navIndex < navNodes.size() && navNodes[navIndex - 1] >= 0 && navNodes[navIndex] >= 0
-                                              ? nav->Dir(navNodes[navIndex - 1], navNodes[navIndex]) >= 0
+                                              ? nav->Adjacent(navNodes[navIndex - 1], navNodes[navIndex])
                                               : std::hypot(dest[0] - legFrom[0], dest[1] - legFrom[1]) <= (nav ? nav->spacing * 1.5 : 0);
                     const bool onLink = target == NavTarget && gridStep && SegmentDistance(x, y, legFrom, dest, u) < TrustDistance;
                     const double linkZ = legFrom[2] + (dest[2] - legFrom[2]) * u + halfHeight;
-                    if (Move(vx, vy, dt, halfHeight, floor, clear, onLink, linkZ))
+                    bool ok = Move(velX, velY, dt, halfHeight, floor, clear, onLink, linkZ, target == NavTarget ? reach : 1e9);
+                    if (!ok)
+                    {
+                        // Steering round the corner is blocked: straight for the point instead (the grid
+                        // says that way is clear), at least at half its pace.
+                        const double sp = std::max(std::hypot(velX, velY), cruise * 0.5);
+                        ok = Move(fx * sp, fy * sp, dt, halfHeight, floor, clear, onLink, linkZ, target == NavTarget ? d : 1e9);
+                        if (ok) { velX = fx * sp; velY = fy * sp; }
+                    }
+                    if (ok)
                     {
                         blocked = 0;
                         walking = true;
-                        wantYaw = std::atan2(fy, fx) * 180.0 / 3.14159265358979; // face where it walks
                     }
                     else
                     {
-                        vx = vy = 0;
+                        velX = velY = 0;
                         if (++blocked > 3 && target != NavTarget)
                         {
                             // The straight walk looked clear but the body can't pass: remember it and go another way.
@@ -686,63 +1037,108 @@ namespace bridge::ghost
             }
             else { progressX = x; progressY = y; progressAt = now; }
 
-            // Holding: a fight strafes (ADAD across the line to the enemy, near where it stood); otherwise
-            // it checks the open angles around it, a few seconds each.
+            // Holding: a fight strafes (across the line to the enemy, near where it stood), a peek order
+            // peeks its angle; otherwise it checks the open angles around it, a few seconds each.
+            const bool fighting = hold && grounded && face && fight > 0;
+            const bool peeking = hold && grounded && !fighting && peek != Peek::None;
             if (hold && grounded)
             {
                 if (!holdAnchor) holdAnchor = std::array<double, 2>{x, y};
-                if (face && fight > 0)
-                {
-                    const auto& f = *face;
-                    const double fdx = f[0] - x, fdy = f[1] - y, fd = std::max(1.0, std::hypot(fdx, fdy));
-                    if (now >= strafeFlipAt) { strafeSign = -strafeSign; strafeFlipAt = now + Uniform(0.35, 0.9); }
-                    const double sx = -fdy / fd * strafeSign, sy = fdx / fd * strafeSign, sp = speed * 0.55 * std::clamp(fight, 0.0, 1.0);
-                    if (std::hypot(x + sx * sp * dt - (*holdAnchor)[0], y + sy * sp * dt - (*holdAnchor)[1]) > StrafeRange || !Move(sx * sp, sy * sp, dt, halfHeight, floor, clear, false, z))
-                        strafeSign = -strafeSign;
-                    else { vx = sx * sp; vy = sy * sp; }
-                }
+                if (fighting) FightStep(now, wantX, wantY, down);
+                else if (peeking) PeekStep(now, clear, wantX, wantY);
                 else if (!face && now >= nextLook)
                 {
                     nextLook = now + Uniform(1.5, 3.5);
                     lookYaw = LookAround();
                 }
             }
+            if (!fighting) strafePhase = 0;
+            if (!peeking) peekFor.reset();
             // Standing (holding, or there) too close to another body: a step aside.
-            if (!walking && grounded)
+            if (!walking && !moved && grounded && !fighting && !peeking)
                 for (const auto& o : others)
                 {
                     const double ox = x - o[0], oy = y - o[1], od = std::hypot(ox, oy);
-                    if (od < Separation * 0.8 && od > 1 && Move(ox / od * 200, oy / od * 200, dt, halfHeight, floor, clear, false, z)) break;
+                    if (od < Separation * 0.8 && od > 1) { wantX = ox / od * 200; wantY = oy / od * 200; break; }
                 }
+            // Anything but walking its way (holding, strafing, peeking, coming to a stop): the same body
+            // speeding up and slowing down, and a wall (or the strafe range) stops it.
+            if (!moved && grounded)
+            {
+                Accelerate(velX, velY, wantX, wantY, up, down, dt);
+                if (std::hypot(velX, velY) < 0.5 && std::hypot(wantX, wantY) < 0.5) velX = velY = 0;
+                else
+                {
+                    const bool outOfRange = fighting && holdAnchor && std::hypot(x + velX * dt - (*holdAnchor)[0], y + velY * dt - (*holdAnchor)[1]) > StrafeRange &&
+                                            std::hypot(x + velX * dt - (*holdAnchor)[0], y + velY * dt - (*holdAnchor)[1]) > std::hypot(x - (*holdAnchor)[0], y - (*holdAnchor)[1]);
+                    if (outOfRange || !Move(velX, velY, dt, halfHeight, floor, clear, false, z))
+                    {
+                        velX = velY = 0;
+                        if (fighting && counterStrafe && strafePhase == 0) { strafePhase = 1; phaseUntil = now + CounterTime + Uniform(0.25, 0.6); }
+                        else if (fighting) strafeSign = -strafeSign;
+                    }
+                }
+            }
+            else if (!grounded) velX = velY = 0;
             // Standing still and looking around, also once there.
             if (!hold && !walking && target == -1 && !face && now >= nextLook)
             {
                 nextLook = now + Uniform(1.5, 3.5);
                 lookYaw = LookAround();
             }
-            // Crouch now and then, jump rarely (visual only: the capsule centre stays on the floor).
-            if (!hold && now >= nextCrouch && crouchUntil < now)
+            // Crouch now and then, jump rarely (visual only: the capsule centre stays on the floor); never
+            // while walking silently or crouched.
+            const bool quiet = walkGait || crouchStance;
+            if (!hold && !quiet && now >= nextCrouch && crouchUntil < now)
             {
                 crouchUntil = now + Uniform(0.8, 1.6);
                 nextCrouch = now + Uniform(7, 12);
             }
-            // Facing a point (an enemy): turn the body and the aim there; else where it walks or looks.
-            double wantPitch = 0;
-            if (face)
+            if (quiet) crouchUntil = std::min(crouchUntil, now);
+            const bool crouched = crouchStance || peekCrouched || now < crouchUntil;
+            const double crouchedHalf = halfHeight * 0.6;
+            const double eye = z + EyeAbove - (crouched ? halfHeight - crouchedHalf : 0);
+            // Where it looks: a point it faces (an enemy), the angle it peeks, the corner it pre-aims;
+            // else where it walks or looks around.
+            lookAt.reset();
+            if (face) lookAt = *face;
+            else if (peeking) lookAt = peekAt;
+            else if (preaim && walking && target == NavTarget && navIndex + 1 < navPath.size())
             {
-                const auto& f = *face;
-                const double dx = f[0] - x, dy = f[1] - y, dz = f[2] - (z + EyeAbove);
-                if (std::hypot(dx, dy) > 1)
+                // Pre-aim: round the next corner of the path (a little way along the leg after it), at head height.
+                const auto& c = navPath[navIndex];
+                const auto& n = navPath[navIndex + 1];
+                const double ax = c[0] - x, ay = c[1] - y, bx = n[0] - c[0], by = n[1] - c[1];
+                const double la = std::hypot(ax, ay), lb = std::hypot(bx, by), spacing = nav ? nav->spacing : 120.0;
+                if (la > 1 && lb > 1 && la < spacing * 12 && (ax * bx + ay * by) / (la * lb) < std::cos(25 * Pi / 180))
                 {
-                    wantYaw = std::atan2(dy, dx) * 180.0 / 3.14159265358979;
-                    wantPitch = std::atan2(dz, std::hypot(dx, dy)) * 180.0 / 3.14159265358979;
+                    const double along = std::min(lb, spacing * 3);
+                    lookAt = std::array<double, 3>{c[0] + bx / lb * along, c[1] + by / lb * along, c[2] + (n[2] - c[2]) * along / lb + halfHeight + EyeAbove};
                 }
             }
+            double wantPitch = 0;
+            const double moving = std::hypot(velX, velY);
+            if (lookAt)
+            {
+                const auto& f = *lookAt;
+                const double dx = f[0] - x, dy = f[1] - y, dz = f[2] - eye;
+                if (std::hypot(dx, dy) > 1)
+                {
+                    wantYaw = std::atan2(dy, dx) * 180.0 / Pi;
+                    wantPitch = std::atan2(dz, std::hypot(dx, dy)) * 180.0 / Pi;
+                }
+            }
+            else if (walking && moving > GaitSpeed() * 0.2) wantYaw = std::atan2(velY, velX) * 180.0 / Pi; // face where it walks
             else if (!walking) wantYaw = lookYaw;
-            // Human turning: no faster than turnRate (degrees per second).
-            yaw = WrapAngle(Approach(yaw, wantYaw, turnRate * dt));
-            pitch = pitch + std::clamp(wantPitch - pitch, -turnRate * dt, turnRate * dt);
-            if (hold) nextJump = std::max(nextJump, now + 2); // no hops while standing to shoot or plant
+            if (walking)
+            {
+                lookYaw = wantYaw; // once there, it keeps looking that way until it looks around
+                nextLook = std::max(nextLook, now + 0.8);
+            }
+            // Human turning: eased, a touch of overshoot, no faster than turnRate (degrees per second).
+            yaw = Ease(yaw, wantYaw, yawVel, turnRate, TurnAccel(), overshoot, dt, true);
+            pitch = std::clamp(Ease(pitch, wantPitch, pitchVel, turnRate, TurnAccel(), overshoot, dt, false), -89.0, 89.0);
+            if (hold || quiet) nextJump = std::max(nextJump, now + 2); // no hops while standing to shoot or plant, peeking, or sneaking
             if (now >= nextJump && jumpStart < 0 && now >= crouchUntil)
             {
                 jumpStart = now;
@@ -755,18 +1151,18 @@ namespace bridge::ghost
                 if (u >= 1) jumpStart = -1;
                 else
                 {
-                    hop = std::sin(u * 3.14159265358979) * JumpHeight;
-                    vz = std::cos(u * 3.14159265358979) * JumpHeight * 3.14159265358979 / JumpTime;
+                    hop = std::sin(u * Pi) * JumpHeight;
+                    vz = std::cos(u * Pi) * JumpHeight * Pi / JumpTime;
                 }
             }
-            s.crouch = now < crouchUntil;
-            s.halfHeight = s.crouch ? halfHeight * 0.6 : halfHeight;
+            s.crouch = crouched;
+            s.halfHeight = s.crouch ? crouchedHalf : halfHeight;
             s.x = x;
             s.y = y;
             // A crouched body is a shorter capsule standing on the same floor: its centre is lower.
             s.z = z + hop - (s.crouch ? halfHeight - s.halfHeight : 0);
-            s.vx = vx;
-            s.vy = vy;
+            s.vx = velX;
+            s.vy = velY;
             s.vz = vz;
             s.yaw = yaw;
             s.pitch = pitch;

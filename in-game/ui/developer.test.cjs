@@ -55,3 +55,14 @@ test('the developer page offers avatars, loopback, game commands, content and Wo
 test('with developer mode off the page explains where to turn it on',()=>{
   const s=setup();s.api.enter(s.container);s.last().finish(200,off);assert.ok(s.text(s.container).includes('Turn it on under Settings'));
 });
+test('with bot debug on the page lists each bot\'s senses: what it heard, the decoys it called, its smoke call and blindness',()=>{
+  const s=setup();s.api.enter(s.container);
+  const dbg=JSON.parse(JSON.stringify(on));dbg.status.botDebug=true;
+  dbg.status.bots=[{name:'BOT Ace',role:'anchor',move:'walk/stand',heard:['gunfire (rifle) 23 m through a wall'],sources:['#2 rifle: decoy (never moves, no hits)'],smoke:'HoldEdge (smoke 9 m, 8 s left)',blind:0.7,flash:'looking away (own flash)'},
+    {name:'BOT Kit',role:'roam',move:'run/stand',heard:[],sources:[],smoke:null,blind:0,flash:null}];
+  s.last().finish(200,dbg);
+  const text=s.text(s.container);
+  assert.ok(text.includes('BOT Ace · anchor')&&text.includes('heard gunfire (rifle) 23 m through a wall')&&text.includes('gunfire #2 rifle: decoy (never moves, no hits)')&&text.includes('smoke: HoldEdge')&&text.includes('blind 70%')&&text.includes('looking away (own flash)'));
+  assert.ok(text.includes('BOT Kit · roam')&&!text.includes('blind 0%'),'a calm bot shows just its movement');
+  s.button(s.container,'Off').onclick();assert.deepEqual(JSON.parse(s.last().body),{action:'bot-debug',on:false});
+});

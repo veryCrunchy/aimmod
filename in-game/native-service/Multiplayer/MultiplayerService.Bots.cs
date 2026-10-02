@@ -52,15 +52,19 @@ sealed partial class MultiplayerService
             var team = view?.Players.FirstOrDefault(p => p.Member == id)?.Team ?? 0;
             // A bot's own position: its avatar as its game reports it, else its track.
             if (botSight.TryGetValue(id, out var s) && now - s.At <= BotBrain.SightFreshMs)
-                return new BotPlayer(id, tag, s.X, s.Y, BotEye(s), team, alive, positions.TryGetValue(id, out var ps) ? ps.Speed : 0);
+                return new BotPlayer(id, tag, s.X, s.Y, BotEye(s), team, alive, s.Speed ?? (positions.TryGetValue(id, out var ps) ? ps.Speed : 0), s.Crouch);
             return positions.TryGetValue(id, out var p) ? new BotPlayer(id, tag, p.At.X, p.At.Y, p.At.Z, team, alive, p.Speed) : null;
         }).Where(p => p is not null).Select(p => p!).ToList();
         var bots = lobby.Members.Where(m => IsBot(m) && match.Players.Contains(m.Id)).Select(m => (m.Id, m.Bot!)).ToList();
-        // Smoke and flashes (CsGrenades.cs) take sight away; bot grenades go after the brain's own step.
-        var world = new BotWorld(now, match.Mode, bots, players, GrenadeSight(match.Cs, botSight, players, now), match.Cs, csObjectives, view?.Events ?? []);
+        // Smoke takes sight away (BotVision: through the cloud as it grows, both ways), a flash is the
+        // brain's (BotTactics); they hear everyone's shots (the shot log); bot grenades go after the
+        // brain's own step, its calls first.
+        shotLog.Reset(ShotKey(match));
+        var world = new BotWorld(now, match.Mode, bots, players, BotVision.Sight(match.Cs, botSight, players, now), match.Cs, csObjectives, view?.Events ?? [], shotLog.Recent.ToArray());
         var step = botBrain.Step(world);
-        StepBotGrenades(world);
+        StepBotUtility(world, step.Utility ?? []);
         LastBotStep = step;
+        LogBots(step, now);
         foreach (var a in step.Actions) core.Apply(a.Bot, a.Action, JsonSerializer.SerializeToElement(a.Args, Protocol.Json), library);
         RecordBotFire(match, step, now); // before the hits: a killing shot still sounds
         foreach (var shot in step.Shots) core.BotShot(shot.Bot, shot.Victim, shot.Head, shot.Slot, shot.Dir);
@@ -86,6 +90,51 @@ sealed partial class MultiplayerService
         }
     }
     static double R(double v) => Math.Round(v, 1);
+
+    // Bot grenades: the policy (MultiplayerService.Grenades.cs BotGrenadePolicy, else BotGrenades)
+    // with the brain's own calls this step.
+    void StepBotUtility(BotWorld world, IReadOnlyList<BotUtilityRequest> requests)
+    {
+        if (core is null || world.Cs is null) return;
+        var step = (BotGrenadePolicy ?? botGrenades).Step(world, requests);
+        foreach (var (bot, item) in step.Buys) core.Apply(bot, "buy", JsonSerializer.SerializeToElement(new { item }, Protocol.Json), library);
+        foreach (var t in step.Throws)
+            if (core.BotThrow(t.Bot, t.Kind, t.From, t.Velocity) is { Ok: true } && requests.FirstOrDefault(r => r.Bot == t.Bot && r.Kind == t.Kind) is { } why)
+                Console.Error.WriteLine("[bots] " + BotName(t.Bot) + " throws a " + t.Kind + ": " + why.Why);
+    }
+
+    // The bot log: what the brain noticed (decoy verdicts, smoke calls, flashes) as it happens, and
+    // with bot debug on, every bot's senses once a second.
+    long botDebugLoggedAt = long.MinValue / 2;
+    string BotName(string member) => Current?.Members.FirstOrDefault(m => m.Id == member)?.Name ?? member;
+    void LogBots(BotStep step, long now)
+    {
+        foreach (var line in botBrain.Notes.Take(32)) Console.Error.WriteLine("[bots] " + NameIn(line));
+        botBrain.Notes.Clear();
+        if (!BotDebug || now - botDebugLoggedAt < 1000 || step.Debug is not { Count: > 0 } debug) return;
+        botDebugLoggedAt = now;
+        foreach (var d in debug) Console.Error.WriteLine("[bots] " + BotDebugLine(d with { Bot = BotName(d.Bot) }));
+    }
+    // A note names bots by member id first: their lobby names instead.
+    string NameIn(string line)
+    {
+        var space = line.IndexOf(' ');
+        var colon = line.IndexOf(':');
+        var end = space < 0 ? colon : colon < 0 ? space : Math.Min(space, colon);
+        return end > 0 ? BotName(line[..end]) + line[end..] : line;
+    }
+    internal static string BotDebugLine(BotDebugInfo d) =>
+        d.Bot + ": " + d.Role + " | " + d.Move
+        + (d.Heard.Count > 0 ? " | heard " + string.Join(", ", d.Heard) : "")
+        + (d.Decoys.Count > 0 ? " | sources " + string.Join("; ", d.Decoys) : "")
+        + (d.Smoke is { } sm ? " | smoke: " + sm : "")
+        + (d.Blind > 0.05 ? " | blind " + d.Blind.ToString("0.00", CultureInfo.InvariantCulture) : "")
+        + (d.Flash is { } fl ? " | " + fl : "");
+    // The developer menu's bot list (bot debug): the same, one entry per bot.
+    internal object? BotDebugView() => LastBotStep?.Debug?.Select(d => new
+    {
+        name = BotName(d.Bot), role = d.Role, move = d.Move, heard = d.Heard, sources = d.Decoys, smoke = d.Smoke, blind = Math.Round(d.Blind, 2), flash = d.Flash,
+    }).ToArray();
 
     // Test hooks (checks only): a bot's track and health on the host, and a client's shot at a bot
     // the way its game would send it (its own camera track, then the hit on the ray to the bot).
@@ -208,8 +257,13 @@ sealed partial class MultiplayerService
                 if (o.Stop is > 0 and < 1) sb.Append('\t').Append(o.Stop.ToString("0.##", CultureInfo.InvariantCulture));
             }
             sb.Append('\n');
+            if (o.Gait != "run" || o.Stance != "stand" || o.PreAim) sb.Append("move\t").Append(peer).Append('\t').Append(o.Gait).Append('\t').Append(o.Stance).Append('\t').Append(o.PreAim ? 1 : 0).Append('\n');
+            if (o.Peek is { } peek && o.PeekAt is { Length: >= 3 } pa) sb.Append("peek\t").Append(peer).Append('\t').Append(peek).Append('\t').Append(F(pa[0])).Append('\t').Append(F(pa[1])).Append('\t').Append(F(pa[2])).Append('\n');
+            if (o.Accel > 0) sb.Append("aim\t").Append(peer).Append('\t').Append(F(o.Accel)).Append('\t').Append(o.Overshoot.ToString("0.##", CultureInfo.InvariantCulture)).Append('\n');
+            foreach (var a in (o.Avoid ?? []).Take(8))
+                if (a.Length >= 5) sb.Append("avoid\t").Append(peer).Append('\t').Append(F(a[0])).Append('\t').Append(F(a[1])).Append('\t').Append(F(a[2])).Append('\t').Append(F(a[3])).Append('\t').Append(F(a[4])).Append('\n');
             if (o.Via is { Length: >= 4 } via) sb.Append("via\t").Append(peer).Append('\t').Append(F(via[0])).Append('\t').Append(F(via[1])).Append('\t').Append(F(via[2])).Append('\t').Append(via[3].ToString("0.##", CultureInfo.InvariantCulture)).Append('\n');
-            if (o.Fight > 0) sb.Append("fight\t").Append(peer).Append('\t').Append(o.Fight.ToString("0.##", CultureInfo.InvariantCulture)).Append('\n');
+            if (o.Fight > 0) sb.Append("fight\t").Append(peer).Append('\t').Append(o.Fight.ToString("0.##", CultureInfo.InvariantCulture)).Append(o.FightStyle is { } style ? "\t" + style : "").Append('\n');
             if (o.Turn > 0) sb.Append("turn\t").Append(peer).Append('\t').Append(F(o.Turn)).Append('\n');
             if (o.Face is { Length: >= 3 } f) sb.Append("face\t").Append(peer).Append('\t').Append(F(f[0])).Append('\t').Append(F(f[1])).Append('\t').Append(F(f[2])).Append('\n');
             if (o.PlaceToken is { } token && o.PlaceAt is { Length: >= 3 } at)
@@ -231,8 +285,8 @@ sealed partial class MultiplayerService
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
     }
 
-    // bot-sight.tsv: "AIMMOD_BOTSIGHT_1\t<unix ms>", then "bot\t<peer>\tx\ty\tz\tyaw" (capsule centre)
-    // and "seen\t<peer>\t<tag>\t0|1" rows.
+    // bot-sight.tsv: "AIMMOD_BOTSIGHT_1\t<unix ms>", then "bot\t<peer>\tx\ty\tz\tyaw" (capsule centre),
+    // "vel\t<peer>\t<speed cm/s>\t<crouch 0|1>" (newer bridges) and "seen\t<peer>\t<tag>\t0|1" rows.
     void ReadBotSight()
     {
         var path = Path.Combine(outputFolder!, BotSightFile);
@@ -259,7 +313,7 @@ sealed partial class MultiplayerService
         if (!long.TryParse(lines[0][18..], NumberStyles.Integer, CultureInfo.InvariantCulture, out var at)) return null;
         // A stale file (the game stopped writing it) says nothing.
         if (Math.Abs(now - at) > 5000) return null;
-        var pos = new Dictionary<string, double[]>(); var seen = new Dictionary<string, HashSet<int>>();
+        var pos = new Dictionary<string, double[]>(); var seen = new Dictionary<string, HashSet<int>>(); var vel = new Dictionary<string, (double Speed, bool Crouch)>();
         static double? Num(string s) => double.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out var v) && double.IsFinite(v) && Math.Abs(v) < 1e7 ? v : null;
         foreach (var line in lines.Skip(1).Take(256))
         {
@@ -267,12 +321,15 @@ sealed partial class MultiplayerService
             // bot\t<peer>\tx\ty\tz\tyaw[\tfloor]: the floor column is newer (a bridge without it gives 6).
             if (p.Length is 6 or 7 && p[0] == "bot" && p[1].Length is > 0 and <= 2 && Num(p[2]) is { } x && Num(p[3]) is { } y && Num(p[4]) is { } z && Num(p[5]) is { } yaw)
                 pos[p[1]] = p.Length == 7 && Num(p[6]) is { } fl && fl <= z ? [x, y, z, yaw, fl] : [x, y, z, yaw];
+            else if (p.Length == 4 && p[0] == "vel" && p[1].Length is > 0 and <= 2 && Num(p[2]) is { } speed && speed is >= 0 and < 20_000 && p[3] is "0" or "1")
+                vel[p[1]] = (speed, p[3] == "1");
             else if (p.Length == 4 && p[0] == "seen" && int.TryParse(p[2], NumberStyles.None, CultureInfo.InvariantCulture, out var tag) && tag < 64 && p[3] is "0" or "1")
             {
                 if (!seen.TryGetValue(p[1], out var set)) seen[p[1]] = set = [];
                 if (p[3] == "1") set.Add(tag);
             }
         }
-        return pos.ToDictionary(kv => kv.Key, kv => new BotSight(at, kv.Value[0], kv.Value[1], kv.Value[2], kv.Value[3], seen.TryGetValue(kv.Key, out var s) ? s : new HashSet<int>(), kv.Value.Length > 4 ? kv.Value[4] : null));
+        return pos.ToDictionary(kv => kv.Key, kv => new BotSight(at, kv.Value[0], kv.Value[1], kv.Value[2], kv.Value[3], seen.TryGetValue(kv.Key, out var s) ? s : new HashSet<int>(), kv.Value.Length > 4 ? kv.Value[4] : null,
+            vel.TryGetValue(kv.Key, out var v) ? v.Speed : null, vel.TryGetValue(kv.Key, out var c) && c.Crouch));
     }
 }

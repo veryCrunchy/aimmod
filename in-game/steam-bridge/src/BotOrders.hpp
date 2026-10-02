@@ -7,8 +7,24 @@
 //   bot\t<peer>\t<roam|goal|hold>[\t<x>\t<y>\t<z>[\t<stop>]]   goal: walk there and stay (stop: only
 //                                                    that fraction of the way, 0..1); hold: stand still
 //   via\t<peer>\t<x>\t<y>\t<z>\t<fraction>         first that fraction of the way to this point, then the goal
-//   fight\t<peer>\t<0..1>                            holding in a fight: strafe that hard
+//   fight\t<peer>\t<0..1>[\t<counter|ad>]            holding in a fight: strafe that hard; counter: strafe
+//                                                    0.2-0.45 s, a dead stop within 80 ms, still 0.25-0.6 s
+//                                                    (the shooting window), the other way; ad (or none):
+//                                                    plain side to side
 //   turn\t<peer>\t<degrees per second>               how fast it turns (by difficulty)
+//   aim\t<peer>\t<deg/s^2>\t<overshoot>              eased turning: the view's angular acceleration
+//                                                    (100..100000; default 6 x turn) up to `turn`, and how
+//                                                    much it overshoots and settles (0..0.5, default 0.05)
+//   move\t<peer>\t<run|walk>\t<stand|crouch>\t<0|1>  how it walks: run, shift-walk (52% of the run speed,
+//                                                    silent) or crouched (34%, a crouched body); 1: with no
+//                                                    face order, pre-aim round the next corner of its path
+//   peek\t<peer>\t<jiggle|wide|crouch>\t<x>\t<y>\t<z>   holding: peek that point (an angle, at head height)
+//                                                    from where it holds: jiggle out and back, swing out
+//                                                    wide and stay, or a step out and crouch
+//   avoid\t<peer>\t<x>\t<y>\t<z>\t<radius>\t<cost>    keep out of this circle (a smoke, a fire) when it can:
+//                                                    radius 10..3000 cm, extra cost per grid step inside
+//                                                    0..100000 (1000 or more: only when there is no other
+//                                                    way); up to 8 per bot
 //   debug\t<0|1>                                     draw the bots' paths and goals in the world
 //   face\t<peer>\t<x>\t<y>\t<z>                       look at that point (an enemy's eye)
 //   place\t<peer>\t<token>\t<x>\t<y>\t<z>\t<yaw>      stand there once per token (a round start, a respawn)
@@ -18,6 +34,8 @@
 // bot-sight.tsv (AimModSteam -> service), 10 times a second while bots are ordered:
 //   AIMMOD_BOTSIGHT_1\t<unix ms>
 //   bot\t<peer>\t<x>\t<y>\t<z>\t<yaw>\t<floor>        the bot avatar's capsule centre, and the floor under it
+//   vel\t<peer>\t<speed>\t<0|1>                       its horizontal speed (cm/s; near 0: stopped, e.g. to
+//                                                    shoot after a counter-strafe) and whether it crouches
 //   seen\t<peer>\t<tag>\t<0|1>                        whether the line from its eye to the target is clear
 
 #include <array>
@@ -51,7 +69,18 @@ namespace bridge::bots
         double stop = 1;                                  // walk only this fraction of the way to the goal
         std::optional<std::array<double, 4>> via;          // x, y, z, fraction: a detour first
         double fight = 0;                                 // strafe in a fight (0..1)
+        bool counterStrafe = false;                       // the fight's style: counter-strafing, else side to side
         double turn = 0;                                  // degrees per second, 0: the walker's default
+        double aimAccel = 0;                              // deg/s^2, 0: the walker's default (and its overshoot)
+        double aimOvershoot = 0;
+        enum class Gait { Run, Walk };
+        Gait gait = Gait::Run;
+        bool crouch = false;                              // crouch-walk, the body crouched
+        bool preaim = false;                              // look round the next corner of its path
+        enum class Peek { None, Jiggle, Wide, Crouch };
+        Peek peek = Peek::None;
+        std::array<double, 3> peekAt{};
+        std::vector<std::array<double, 5>> avoid;         // x, y, z, radius, cost per grid step
     };
     struct Orders
     {
@@ -115,7 +144,7 @@ namespace bridge::bots
         }
     } // namespace detail
 
-    // Lenient per row (a bad row is skipped), strict on the header; at most 16 peers, 8 sight targets each.
+    // Lenient per row (a bad row is skipped), strict on the header; at most 16 peers, 8 sight targets and 8 avoid zones each.
     inline std::optional<Orders> Parse(std::string_view text)
     {
         Orders orders;
@@ -165,11 +194,51 @@ namespace bridge::bots
             }
             else if (p[0] == "fight" && p.size() >= 3)
             {
-                if (const auto f = detail::Number(p[2]); f && *f >= 0 && *f <= 1) o.fight = *f;
+                const bool styled = p.size() >= 4;
+                const bool counter = styled && p[3] == "counter";
+                const bool knownStyle = !styled || counter || p[3] == "ad";
+                if (const auto f = detail::Number(p[2]); knownStyle && f && *f >= 0 && *f <= 1)
+                {
+                    o.fight = *f;
+                    o.counterStrafe = counter;
+                }
             }
             else if (p[0] == "turn" && p.size() >= 3)
             {
                 if (const auto t = detail::Number(p[2]); t && *t >= 30 && *t <= 3600) o.turn = *t;
+            }
+            else if (p[0] == "aim" && p.size() >= 4)
+            {
+                const auto a = detail::Number(p[2]), over = detail::Number(p[3]);
+                if (a && *a >= 100 && *a <= 100000 && over && *over >= 0 && *over <= 0.5)
+                {
+                    o.aimAccel = *a;
+                    o.aimOvershoot = *over;
+                }
+            }
+            else if (p[0] == "move" && p.size() >= 5)
+            {
+                const bool run = p[2] == "run", walk = p[2] == "walk", stand = p[3] == "stand", crouch = p[3] == "crouch";
+                if ((run || walk) && (stand || crouch) && (p[4] == "0" || p[4] == "1"))
+                {
+                    o.gait = walk ? Order::Gait::Walk : Order::Gait::Run;
+                    o.crouch = crouch;
+                    o.preaim = p[4] == "1";
+                }
+            }
+            else if (p[0] == "peek" && p.size() >= 6 && detail::Point(p, 3, xyz))
+            {
+                const auto mode = p[2] == "jiggle" ? Order::Peek::Jiggle : p[2] == "wide" ? Order::Peek::Wide : p[2] == "crouch" ? Order::Peek::Crouch : Order::Peek::None;
+                if (mode != Order::Peek::None)
+                {
+                    o.peek = mode;
+                    o.peekAt = xyz;
+                }
+            }
+            else if (p[0] == "avoid" && p.size() >= 7 && o.avoid.size() < 8 && detail::Point(p, 2, xyz))
+            {
+                const auto r = detail::Number(p[5]), cost = detail::Number(p[6]);
+                if (r && *r >= 10 && *r <= 3000 && cost && *cost >= 0 && *cost <= 100000) o.avoid.push_back({xyz[0], xyz[1], xyz[2], *r, *cost});
             }
             else if (p[0] == "place" && p.size() >= 7 && p[2].size() <= 32 && detail::Point(p, 3, xyz))
             {
@@ -200,6 +269,8 @@ namespace bridge::bots
         double x = 0, y = 0, z = 0, yaw = 0;
         double floor = 0; // the floor under it (feet), where a dropped bomb lands
         std::vector<std::pair<int, bool>> seen;
+        double speed = 0;   // horizontal speed (cm/s)
+        bool crouch = false;
     };
     inline std::string Format(std::int64_t unixMs, const std::vector<Report>& reports)
     {
@@ -208,6 +279,8 @@ namespace bridge::bots
         for (const auto& r : reports)
         {
             std::snprintf(line, sizeof(line), "bot\t%llu\t%.1f\t%.1f\t%.1f\t%.1f\t%.1f\n", static_cast<unsigned long long>(r.peer), r.x, r.y, r.z, r.yaw, r.floor);
+            text += line;
+            std::snprintf(line, sizeof(line), "vel\t%llu\t%.1f\t%d\n", static_cast<unsigned long long>(r.peer), r.speed, r.crouch ? 1 : 0);
             text += line;
             for (const auto& [tag, visible] : r.seen)
             {

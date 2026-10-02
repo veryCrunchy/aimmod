@@ -854,7 +854,23 @@ namespace aimmod
                         walk.walker.goalStop = order ? order->stop : 1;
                         walk.walker.via = order ? order->via : std::nullopt;
                         walk.walker.fight = order ? order->fight : 0;
+                        walk.walker.counterStrafe = order && order->counterStrafe;
                         if (order && order->turn > 0) walk.walker.turnRate = order->turn;
+                        // How it moves: gait and stance, pre-aiming, eased aim, peeks, zones to keep out of.
+                        walk.walker.walkGait = order && order->gait == bridge::bots::Order::Gait::Walk;
+                        walk.walker.crouchStance = order && order->crouch;
+                        walk.walker.preaim = order && order->preaim;
+                        walk.walker.aimAccel = order ? order->aimAccel : 0;
+                        walk.walker.overshoot = order && order->aimAccel > 0 ? order->aimOvershoot : bridge::ghost::Walker::Overshoot;
+                        using Peek = bridge::ghost::Walker::Peek;
+                        const auto peekMode = order ? order->peek : bridge::bots::Order::Peek::None;
+                        walk.walker.peek = peekMode == bridge::bots::Order::Peek::Jiggle ? Peek::Jiggle
+                                           : peekMode == bridge::bots::Order::Peek::Wide ? Peek::Wide
+                                           : peekMode == bridge::bots::Order::Peek::Crouch ? Peek::Crouch
+                                                                                            : Peek::None;
+                        if (order) walk.walker.peekAt = order->peekAt;
+                        if (order) walk.walker.avoid = order->avoid;
+                        else walk.walker.avoid.clear();
                         // Everyone else's body: the other bots, the remote players and the local player.
                         walk.walker.others.clear();
                         for (const auto& [otherPeer, other] : m_walkers)
@@ -894,7 +910,8 @@ namespace aimmod
                             }
                         }
                         // The floor under it as well (the walker's own z is on the traced floor): a bomb it drops lands there.
-                        if (order) m_botReports.push_back({w.peer, ws.x, ws.y, ws.z, ws.yaw, walk.walker.z - half, walk.seen});
+                        // Its speed and stance too: the service fires once it has stopped (a counter-strafe).
+                        if (order) m_botReports.push_back({w.peer, ws.x, ws.y, ws.z, ws.yaw, walk.walker.z - half, walk.seen, std::hypot(ws.vx, ws.vy), ws.crouch});
                         if (m_botOrders && m_botOrders->debug) DrawBotDebug(w.peer, walk, world, now);
                         // Every 5 s: what each bot is told and how far along it is.
                         if (order && now >= walk.nextStatusLog)
@@ -910,7 +927,12 @@ namespace aimmod
                                               b.navReached ? "" : " (not to the goal yet)", b.plansFound, b.plansPending, b.plansFailed, b.navBlocked);
                             else
                                 std::snprintf(line, sizeof(line), "avatars: bot %llu %s at (%.0f, %.0f, %.0f)%s", static_cast<unsigned long long>(w.peer), mode, b.x, b.y, b.z, order->face ? ", facing an enemy" : "");
-                            m_log(line);
+                            // How it moves: gait, stance, peek, fight style, zones it keeps out of, speed and turning.
+                            const char* peekName = b.peek == bridge::ghost::Walker::Peek::Jiggle ? "jiggle" : b.peek == bridge::ghost::Walker::Peek::Wide ? "wide" : b.peek == bridge::ghost::Walker::Peek::Crouch ? "crouch" : "none";
+                            char moves[200];
+                            std::snprintf(moves, sizeof(moves), "; %s, %s%s; peek %s; fight %.2f %s; avoid %zu; %.0f cm/s, yaw turning %.0f deg/s", b.walkGait ? "walk" : "run", b.crouchStance ? "crouched" : "standing",
+                                          b.preaim ? ", pre-aiming" : "", peekName, b.fight, b.counterStrafe ? "counter" : "ad", b.avoid.size(), std::hypot(b.velX, b.velY), b.yawVel);
+                            m_log(std::string(line) + moves);
                         }
                         if (!wasPlaced && walk.walker.placed)
                             m_log("avatars: simulated player " + std::to_string(w.peer) + " placed at spawn " + std::to_string(walk.walker.at) + " z=" +
@@ -1119,8 +1141,10 @@ namespace aimmod
         }
     }
 
-    // Bot debug overlay: up to 24 small spheres along the bot's path (from where it is) and a cube on
-    // its goal, moved four times a second; unused markers wait far below the map.
+    // Bot debug overlay: a cube on its goal, a sphere where it looks (an enemy, the peeked angle, the
+    // corner it pre-aims), one on each zone it keeps out of (up to 4), and the rest of the 25 small
+    // spheres along its path (from where it is), moved four times a second; unused markers wait far
+    // below the map.
     void GhostDemo::DrawBotDebug(std::uint64_t peer, const DevWalk& walk, UObject* world, double now)
     {
         (void)now;
@@ -1142,6 +1166,9 @@ namespace aimmod
         std::vector<std::array<double, 3>> points;
         if (b.goal) points.push_back(*b.goal);
         else points.push_back({0, 0, -100000});
+        if (b.lookAt) points.push_back(*b.lookAt);
+        else points.push_back({0, 0, -100000});
+        for (std::size_t i = 0; i < b.avoid.size() && i < 4; ++i) points.push_back({b.avoid[i][0], b.avoid[i][1], b.avoid[i][2]});
         for (std::size_t i = b.navIndex; i < b.navPath.size() && points.size() < Count; ++i) points.push_back({b.navPath[i][0], b.navPath[i][1], b.navPath[i][2] + 40});
         for (std::size_t i = 0; i < markers.size(); ++i)
             if (UObject* actor = markers[i].Get())

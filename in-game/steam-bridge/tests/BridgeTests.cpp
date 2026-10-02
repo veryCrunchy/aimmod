@@ -839,7 +839,9 @@ int main()
             bool ok = false;
             raw = grid->PathNodes({-2000, -2000, 145}, {-200, -400, 145}, ok);
             const auto pulled = grid->Smooth(raw);
-            Check(ok && raw.size() > 20 && pulled.size() <= 3 && pulled.front() == raw.front() && pulled.back() == raw.back(), "paths are string-pulled into straight legs");
+            Check(ok && raw.size() > 12 && pulled.size() <= 3 && pulled.front() == raw.front() && pulled.back() == raw.back(), "paths are string-pulled into straight legs");
+            // Diagonal steps across open floor: about as many grid points as the longer side, not both sides.
+            Check(raw.size() <= 18, "across open floor the grid path steps diagonally, not in a staircase");
         }
         // Stuck recovery: a pillar the grid never saw (the traces missed it) blocks the way. The bot
         // hops, backs off, takes the link out of the grid and goes around.
@@ -949,6 +951,263 @@ int main()
             a2.Step(i / 60.0, 1 / 60.0, half, floor, open);
         }
         Check(std::hypot(a1.x - a2.x, a1.y - a2.y) > 80 && std::hypot(a1.x + 500, a1.y + 500) < 400 && std::hypot(a2.x + 500, a2.y + 500) < 400, "two bots sent to one spot stand side by side");
+
+        // Eased turning: the view's angular velocity changes no faster than its acceleration, no step
+        // turns faster than the turn rate, it settles on the target, and overshoots only a little.
+        {
+            const double rate = 540, accel = 3240, dt = 1 / 60.0;
+            const auto turn = [&](double over, double& overshot, double& maxDv, double& maxStep, double& settled) {
+                double a = 0, v = 0;
+                overshot = 0; maxDv = 0; maxStep = 0; settled = -1;
+                for (int i = 0; i < 240; ++i)
+                {
+                    const double before = a, vb = v;
+                    a = ghost::Walker::Ease(a, 179, v, rate, accel, over, dt, false);
+                    maxDv = std::max(maxDv, std::fabs(v - vb));
+                    maxStep = std::max(maxStep, std::fabs(a - before));
+                    overshot = std::max(overshot, a - 179);
+                    if (std::fabs(a - 179) < 1) { if (settled < 0) settled = i * dt; }
+                    else settled = -1;
+                }
+            };
+            double over5 = 0, over0 = 0, dv = 0, step = 0, settled = 0, dv0 = 0, step0 = 0, settled0 = 0;
+            turn(0.05, over5, dv, step, settled);
+            turn(0, over0, dv0, step0, settled0);
+            Check(dv <= accel * dt + 1e-9 && dv0 <= accel * dt + 1e-9, "eased turning never changes its turning speed faster than its acceleration");
+            Check(step <= rate * 1.05 * dt + 1e-9 && step0 <= rate * dt + 1e-9, "eased turning never snaps: no step faster than the turn rate");
+            Check(settled > 0 && settled < 1.5 && settled0 > 0 && settled0 < 1.5, "a 180 degree turn settles within a degree of its target");
+            Check(over5 > 0.5 && over5 < 15 && over0 < 0.5, "it overshoots a little with overshoot, barely without");
+            // A series of random targets, across +-180: the same limits on every step.
+            double a = 0, v = 0, target = 0, worstDv = 0, worstStep = 0;
+            std::uint32_t r = 12345;
+            for (int i = 0; i < 60 * 30; ++i)
+            {
+                if (i % 30 == 0) { r = r * 1664525u + 1013904223u; target = (r % 36000) / 100.0 - 180; }
+                const double before = a, vb = v;
+                a = ghost::Walker::Ease(a, target, v, rate, accel, 0.2, dt, true);
+                worstDv = std::max(worstDv, std::fabs(v - vb));
+                worstStep = std::max(worstStep, std::fabs(ghost::WrapAngle(a - before)));
+            }
+            Check(worstDv <= accel * dt + 1e-9 && worstStep <= rate * 1.2 * dt + 1e-9, "random flicks across +-180 keep to the acceleration and turn rate");
+        }
+
+        // Gaits: shift-walking at 52% of the run speed, crouch-walking at 34% (the body crouched), and
+        // neither hops nor crouches at random on the way.
+        {
+            const auto topSpeed = [&](bool walkGait, bool crouchStance, bool& alwaysCrouched, bool& idled) {
+                ghost::Walker g;
+                g.nav = grid;
+                g.spawns = {{-2000, -2000, 150}};
+                g.Tune(1100, 79);
+                g.Place(0, half, floor);
+                g.walkGait = walkGait;
+                g.crouchStance = crouchStance;
+                g.goal = std::array<double, 3>{-2000, 2500, 145};
+                double top = 0;
+                alwaysCrouched = true;
+                idled = false;
+                for (int i = 0; i < 60 * 20; ++i)
+                {
+                    const auto s = g.Step(i / 60.0, 1 / 60.0, half, floor, open);
+                    top = std::max(top, std::hypot(s.vx, s.vy));
+                    alwaysCrouched &= s.crouch;
+                    idled |= (!crouchStance && s.crouch) || s.z > half + 1;
+                }
+                return top / g.speed;
+            };
+            bool crouchedRun = false, crouchedWalk = false, crouchedCrouch = false, idleRun = false, idleWalk = false, idleCrouch = false;
+            const double run = topSpeed(false, false, crouchedRun, idleRun), walk = topSpeed(true, false, crouchedWalk, idleWalk), crouch = topSpeed(false, true, crouchedCrouch, idleCrouch);
+            Check(std::fabs(run - 1) < 0.03 && std::fabs(walk - 0.52) < 0.02 && std::fabs(crouch - 0.34) < 0.02, "a bot runs, shift-walks at 52% and crouch-walks at 34% of its speed");
+            Check(crouchedCrouch && !crouchedWalk && !idleWalk && !idleCrouch, "crouch-walking it stays crouched; walking silently it never hops or crouches at random");
+        }
+
+        // Smooth walking round the corner of an L-shaped corridor: the heading turns gradually, it slows
+        // for the corner and arrives, never leaving the floor.
+        {
+            const auto inL = [](double x, double y) { return (x > -200 && x < 3180 && std::fabs(y) < 180) || (std::fabs(x - 3000) < 180 && y > -180 && y < 3000); };
+            auto lFloor = [inL](double x, double y, double) -> std::optional<double> { return inL(x, y) ? std::optional<double>(0.0) : std::nullopt; };
+            auto lClear = [inL](double ax, double ay, double, double bx, double by, double) {
+                const int n = std::max(1, static_cast<int>(std::hypot(bx - ax, by - ay) / 10));
+                for (int k = 0; k <= n; ++k)
+                    if (!inL(ax + (bx - ax) * k / n, ay + (by - ay) * k / n)) return false;
+                return true;
+            };
+            const auto lGrid = std::make_shared<ghost::NavGrid>();
+            lGrid->stepUp = 79; lGrid->stepDown = 126; lGrid->halfHeight = half;
+            lGrid->Seed(0, 0, 150, lFloor);
+            lGrid->Seed(3000, 2760, 150, lFloor);
+            while (!lGrid->Done()) lGrid->Grow(5000, lFloor, lClear);
+            const auto walkL = [&](bool preaim, double& maxHeadingStep, double& cornerSpeed, double& maxYawStep, bool& left, double& yawBefore) {
+                ghost::Walker c;
+                c.nav = lGrid;
+                c.spawns = {{0, 0, 150}};
+                c.Tune(1100, 79);
+                c.Place(0, half, lFloor);
+                c.preaim = preaim;
+                c.goal = std::array<double, 3>{3000, 2760, 145};
+                double lastHeading = 1e9, lastYaw = c.yaw, at = -1;
+                maxHeadingStep = 0; cornerSpeed = 1e9; maxYawStep = 0; left = false; yawBefore = 0;
+                for (int i = 0; i < 60 * 20 && at < 0; ++i)
+                {
+                    const auto s = c.Step(i / 60.0, 1 / 60.0, half, lFloor, lClear);
+                    const double sp = std::hypot(s.vx, s.vy);
+                    if (sp > c.speed * 0.5)
+                    {
+                        const double heading = std::atan2(s.vy, s.vx) * 180 / 3.14159265358979;
+                        if (lastHeading < 1e8) maxHeadingStep = std::max(maxHeadingStep, std::fabs(ghost::WrapAngle(heading - lastHeading)));
+                        lastHeading = heading;
+                    }
+                    else lastHeading = 1e9;
+                    maxYawStep = std::max(maxYawStep, std::fabs(ghost::WrapAngle(s.yaw - lastYaw)));
+                    lastYaw = s.yaw;
+                    if (std::hypot(s.x - 3000, s.y) < 300) cornerSpeed = std::min(cornerSpeed, sp);
+                    if (s.x > 2300 && s.x < 2400 && std::fabs(s.y) < 150) yawBefore = s.yaw;
+                    left |= !inL(s.x, s.y);
+                    if (std::hypot(s.x - 3000, s.y - 2760) < c.arrive + 10) at = i / 60.0;
+                }
+                return at;
+            };
+            double headingStep = 0, cornerSpeed = 0, yawStep = 0, yawBefore = 0, h2 = 0, c2 = 0, y2 = 0, yawPreaim = 0;
+            bool left = false, left2 = false;
+            const double at = walkL(false, headingStep, cornerSpeed, yawStep, left, yawBefore);
+            Check(at > 0 && !left, "a bot walks round the corner of an L-shaped corridor and arrives, never off the floor");
+            Check(headingStep < 12 && yawStep <= 540.0 / 60 + 1e-6, "its heading turns gradually through the corner (no step change), its view no faster than the turn rate");
+            Check(cornerSpeed < 935 * 0.85, "and it slows down for the corner");
+            const double at2 = walkL(true, h2, c2, y2, left2, yawPreaim);
+            Check(at2 > 0 && !left2 && yawPreaim > 20 && std::fabs(yawBefore) < 10, "pre-aiming, it looks round the corner ahead while it walks up to it");
+        }
+
+        // Counter-strafing: strafe, a dead stop (under 0.1 s), still for the shooting window, the other way.
+        {
+            ghost::Walker cs;
+            cs.nav = grid;
+            cs.spawns = {{-1500, -1500, 150}};
+            cs.Tune(1100, 79);
+            cs.Place(0, half, floor);
+            cs.hold = true;
+            cs.fight = 1;
+            cs.counterStrafe = true;
+            cs.face = std::array<double, 3>{-1500, 0, 200};
+            double stopAt = -1, topSpeed = 0, leftX = 1e9, rightX = -1e9;
+            int windows = 0, slowStops = 0, movedInWindow = 0, shortWindows = 0;
+            int lastPhase = 0;
+            for (int i = 0; i < 60 * 8; ++i)
+            {
+                const double t = i / 60.0;
+                const auto s = cs.Step(t, 1 / 60.0, half, floor, open);
+                const double sp = std::hypot(s.vx, s.vy);
+                topSpeed = std::max(topSpeed, sp);
+                leftX = std::min(leftX, s.x); rightX = std::max(rightX, s.x);
+                if (cs.strafePhase == 1 && lastPhase == 0) stopAt = t;
+                if (cs.strafePhase == 0 && lastPhase == 1)
+                {
+                    ++windows;
+                    if (t - stopAt < 0.3) ++shortWindows;
+                }
+                if (cs.strafePhase == 1 && stopAt >= 0)
+                {
+                    if (t - stopAt >= 0.1 && sp > 5) ++movedInWindow;
+                    if (t - stopAt >= 0.1 && t - stopAt < 0.1 + 1 / 60.0 && sp > 5) ++slowStops;
+                }
+                lastPhase = cs.strafePhase;
+            }
+            Check(windows >= 4 && topSpeed > cs.speed * 0.5 && rightX - leftX > 100 && rightX - leftX <= 2 * ghost::Walker::StrafeRange + 20, "counter-strafing, a bot strafes both ways across the enemy's line, within its range");
+            Check(slowStops == 0 && movedInWindow == 0 && shortWindows == 0, "it stops dead within 0.1 s and stands still for the shooting window");
+        }
+
+        // Zones to avoid (a smoke): around one when there is room, through it when there is no other way.
+        {
+            const std::array<double, 5> smoke{-2000, 0, 0, 500, 50};
+            bool ok = false;
+            const auto around = grid->PathNodes({-2000, -2000, 145}, {-2000, 2000, 145}, ok, {smoke});
+            const auto legs = grid->Smooth(around, {smoke});
+            bool inside = false, cutsAcross = false;
+            for (const int n : around) inside |= std::hypot(grid->nodes[n].x - smoke[0], grid->nodes[n].y - smoke[1]) < smoke[3];
+            for (std::size_t i = 1; i < legs.size(); ++i)
+            {
+                const auto& p = grid->nodes[legs[i - 1]];
+                const auto& q = grid->nodes[legs[i]];
+                cutsAcross |= ghost::NavGrid::CrossesZone({p.x, p.y, p.z}, {q.x, q.y, q.z}, smoke);
+            }
+            bool direct = false;
+            const auto plain = grid->Smooth(grid->PathNodes({-2000, -2000, 145}, {-2000, 2000, 145}, direct));
+            bool plainCrosses = false;
+            for (std::size_t i = 1; i < plain.size(); ++i)
+            {
+                const auto& p = grid->nodes[plain[i - 1]];
+                const auto& q = grid->nodes[plain[i]];
+                plainCrosses |= ghost::NavGrid::CrossesZone({p.x, p.y, p.z}, {q.x, q.y, q.z}, smoke);
+            }
+            Check(ok && direct && !inside && !cutsAcross && plainCrosses, "a path goes round a zone to avoid when there is room, and its shortcuts never cut across it");
+            // The walker plans around it too, and plans again once it is gone.
+            ghost::Walker av;
+            av.nav = grid;
+            av.spawns = {{-2000, -2000, 150}};
+            av.Tune(1100, 79);
+            av.Place(0, half, floor);
+            av.avoid = {smoke};
+            av.goal = std::array<double, 3>{-2000, 2000, 145};
+            double closest = 1e9;
+            bool arrived = false;
+            for (int i = 0; i < 60 * 20 && !arrived; ++i)
+            {
+                const auto s = av.Step(i / 60.0, 1 / 60.0, half, floor, open);
+                closest = std::min(closest, std::hypot(s.x - smoke[0], s.y - smoke[1]));
+                arrived = std::hypot(s.x + 2000, s.y - 2000) < av.arrive + 10;
+            }
+            Check(arrived && closest > smoke[3] * 0.85, "a bot walks round a smoke on its way");
+            av.goal = std::array<double, 3>{-2000, -2000, 145};
+            av.Step(30, 1 / 60.0, half, floor, open);
+            av.avoid.clear();
+            for (int i = 1; i < 10; ++i) av.Step(30 + i / 60.0, 1 / 60.0, half, floor, open);
+            Check(av.planAvoid.empty(), "a smoke gone, it plans without it");
+        }
+        {
+            // The only way (a corridor) through the zone: walked through all the same, even at a cost meant to be never.
+            auto corridorFloor = [](double x, double y, double) -> std::optional<double> { return x > -200 && x < 3200 && std::fabs(y) < 100 ? std::optional<double>(0.0) : std::nullopt; };
+            auto anywhere = [](double, double, double, double, double, double) { return true; };
+            ghost::NavGrid corridor;
+            corridor.stepUp = 79; corridor.stepDown = 126; corridor.halfHeight = 145;
+            corridor.Seed(0, 0, 150, corridorFloor);
+            while (!corridor.Done()) corridor.Grow(5000, corridorFloor, anywhere);
+            bool through = false, never = false;
+            const auto p1 = corridor.PathNodes({0, 0, 145}, {3000, 0, 145}, through, {{1500, 0, 0, 300, 50}});
+            const auto p2 = corridor.PathNodes({0, 0, 145}, {3000, 0, 145}, never, {{1500, 0, 0, 300, 5000}});
+            Check(through && never && p1.size() == p2.size() && p1.size() >= 25, "with no other way it goes through the zone");
+        }
+
+        // Peeks: a jiggle peek steps out 60-90 cm to one side and back, quickly, facing the point; a wide
+        // peek swings out and stays.
+        {
+            ghost::Walker pk;
+            pk.nav = grid;
+            pk.spawns = {{-1500, -1500, 150}};
+            pk.Tune(1100, 79);
+            pk.Place(0, half, floor);
+            pk.hold = true;
+            pk.peek = ghost::Walker::Peek::Jiggle;
+            pk.peekAt = {-1500, -500, half + 64};
+            double maxOut = 0, maxAlong = 0, worstAim = 0;
+            int swings = 0;
+            bool out = false;
+            for (int i = 0; i < 60 * 4; ++i)
+            {
+                const auto s = pk.Step(i / 60.0, 1 / 60.0, half, floor, open);
+                const double off = std::fabs(s.x + 1500);
+                maxOut = std::max(maxOut, off);
+                maxAlong = std::max(maxAlong, std::fabs(s.y + 1500));
+                if (!out && off > 45) { out = true; ++swings; }
+                if (out && off < 15) out = false;
+                const double bearing = std::atan2(-500 - s.y, -1500 - s.x) * 180 / 3.14159265358979;
+                if (i > 60) worstAim = std::max(worstAim, std::fabs(ghost::WrapAngle(s.yaw - bearing)));
+            }
+            Check(maxOut > 55 && maxOut < 100 && maxAlong < 15 && swings >= 5, "a jiggle peek steps out 60-90 cm to the side and back, again and again");
+            Check(worstAim < 10, "and keeps facing the peeked point");
+            pk.peek = ghost::Walker::Peek::Wide;
+            pk.peekAt = {-1500, -400, half + 64};
+            for (int i = 0; i < 60 * 2; ++i) pk.Step(5 + i / 60.0, 1 / 60.0, half, floor, open);
+            Check(std::fabs(std::fabs(pk.x + 1500) - ghost::Walker::WideOut) < 20 && std::hypot(pk.velX, pk.velY) < 5, "a wide peek swings out and holds there");
+        }
     }
     // Avatar placement: the actor follows the simulated position every tick.
     {
@@ -1001,9 +1260,31 @@ int main()
         Check(bridge::bots::Parse("AIMMOD_BOTS_1\t1\nsight\t1\t2\tnan\t0\t0\nbot\t1\tgoal\t1e9\t0\t0\n")->bots.at(1).sight.empty(), "refuses non-finite and huge numbers");
         bridge::bots::Report r;
         r.peer = 2; r.x = 1; r.y = 2.25; r.z = -3; r.yaw = 90; r.floor = -148; r.seen = {{4, true}, {9, false}};
-        Check(bridge::bots::Format(1759300000000, {r}) == "AIMMOD_BOTSIGHT_1\t1759300000000\nbot\t2\t1.0\t2.2\t-3.0\t90.0\t-148.0\nseen\t2\t4\t1\nseen\t2\t9\t0\n" ||
-                  bridge::bots::Format(1759300000000, {r}) == "AIMMOD_BOTSIGHT_1\t1759300000000\nbot\t2\t1.0\t2.3\t-3.0\t90.0\t-148.0\nseen\t2\t4\t1\nseen\t2\t9\t0\n",
-              "formats bot-sight.tsv, with the floor under each bot");
+        r.speed = 412.34; r.crouch = true;
+        Check(bridge::bots::Format(1759300000000, {r}) == "AIMMOD_BOTSIGHT_1\t1759300000000\nbot\t2\t1.0\t2.2\t-3.0\t90.0\t-148.0\nvel\t2\t412.3\t1\nseen\t2\t4\t1\nseen\t2\t9\t0\n" ||
+                  bridge::bots::Format(1759300000000, {r}) == "AIMMOD_BOTSIGHT_1\t1759300000000\nbot\t2\t1.0\t2.3\t-3.0\t90.0\t-148.0\nvel\t2\t412.3\t1\nseen\t2\t4\t1\nseen\t2\t9\t0\n",
+              "formats bot-sight.tsv, with the floor under each bot, its speed and crouch");
+        // How the bots move: gait and stance, peeks, the fight's style, eased aim, zones to avoid.
+        std::string rows = "AIMMOD_BOTS_1\t9\nmove\t1\twalk\tcrouch\t1\npeek\t1\tjiggle\t10\t20\t30\nfight\t1\t0.7\tcounter\naim\t1\t2500\t0.1\n"
+                           "avoid\t1\t1\t2\t3\t300\t50\navoid\t1\t4\t5\t6\t200\t5000\nfight\t4\t0.5\nfight\t5\t0.5\tad\n"
+                           "move\t2\tsprint\tstand\t0\nmove\t2\twalk\tstand\t2\nmove\t2\twalk\npeek\t2\tlean\t1\t2\t3\npeek\t2\twide\t1\t2\nfight\t2\t0.5\tzigzag\n"
+                           "aim\t2\t50\t0.1\naim\t2\t2000\t0.9\navoid\t2\t0\t0\t0\t5\t10\navoid\t2\t0\t0\t0\t100\t-1\navoid\t2\t0\t0\tnan\t100\t1\n";
+        for (int i = 0; i < 10; ++i) rows += "avoid\t3\t" + std::to_string(i) + "\t0\t0\t100\t10\n";
+        const auto moves = bridge::bots::Parse(rows);
+        Check(moves && moves->bots.size() == 5, "parses the movement rows");
+        if (moves && moves->bots.size() == 5)
+        {
+            const auto& m1 = moves->bots.at(1);
+            using O = bridge::bots::Order;
+            Check(m1.gait == O::Gait::Walk && m1.crouch && m1.preaim && m1.peek == O::Peek::Jiggle && m1.peekAt[2] == 30, "move (walk, crouched, pre-aiming) and peek rows");
+            Check(m1.fight == 0.7 && m1.counterStrafe && moves->bots.at(4).fight == 0.5 && !moves->bots.at(4).counterStrafe && !moves->bots.at(5).counterStrafe && moves->bots.at(5).fight == 0.5,
+                  "a fight's style: counter, ad, or none (side to side)");
+            Check(m1.aimAccel == 2500 && m1.aimOvershoot == 0.1 && m1.avoid.size() == 2 && m1.avoid[1][3] == 200 && m1.avoid[1][4] == 5000, "aim and avoid rows");
+            const auto& m2 = moves->bots.at(2);
+            Check(m2.gait == O::Gait::Run && !m2.crouch && !m2.preaim && m2.peek == O::Peek::None && m2.fight == 0 && m2.aimAccel == 0 && m2.avoid.empty(),
+                  "bad movement rows are skipped (unknown gaits, peeks and styles, out-of-range aim and zones)");
+            Check(moves->bots.at(3).avoid.size() == 8, "at most 8 zones to avoid per bot");
+        }
         // The overhaul's orders: stop short, a detour, fight strafing, turn rate, the debug overlay.
         const auto more = bridge::bots::Parse("AIMMOD_BOTS_1\t8\ndebug\t1\nbot\t1\tgoal\t100\t200\t30\t0.6\nvia\t1\t-50\t60\t30\t0.5\nfight\t1\t0.8\nturn\t1\t420\n"
                                               "bot\t2\tgoal\t1\t2\t3\t7\nvia\t2\t1\t2\t3\t2\nfight\t2\t5\nturn\t2\t1\n");
