@@ -8,7 +8,7 @@ import re
 import sys
 from typing import List, Optional
 
-from . import (archive, bsp, checks, cleanup, csmap, goldsrc, kovaaks_json, materials, naming, objectives, preview, quake3,
+from . import (archive, bsp, checks, cleanup, collision, csmap, goldsrc, kovaaks_json, materials, naming, objectives, preview, quake3,
                reflex, scenario, spawns, tags, thumbnail, views, vmf)
 
 
@@ -81,6 +81,7 @@ def convert_file(path: str, out: str, args) -> dict:
     spawns.fix_spawns(sc)
     spawns.snap_to_floor(sc)  # a spawn lifted out of a brush stands on what it was lifted onto
     checks.remove_floating(sc)
+    collision.remove_stray_clips(sc)
     table = materials.load_table(args.materials)
     slots, tex_slot = materials.allocate(sc, table, args.groups)
     os.makedirs(out, exist_ok=True)
@@ -139,6 +140,8 @@ def convert_file(path: str, out: str, args) -> dict:
                         gap_cells=checks.GAP_CELLS if mv.clamp_air_speed else checks.GAP_CELLS + 3)
     reached = result.pop("_reached")
     report["checks"] = result
+    report["collision"] = collision.audit(sc)
+    report["stats"] = dict(sorted(sc.stats.items()))
     if not args.no_thumbnail:
         _thumbnails(sc, slots, tex_slot, reached, out, base, sce_name, display, game, variant, mv, text_for_capture,
                     args, report)
@@ -247,6 +250,10 @@ def main(argv: Optional[List[str]] = None) -> int:
               f"reach={chk.get('reachability')} dark_faces={chk.get('dark_faces')}")
         if not chk.get("pass") and not args.allow_check_fail:
             failed = True
+        col = rep.get("collision", {})
+        if col:
+            print(f"  collision: {col['visible_no_collision_unexpected']} visible props without collision, "
+                  f"{sum(col['missing_models'].values())} missing props, clips {col['invisible_collision']}")
         for k, v in rep.get("views", {}).items():
             print(f"  view {k}: {v * 100:.1f}% holes below the horizon")
         for k, v in rep["files"].items():

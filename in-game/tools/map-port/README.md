@@ -20,7 +20,7 @@ Output in `<dir>`:
 | `aimmod_<mapid>_<game>.thumb-views.json` | not installed: camera views for AimModCore's `capture-thumbnail` |
 | `Capture/AimMod Capture - <file id>.sce` | install only to capture a thumbnail: the same map with no bots |
 | `aimmod_<mapid>_<game>.aimmod.json` | `FPSAimTrainer/maps/`, next to the map: game-mode metadata and the CS map spec AimMod reads (see below) |
-| `aimmod_<mapid>_<game>.report.json` | not installed: brush counts, drop reasons, material slots |
+| `aimmod_<mapid>_<game>.report.json` | not installed: brush counts, drop reasons, material slots, collision audit (see below) |
 | `aimmod_<mapid>_<game>.preview.png` | not installed: preview check (see below); `--no-preview` skips it |
 | `aimmod_<mapid>_<game>.views/` (`--views`) | not installed: first-person check renders |
 
@@ -184,25 +184,50 @@ Outlaws, Pixel, Christmas, N0ted, Timmy). The Anime pack is DLC.
 - All-nodraw solid brushes (world and detail) are shown as stand-in geometry. In Source, models
   cover them; without the models they would be invisible walls with holes into the void.
 - **Models** (`prop_static` from the `sprp` game lump, and prop entities) are rebuilt from the model
-  files packed in the BSP:
-  - A solid prop with a packed `.phy` becomes its exact convex collision pieces (visible and solid).
-  - Any other packed model (`.mdl` + `.dx90.vtx` + `.vvd`) is split into triangle-connected parts.
-    Each part becomes a non-colliding 26-sided hull, which brings back stairs, trims, frames and
-    beams; the map's own clip brushes provide their collision.
-    Box-like parts use their model-space box (6 faces); others use an 18-sided hull. Parts smaller
+  files packed in the BSP or read from installed games, and collide like the model they show
+  (`mapport/props.py`):
+  - A solid prop with a `.phy` becomes its exact convex collision pieces (visible and solid). Every
+    convex piece ("ledge") of the `.phy` is read; the ledge tree's hulls around several pieces are
+    not collision of their own and are skipped.
+  - A solid model without a `.phy` (`.mdl` + `.dx90.vtx` + `.vvd` only) is split into
+    triangle-connected parts. A part collides when it is at least 16 units long and 8 units across
+    in its middle extent; smaller ones (rods, handles, trims) stay visible only. A colliding part
+    becomes its model-space box (6 faces) or an 18-sided hull when that hull is at least 60 % full;
+    hollow parts (arches, frames, railings) become up to 24 boxes that follow their voxelised volume
+    (24 cells along the longest side, at least 4 units), so their openings stay open. Parts smaller
     than 12 units are skipped, and at most 40 parts are kept per model.
+  - Source's solidity is honoured: `solid 0` props, debris physics props (`prop_physics` spawnflag
+    4) and open doors are visible without collision; `solid 2` collides as the model's bounding box;
+    `solid 6` (VPhysics, the default) uses the collision pieces. Props that start disabled are left
+    out. `prop_physics` and `prop_dynamic` props (crates, barrels, breakables) stand where the map
+    puts them as static solids, and `prop_door_rotating` swings open by its `distance` (backwards for
+    `opendir 2`) like `func_door_rotating`.
   - **Stock models** (the game's own, not packed in the map) are read from installed Source games
     with `--stock-models auto` (the default): the `*_dir.vpk` content of Steam library games
     (`cstrike`, `hl2`, `episodic`, `portal`, `garrysmod`, …; Portal and Half-Life 2 carry the HL2
     props: oil drums, cars, containers, fences, lamp posts). Solid ones with a `.phy` get their exact
     collision like packed models. Nothing is copied into the port except hull geometry, and the
-    report names the content folders used (never a path). CS-only props (`props/de_*`,
-    `props/cs_*`) need Counter-Strike: Source installed. `none` turns this off.
-  - Stock models that are not installed can't be read. Where the model name carries a size (`dust_crate_37x37x74`, `dust_door_80x128`), a non-colliding box stands in. The
-    pivot (floor, centre or hinge) is chosen per model as the one that leaves the box least buried
-    in the map's solids. Everything else is listed in the report.
+    report names the content folders used (never a path). `none` turns this off.
+  - **Counter-Strike 2** still ships most CS:S and CS:GO props under their old names as compiled
+    Source 2 models. When CS2 is installed, a CS model that no Source 1 game provides takes the
+    convex hulls and collision meshes of its CS2 physics data (`game/csgo/pak01_dir.vpk`,
+    `mapport/source2.py`): first by the same path, else by a unique file name outside the remade
+    `hr_` folders (CS2 moved some models, e.g. into `window/`). Hulls are visible and solid; physics
+    meshes become hulls or boxes as above. Debris collision groups don't collide.
+  - Stock models that no installed game provides can't be read. Where the model name carries a size
+    (`dust_crate_37x37x74`, `dust_door_80x128`, `du_crate_64x64`), a box stands in. Crates, boxes,
+    pallets and other block-shaped names collide (a two-number crate name is width x height);
+    doors, windows and frames don't, because their real shape has openings. The pivot (floor,
+    centre or hinge) is chosen per model as the one that leaves the box least buried in the map's
+    solids. Everything else is listed in the report (`collision.missing_models`).
+  - Player clips around a missing prop (a prop-sized clip, at most 384 units, that holds the prop's
+    origin) would be invisible walls, so they are shown in the prop's place with the prop material.
   - Sloped clip brushes next to an unported stairs model are made visible (stone), because CS:GO
     covers model stairs with an invisible clip ramp.
+  - Player clips in the playable band that touch nothing visible and no other clip (stray clips)
+    are removed. Clips on stairs, ledges, walls, props and the sky shell stay.
+  - All prop collision is Default brushes, which stop players and shots alike, so props stop
+    bullets where they are drawn.
 - A wide ground plane sits 32 units under the lowest geometry, so any remaining hole shows ground
   instead of the void.
 - Hint/skip/areaportal/occluder brushes and most triggers are dropped (liquids, `trigger_hurt`,
@@ -342,10 +367,28 @@ Every conversion runs these checks; a failure makes `map-port` exit with code 3 
   outside water. They fail the run when there are more than 8, or more than 2 % of the reachable
   area; examples are listed.
 - **No near-black faces** in the playable area.
-- **Props and stand-ins must be supported.** Anything without map geometry within 48 units below is
-  removed before the check. Stand-in boxes are snapped onto the floor, or skipped when there is none.
+- **Props and stand-ins must be supported.** Anything without map geometry within 48 units below,
+  and not touching map geometry (wall lights, ceiling lamps: within 4 units), is removed before the
+  check. A model made of several pieces stays when any piece is supported. Stand-in boxes are
+  snapped onto the floor, or skipped when there is none.
 
 The first-person check views (`--views`) use 8 well-spread spots from the walk graph.
+
+## Collision audit
+
+The report's `collision` block (`mapport/collision.py`) lists, in the playable height band
+(128 units below the lowest spawn to 256 above the highest):
+
+- `visible_no_collision`: visible prop objects players and shots pass through, by model and
+  reason: `nonsolid` (the map makes it non-solid, as in CS), `detail` (a small part of a colliding
+  model), `standin` (a name-sized box for a missing door or window) or `unported` (a solid prop
+  with only a visual hull). `visible_no_collision_unexpected` counts the `unported` ones.
+- `missing_models`: prop models nothing provides, neither visible nor solid.
+- `invisible_collision`: player clips by what they sit against: `boundary` (sky shell, wall-sized),
+  `stairs_edges` (sloped, or against world geometry or other clips), `prop`, and `stray` (left
+  after the stray clips were removed; listed in `stray_clips`).
+
+The console prints one line per port with these counts.
 
 ## Workshop thumbnails
 
@@ -396,7 +439,8 @@ JackOLantern and Pumpkin. Meso skins are Genji, McCree, Pharah and Tracer. Chang
 
 ## Not converted yet
 
-- Stock models of games that are not installed, and exact model shapes (models become hulls).
+- Stock models no installed game provides (see `collision.missing_models`), and exact render
+  shapes (models become their collision hulls).
 - Lighting, lightmaps and the sky: KovaaK's lights every map with the player's own theme (sky
   preset, clouds, sun, sky colour live in the theme, not in a scenario or map), so a port cannot
   set them.
