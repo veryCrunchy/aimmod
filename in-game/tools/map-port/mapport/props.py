@@ -70,7 +70,13 @@ def _ledges(data: bytes, cs: int, end: int) -> List[List[Vec]]:
     pieces = []
     while lo + 16 <= min(limit, first_points):
         point_ofs, _client, flags, ntris = struct.unpack_from("<iiIh", data, lo)
-        size = (flags >> 8) * 16
+        # Ledges follow each other directly: a 16-byte header and 16 bytes per triangle. (The size
+        # in the header's flags also counts the ledge's share of the point data that follows all
+        # ledges, so stepping by it skipped every ledge after the first.)
+        size = 16 + 16 * ntris if ntris > 0 else 0
+        # A ledge with children is the convex hull of other ledges (the ledge tree's bounding
+        # hull), not collision of its own: as a solid it would fill every gap between the pieces.
+        hull_of_children = bool(flags & 3)
         pts_at = lo + point_ofs
         first_points = min(first_points, pts_at)
         tris = []
@@ -82,7 +88,7 @@ def _ledges(data: bytes, cs: int, end: int) -> List[List[Vec]]:
                 x, y, z, _w = struct.unpack_from("<ffff", data, pts_at + 16 * i)
                 tri.append((x * INCHES_PER_METER, z * INCHES_PER_METER, -y * INCHES_PER_METER))
             tris.append(tri)
-        if tris:
+        if tris and not hull_of_children:
             pieces.append(tris)
         if size <= 0:
             break
@@ -200,6 +206,14 @@ def _strip_groups(vtx: bytes, at: int, count: int, size: int, base: int, nverts:
 
 def connected_parts(verts: Sequence[Vec], tris: Sequence[Tuple[int, int, int]]) -> List[List[Vec]]:
     """Split a mesh into triangle-connected parts (vertices welded by position)."""
+    return [_extremes(pts) for pts, _tris in connected_part_meshes(verts, tris)]
+
+
+def connected_part_meshes(verts: Sequence[Vec], tris: Sequence[Tuple[int, int, int]],
+                          min_size: float = MIN_PART_SIZE, min_middle: float = 4.0,
+                          limit: int = MAX_PARTS) -> List[Tuple[List[Vec], List[Tuple[Vec, Vec, Vec]]]]:
+    """Triangle-connected parts as (vertices, triangles), largest first. Specks smaller than
+    min_size and wires/cables (thin in two directions) are left out."""
     key = {}
     weld = []
     for v in verts:
@@ -218,17 +232,20 @@ def connected_parts(verts: Sequence[Vec], tris: Sequence[Tuple[int, int, int]]) 
         parent[rb] = ra
         parent[find(rc)] = ra
     groups: Dict[int, List[Vec]] = {}
+    gtris: Dict[int, List[Tuple[Vec, Vec, Vec]]] = {}
     used = {i for tri in tris for i in tri}
     for i in used:
         groups.setdefault(find(weld[i]), []).append(verts[i])
+    for a, b, c in tris:
+        gtris.setdefault(find(weld[a]), []).append((verts[a], verts[b], verts[c]))
     sized = []
-    for gp in groups.values():
+    for root, gp in groups.items():
         exts = sorted(max(q[k] for q in gp) - min(q[k] for q in gp) for k in range(3))
         # skip specks, and wires/cables (thin in two directions) that would read as floating beams
-        if exts[2] >= MIN_PART_SIZE and exts[1] >= 4.0:
-            sized.append((exts[2], gp))
+        if exts[2] >= min_size and exts[1] >= min_middle:
+            sized.append((exts[2], gp, gtris.get(root, [])))
     sized.sort(key=lambda e: -e[0])
-    return [_extremes(gp) for _ext, gp in sized[:MAX_PARTS]]
+    return [(gp, tr) for _ext, gp, tr in sized[:limit]]
 
 
 def _extremes(group: Sequence[Vec]) -> List[Vec]:
@@ -344,17 +361,43 @@ def _vec(s: str) -> Vec:
         return (0.0, 0.0, 0.0)
 
 
+def _num(e: Dict[str, str], key: str, default: float) -> float:
+    try:
+        return float(e.get(key, default) or default)
+    except ValueError:
+        return default
+
+
+SOLID_BBOX = 2  # Source `solid`: 0 not solid, 2 bounding box, 6 VPhysics
+DEBRIS = 4      # prop_physics spawnflag: debris, never collides with players
+
+
 def entity_props(entities: Sequence[Dict[str, str]]) -> List[dict]:
+    """Prop entities as static props. KovaaK's has no physics or moving models, so prop_physics and
+    prop_dynamic (crates, barrels, breakables) stand where the map puts them and keep their
+    collision. Debris physics props don't collide, and props that start disabled (hidden) are left
+    out. prop_door_rotating swings open by its `distance` like func_door_rotating and stops
+    colliding."""
     out = []
     for e in entities:
         cls = e.get("classname", "")
         if not cls.startswith(("prop_dynamic", "prop_physics", "prop_static", "prop_door")) or \
                 not e.get("model", "").endswith(".mdl"):
             continue
-        solid = int(float(e.get("solid", "6") or 6))
+        if e.get("startdisabled", e.get("StartDisabled", "0")) == "1":
+            continue
+        solid = int(_num(e, "solid", 6))
+        if cls.startswith("prop_physics") and int(_num(e, "spawnflags", 0)) & DEBRIS:
+            solid = 0
+        angles = _vec(e.get("angles", ""))
+        door = cls.startswith("prop_door_rotating")
+        if door and e.get("spawnpos", "0") in ("0", ""):
+            # opendir 2 opens backwards; both ways (0) and forwards (1) swing by +distance
+            deg = _num(e, "distance", 90.0) * (-1.0 if e.get("opendir", "0") == "2" else 1.0)
+            angles = (angles[0], angles[1] + deg, angles[2])
         out.append({"model": e["model"].lower().replace("\\", "/"), "origin": _vec(e.get("origin", "")),
-                    "angles": _vec(e.get("angles", "")), "solid": solid,
-                    "scale": float(e.get("modelscale", "1") or 1)})
+                    "angles": angles, "solid": 0 if door else solid, "scale": _num(e, "modelscale", 1.0),
+                    "door": door})
     return out
 
 
@@ -412,74 +455,293 @@ def _brush(planes: List[g.Plane], model: str, kind: str) -> Optional[scene.Brush
     return scene.Brush(faces=faces, kind=kind, source="prop") if faces else None
 
 
+def model_meshes(files, base: str) -> Tuple[List[Vec], List[Tuple[int, int, int]]]:
+    """LOD 0 render triangles of a packed or stock model (.mdl + .dx90.vtx + .vvd)."""
+    vvd = files.get(base + ".vvd")
+    mdl, vtx = files.get(base + ".mdl"), files.get(base + ".dx90.vtx")
+    if not (vvd and mdl and vtx):
+        return [], []
+    try:
+        return mesh_triangles(mdl, vtx, vvd)
+    except struct.error:
+        return [], []
+
+
 def model_parts(files: Dict[str, bytes], base: str) -> List[List[Vec]]:
     """Connected parts of a packed model (by triangle topology when .mdl/.vtx are packed)."""
     vvd = files.get(base + ".vvd")
     if not vvd:
         return []
-    mdl, vtx = files.get(base + ".mdl"), files.get(base + ".dx90.vtx")
-    if mdl and vtx:
-        try:
-            verts, tris = mesh_triangles(mdl, vtx, vvd)
-        except struct.error:
-            verts, tris = [], []
-        if tris:
-            return connected_parts(verts, tris)
+    verts, tris = model_meshes(files, base)
+    if tris:
+        return connected_parts(verts, tris)
     return clusters(parse_vvd(vvd))
 
 
+# ---------------------------------------------------------------------------------------------
+# Collision for models without a collision model: each mesh part becomes a convex hull (box or
+# 18-DOP) when the hull is a fair fit, else boxes that follow the part's voxelised volume, so an
+# arch, a frame or a railing keeps its openings.
+
+SOLID_PART_MIN = 16.0     # a part collides when its largest extent is at least this ...
+SOLID_PART_MIDDLE = 8.0   # ... and its middle extent at least this (rods, handles and trims don't)
+HULL_FILL = 0.6           # use the convex hull when the part fills at least this much of it
+VOXELS = 24               # voxel cells along a part's largest extent
+MIN_VOXEL = 4.0
+MAX_BOXES = 24            # per part, largest kept
+
+
+def _tri_samples(a: Vec, b: Vec, c: Vec, step: float) -> List[Vec]:
+    longest = max(g.length(g.sub(b, a)), g.length(g.sub(c, a)), g.length(g.sub(c, b)))
+    n = max(1, int(longest / step) + 1)
+    out = []
+    for i in range(n + 1):
+        for j in range(n + 1 - i):
+            u, v = i / n, j / n
+            out.append((a[0] + (b[0] - a[0]) * u + (c[0] - a[0]) * v, a[1] + (b[1] - a[1]) * u + (c[1] - a[1]) * v,
+                        a[2] + (b[2] - a[2]) * u + (c[2] - a[2]) * v))
+    return out
+
+
+def voxel_boxes(tris: Sequence[Tuple[Vec, Vec, Vec]], cell: float) -> Tuple[List[Tuple[Vec, Vec]], float]:
+    """Solid volume of a triangle mesh part as merged boxes (lo, hi), and that volume. Surface cells
+    are marked by sampling the triangles; cells the outside can't reach are inside. Boxes are
+    clipped to the part's bounds."""
+    pts = [p for t in tris for p in t]
+    lo = [min(p[k] for p in pts) for k in range(3)]
+    top = [max(p[k] for p in pts) for k in range(3)]
+    dims = [max(1, int((top[k] - lo[k]) / cell) + 1) for k in range(3)]
+    surf = set()
+    for a, b, c in tris:
+        for p in _tri_samples(a, b, c, cell * 0.5):
+            surf.add(tuple(min(dims[k] - 1, max(0, int((p[k] - lo[k]) / cell))) for k in range(3)))
+    # flood the outside through a one-cell border
+    outside = set()
+    stack = [(-1, -1, -1)]
+    while stack:
+        c = stack.pop()
+        if c in outside:
+            continue
+        outside.add(c)
+        for k in range(3):
+            for s in (-1, 1):
+                nb = list(c)
+                nb[k] += s
+                nb = tuple(nb)
+                if all(-1 <= nb[q] <= dims[q] for q in range(3)) and nb not in outside and nb not in surf:
+                    stack.append(nb)
+    solid = {(x, y, z) for x in range(dims[0]) for y in range(dims[1]) for z in range(dims[2])
+             if (x, y, z) not in outside}
+    boxes: List[Tuple[Vec, Vec]] = []
+    left = set(solid)
+    for x in range(dims[0]):
+        for y in range(dims[1]):
+            for z in range(dims[2]):
+                if (x, y, z) not in left:
+                    continue
+                x1 = x
+                while (x1 + 1, y, z) in left:
+                    x1 += 1
+                y1 = y
+                while all((i, y1 + 1, z) in left for i in range(x, x1 + 1)):
+                    y1 += 1
+                z1 = z
+                while all((i, j, z1 + 1) in left for i in range(x, x1 + 1) for j in range(y, y1 + 1)):
+                    z1 += 1
+                for i in range(x, x1 + 1):
+                    for j in range(y, y1 + 1):
+                        for k in range(z, z1 + 1):
+                            left.discard((i, j, k))
+                a, b = (x, y, z), (x1 + 1, y1 + 1, z1 + 1)
+                boxes.append((tuple(lo[k] + a[k] * cell for k in range(3)),  # type: ignore[misc]
+                              tuple(min(top[k], lo[k] + b[k] * cell) for k in range(3))))
+    return boxes, len(solid) / float(dims[0] * dims[1] * dims[2])
+
+
+def _corners(lo: Vec, hi: Vec) -> List[Vec]:
+    return [(x, y, z) for x in (lo[0], hi[0]) for y in (lo[1], hi[1]) for z in (lo[2], hi[2])]
+
+
+def solid_part_shapes(pts: Sequence[Vec], tris: Sequence[Tuple[Vec, Vec, Vec]]) -> List[Tuple[str, object]]:
+    """Collision shapes of one mesh part: [hull] when it fits, else voxel boxes."""
+    shape = part_shape(_extremes(pts))
+    if not tris:
+        return [shape]
+    size = [max(0.5, max(p[k] for p in pts) - min(p[k] for p in pts)) for k in range(3)]
+    box_vol = size[0] * size[1] * size[2]
+    hull_vol = _volume(kdop_planes(shape[1])) if shape[0] == "kdop" else box_vol
+    cell = max(MIN_VOXEL, max(size) / VOXELS)
+    boxes, share = voxel_boxes(tris, cell)
+    # the solid share of the voxel grid (the bounding box), against the hull's share of it
+    if not boxes or share * box_vol >= HULL_FILL * max(hull_vol, 1e-6):
+        return [shape]
+    boxes.sort(key=lambda b: -((b[1][0] - b[0][0]) * (b[1][1] - b[0][1]) * (b[1][2] - b[0][2])))
+    return [("box", _corners(lo, hi)) for lo, hi in boxes[:MAX_BOXES]]
+
+
+def _collides(pts: Sequence[Vec]) -> bool:
+    exts = sorted(max(p[k] for p in pts) - min(p[k] for p in pts) for k in range(3))
+    return exts[2] >= SOLID_PART_MIN and exts[1] >= SOLID_PART_MIDDLE
+
+
+class ModelShape:
+    """What a model contributes, in model space:
+    pieces: convex collision pieces as plane lists (from a .phy, or Source 2 physics hulls);
+    solid_parts: collision shapes built from meshes (Source 2 physics meshes, or render meshes
+    when the model has no collision model);
+    visual: non-colliding visual parts (render mesh parts, or small parts left out of collision)."""
+
+    def __init__(self):
+        self.pieces: List[List[g.Plane]] = []
+        self.piece_points: List[Vec] = []
+        self.solid_parts: List[Tuple[str, object]] = []
+        self.visual: List[Tuple[str, object]] = []
+        self.source = ""  # phy | source2 | mesh | ""
+
+    def bounds(self) -> Optional[Tuple[Vec, Vec]]:
+        pts = list(self.piece_points)
+        for _s, p in self.solid_parts + self.visual:
+            pts += list(p)  # type: ignore[arg-type]
+        if not pts:
+            return None
+        return (tuple(min(p[k] for p in pts) for k in range(3)), tuple(max(p[k] for p in pts) for k in range(3)))  # type: ignore
+
+
+def load_shape(files, model: str, collide: bool) -> ModelShape:
+    base = model[:-4] if model.endswith(".mdl") else model
+    ms = ModelShape()
+    data = files.get(base + ".phy")
+    if data:
+        for solid in parse_phy(data):
+            for tris in solid:
+                planes = piece_planes(tris)
+                if len(planes) >= 4:
+                    ms.pieces.append(planes)
+                    ms.piece_points += [p for t in tris for p in t]
+        if ms.pieces:
+            ms.source = "phy"
+    verts, tris = model_meshes(files, base)
+    if not ms.pieces and collide and tris:
+        for pts, ptris in connected_part_meshes(verts, tris):
+            if _collides(pts):
+                ms.solid_parts += solid_part_shapes(pts, ptris)
+            else:
+                ms.visual.append(part_shape(_extremes(pts)))
+        if ms.solid_parts:
+            ms.source = "mesh"
+    if not ms.pieces and not ms.solid_parts:
+        s2 = files.source2_shapes(model) if hasattr(files, "source2_shapes") else None
+        if s2:
+            for hverts, hplanes in s2.hulls:
+                planes = [tuple(p) for p in hplanes] if len(hplanes) >= 4 else kdop_planes(hverts, pad=0.0)
+                ms.pieces.append(planes)  # type: ignore[arg-type]
+                ms.piece_points += list(hverts)
+            for mverts, mtris in s2.meshes:
+                for pts, ptris in connected_part_meshes(mverts, mtris, min_size=2.0, min_middle=0.5):
+                    ms.solid_parts += solid_part_shapes(pts, ptris)
+            ms.source = "source2"
+    if not collide or ms.source == "":
+        if files.get(base + ".vvd"):
+            ms.visual = [part_shape(p) for p in model_parts(files, base)]
+    return ms
+
+
+def _place_planes(planes: Sequence[g.Plane], pr: dict) -> List[g.Plane]:
+    out = []
+    for nx, ny, nz, d in planes:
+        n = g.rotate_zyx((nx, ny, nz), *pr["angles"])
+        out.append((n[0], n[1], n[2], d * pr["scale"] + g.dot(n, pr["origin"])))
+    return out
+
+
+def _shape_faces(shape: Tuple[str, object], pr: dict) -> List[scene.Face]:
+    kind, pts = shape
+    world = [_transform(p, pr["origin"], pr["angles"], pr["scale"]) for p in pts]  # type: ignore[union-attr]
+    return box_faces(world, pr["model"]) if kind == "box" else _faces(kdop_planes(world), pr["model"])
+
+
 def add_props(sc: scene.Scene, props: List[dict], files: Dict[str, bytes]) -> None:
-    """Solid props with a packed .phy become exact convex collision hulls. Other props whose
-    vertices are packed (.vvd) become non-colliding k-DOP hulls per connected part, which restores
-    stairs, trims and wall pieces visually. The map's own clip brushes provide their collision."""
-    phy_cache: Dict[str, list] = {}
-    vvd_cache: Dict[str, list] = {}
+    """Props become KovaaK's brushes in their model's shape:
+    * solid props: their collision model's convex pieces (a packed or stock .phy, or the physics
+      hulls of the same model in an installed Source 2 game), visible and colliding; without a
+      collision model, hulls or voxel boxes of their render mesh parts (small parts only visible);
+      `solid 2` (bounding box) props collide as their bounding box;
+    * non-solid props (`solid 0`, debris, open doors): the same shapes, visible, without collision.
+    Models nothing provides get size-named stand-ins, and the map's clips around them are shown."""
+    cache: Dict[Tuple[str, bool], ModelShape] = {}
     missing = set()
     unpacked: List[dict] = []
-    for pr in props:
-        base = pr["model"][:-4] if pr["model"].endswith(".mdl") else pr["model"]
-        made = 0
-        if pr["solid"]:
-            if base not in phy_cache:
-                pieces = []
-                data = files.get(base + ".phy")
-                if data:
-                    for solid in parse_phy(data):
-                        pieces += solid
-                phy_cache[base] = pieces
-            for tris in phy_cache[base]:
-                world = [[_transform(p, pr["origin"], pr["angles"], pr["scale"]) for p in tri] for tri in tris]
-                b = _brush(piece_planes(world), pr["model"], scene.SOLID)
-                if b:
-                    sc.brushes.append(b)
-                    made += 1
-            if made:
-                sc.bump("props_collision_hulls")
-                sc.bump("kept_prop_hull_brushes", made)
-                continue
-        if base not in vvd_cache:
-            vvd_cache[base] = [part_shape(p) for p in model_parts(files, base)]
-        # Non-colliding, so all parts of one instance share a single (non-convex) object.
-        faces: List[scene.Face] = []
-        for shape, pts in vvd_cache[base]:
-            world = [_transform(p, pr["origin"], pr["angles"], pr["scale"]) for p in pts]
-            faces += box_faces(world, pr["model"]) if shape == "box" else _faces(kdop_planes(world), pr["model"])
-            made += 1
-        if faces:
-            sc.brushes.append(scene.Brush(faces=faces, kind=scene.NONSOLID, source="prop"))
-        if made:
-            sc.bump("props_visual_hulls")
-            sc.bump("kept_prop_hull_brushes", made)
-        else:
-            missing.add(pr["model"])
-            unpacked.append(pr)
-            sc.bump("props_not_packed")
+    for n, pr in enumerate(props):
+        first = len(sc.brushes)
+        _add_instance(sc, pr, files, cache, missing, unpacked)
+        for b in sc.brushes[first:]:
+            b.instance = n
+    sc.missing_models = {}
+    for pr in unpacked:
+        sc.missing_models[pr["model"]] = sc.missing_models.get(pr["model"], 0) + 1
     standins = add_name_standins(sc, unpacked)
+    for model in standins:
+        sc.missing_models.pop(model, None)
     show_stair_ramps(sc, unpacked)
+    show_prop_clips(sc, unpacked)
     missing -= standins
     if missing:
         sc.notes.append(f"{len(missing)} prop models are not packed in the map (stock game models); "
                         "they are missing from the port")
+
+
+def _add_instance(sc: scene.Scene, pr: dict, files, cache, missing: set, unpacked: List[dict]) -> None:
+    collide = bool(pr["solid"])
+    key = (pr["model"], collide)
+    if key not in cache:
+        cache[key] = load_shape(files, pr["model"], collide)
+    ms = cache[key]
+    if pr.get("door"):
+        sc.bump("doors_opened")
+    made = 0
+    if collide and pr["solid"] == SOLID_BBOX and (ms.pieces or ms.solid_parts):
+        lo, hi = ms.bounds()  # type: ignore[misc]
+        sc.brushes.append(scene.Brush(faces=_shape_faces(("box", _corners(lo, hi)), pr), kind=scene.SOLID,
+                                      source="prop"))
+        sc.bump("props_collision_boxes")
+        made = 1
+    elif collide and (ms.pieces or ms.solid_parts):
+        for planes in ms.pieces:
+            b = _brush(_place_planes(planes, pr), pr["model"], scene.SOLID)
+            if b:
+                sc.brushes.append(b)
+                made += 1
+        for shape in ms.solid_parts:
+            faces = _shape_faces(shape, pr)
+            if len(faces) >= 4:
+                sc.brushes.append(scene.Brush(faces=faces, kind=scene.SOLID, source="prop"))
+                made += 1
+        if made:
+            sc.bump({"phy": "props_collision_hulls", "source2": "props_collision_source2",
+                     "mesh": "props_collision_from_mesh"}[ms.source])
+    if made:
+        sc.bump("kept_prop_hull_brushes", made)
+    # Non-colliding parts of one instance share a single (non-convex) object.
+    visual = list(ms.visual)
+    if not made and not visual and (ms.pieces or ms.solid_parts):
+        visual = ms.solid_parts + [("kdop", _hull_points(p)) for p in ms.pieces]
+    faces: List[scene.Face] = []
+    for shape in visual:
+        faces += _shape_faces(shape, pr)
+    if faces:
+        tag = "detail" if made else "nonsolid" if not collide else ""
+        sc.brushes.append(scene.Brush(faces=faces, kind=scene.NONSOLID, source="prop", tag=tag))
+        sc.bump("kept_prop_hull_brushes", len(visual))
+        if not made:
+            sc.bump("props_visual_hulls")
+    if not made and not faces:
+        missing.add(pr["model"])
+        unpacked.append(pr)
+        sc.bump("props_not_packed")
+
+
+def _hull_points(planes: Sequence[g.Plane]) -> List[Vec]:
+    return [p for poly in g.brush_faces(planes) if poly for p in poly]
 
 
 # ---------------------------------------------------------------------------------------------
@@ -498,7 +760,19 @@ def name_dims(model: str) -> Optional[Tuple[float, float, float]]:
     a, b, c = m.group(1), m.group(2), m.group(3)
     if c:
         return (float(a), float(b), float(c))
+    if is_block(model):
+        return (float(a), float(a), float(b))  # du_crate_64x64: a 64 crate, width x height
     return (THIN, float(a), float(b))
+
+
+BLOCK_WORDS = ("crate", "box", "pallet", "container", "barrel", "block", "cube")
+
+
+def is_block(model: str) -> bool:
+    """Solid, box-shaped props (crates, boxes, pallets) whose name stand-in can collide; doors,
+    windows and frames stay non-colliding because their real shape has openings."""
+    name = model.rsplit("/", 1)[-1]
+    return any(w in name for w in BLOCK_WORDS) and not any(w in name for w in ("door", "window", "frame"))
 
 
 def _box_points(lo: Vec, hi: Vec) -> List[Vec]:
@@ -564,10 +838,14 @@ def add_name_standins(sc: scene.Scene, props: List[dict]) -> set:
             if world is None:
                 sc.bump("props_standins_skipped_no_floor")
                 continue
-            b = _brush(kdop_planes(world, pad=0.0), model, scene.NONSOLID)
+            solid = is_block(model) and pr["solid"] != 0
+            b = _brush(kdop_planes(world, pad=0.0), model, scene.SOLID if solid else scene.NONSOLID)
             if b:
+                b.tag = "" if solid else "nonsolid" if pr["solid"] == 0 else "standin"
                 sc.brushes.append(b)
                 sc.bump("props_name_standins")
+                if solid:
+                    sc.bump("props_name_standins_solid")
         done.add(model)
     return done
 
@@ -606,3 +884,31 @@ def show_stair_ramps(sc: scene.Scene, unported: List[dict]) -> None:
         for f in b.faces:
             f.texture = "prop:stair_ramp_stone"
         sc.bump("stair_ramps_shown")
+
+
+PROXY_MAX = 384.0  # a clip larger than this in any direction is a wall or boundary, not a prop clip
+SKY_TEXTURES = ("tools/toolsskybox",)
+
+
+def show_prop_clips(sc: scene.Scene, unported: List[dict]) -> None:
+    """Mappers often wrap props in player clip. Where the prop's model is missing, that clip would be
+    an invisible wall, so it is shown in the prop's place (with the prop material) and also stops
+    shots. Only prop-sized clips that hold a missing prop's origin are shown; boundary and sky clips
+    stay as they are."""
+    if not unported:
+        return
+    for b in sc.brushes:
+        if b.kind != scene.CLIP or b.source == "prop" or any(f.texture in SKY_TEXTURES for f in b.faces):
+            continue
+        lo, hi = b.bounds()
+        if any(hi[k] - lo[k] > PROXY_MAX for k in range(3)):
+            continue
+        inside = [pr for pr in unported if all(lo[k] - 8 <= pr["origin"][k] <= hi[k] + 8 for k in range(2))
+                  and lo[2] - 16 <= pr["origin"][2] <= hi[2]]
+        if not inside:
+            continue
+        b.kind = scene.SOLID
+        for f in b.faces:
+            f.texture = "prop:" + inside[0]["model"]
+            f.reflectivity = PROP_REFLECTIVITY
+        sc.bump("prop_clips_shown")

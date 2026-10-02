@@ -225,22 +225,141 @@ def build_gma(files: List[Tuple[str, bytes]]) -> bytes:
 
 def build_phy_box(half_inches: float = 16.0) -> bytes:
     """A .phy with one convex box ledge (IVP layout: metres, IVP axes)."""
-    h = half_inches * 0.0254
-    # Source (x, y, z) = (ivp_x, ivp_z, -ivp_y) / 0.0254  =>  ivp = (x, -z, y) * 0.0254
-    corners = [(sx * h, sy * h, sz * h) for sx in (-1, 1) for sy in (-1, 1) for sz in (-1, 1)]
-    ivp = [(x, -z, y) for x, y, z in corners]
+    return build_phy_boxes([((0.0, 0.0, 0.0), half_inches)])
+
+
+def build_phy_boxes(boxes) -> bytes:
+    """A .phy with one solid of several convex box ledges [(centre, half size in inches)]. As in
+    vphysics output, the ledges come first, back to back, then every ledge's points, and the size
+    in each ledge header also counts its points. A third item True marks the box as the ledge tree's
+    hull of other ledges (has-children flag)."""
     quads = [(0, 1, 3, 2), (4, 6, 7, 5), (0, 4, 5, 1), (2, 3, 7, 6), (0, 2, 6, 4), (1, 5, 7, 3)]
     tris = []
     for a, b, c, d in quads:
         tris += [(a, b, c), (a, c, d)]
     ledge_size = 16 + 16 * len(tris)
-    ledge = struct.pack("<iiIhh", ledge_size, 0, (ledge_size // 16) << 8, len(tris), 0)
-    for i, (a, b, c) in enumerate(tris):
-        ledge += struct.pack("<I", i) + b"".join(struct.pack("<I", v) for v in (a, b, c))
-    points = b"".join(struct.pack("<ffff", *p, 0.0) for p in ivp)
-    surface = struct.pack("<3f3ffIi3i", 0, 0, 0, 0, 0, 0, 1.0, 0, 48 + len(ledge) + len(points), 0, 0, 0)
-    body = b"VPHY" + struct.pack("<hhi3fi", 0x100, 0, 0, 0, 0, 0, 0) + surface + ledge + points
+    ledges_len = ledge_size * len(boxes)
+    ledges, points = b"", b""
+    for n, box in enumerate(boxes):
+        centre, half = box[0], box[1]
+        tree_hull = len(box) > 2 and box[2]
+        # Source (x, y, z) = (ivp_x, ivp_z, -ivp_y) / 0.0254  =>  ivp = (x, -z, y) * 0.0254
+        corners = [((centre[0] + sx * half) * 0.0254, (centre[1] + sy * half) * 0.0254, (centre[2] + sz * half) * 0.0254)
+                   for sx in (-1, 1) for sy in (-1, 1) for sz in (-1, 1)]
+        here = ledge_size * n
+        point_ofs = ledges_len + len(points) - here
+        flags = (((ledge_size + 8 * 16) // 16) << 8) | 4 | (1 if tree_hull else 0)  # is_compact, has_children
+        ledge = struct.pack("<iiIhh", point_ofs, 0, flags, len(tris), 0)
+        for i, (a, b, c) in enumerate(tris):
+            ledge += struct.pack("<I", i) + b"".join(struct.pack("<I", v) for v in (a, b, c))
+        ledges += ledge
+        points += b"".join(struct.pack("<ffff", x, -z, y, 0.0) for x, y, z in corners)
+    surface = struct.pack("<3f3ffIi3i", 0, 0, 0, 0, 0, 0, 1.0, 0, 48 + len(ledges) + len(points), 0, 0, 0)
+    body = b"VPHY" + struct.pack("<hhi3fi", 0x100, 0, 0, 0, 0, 0, 0) + surface + ledges + points
     return struct.pack("<iiii", 16, 0, 1, 0) + struct.pack("<i", len(body)) + body
+
+
+def kv3_encode(root) -> bytes:
+    """Binary KeyValues 3 (version 4, stored, blobs as blocks) for dicts, lists, ints, floats,
+    strings, bools and bytes: the subset the Source 2 physics reader uses."""
+    one, ints, eights, types, strings, blocks = bytearray(), [0], bytearray(), bytearray(), [], []
+
+    def sidx(t):
+        if t not in strings:
+            strings.append(t)
+        return strings.index(t)
+
+    def put(v):
+        if v is None:
+            types.append(1)
+        elif isinstance(v, bool):
+            types.append(13 if v else 14)
+        elif isinstance(v, int):
+            types.append(11)
+            ints.append(v)
+        elif isinstance(v, float):
+            types.append(19)
+            ints.append(struct.unpack("<i", struct.pack("<f", v))[0])
+        elif isinstance(v, str):
+            types.append(6)
+            ints.append(sidx(v))
+        elif isinstance(v, (bytes, bytearray)):
+            types.append(7)
+            blocks.append(bytes(v))
+        elif isinstance(v, list):
+            types.append(8)
+            ints.append(len(v))
+            for x in v:
+                put(x)
+        elif isinstance(v, dict):
+            types.append(9)
+            ints.append(len(v))
+            for k, x in v.items():
+                ints.append(sidx(k))
+                put(x)
+        else:
+            raise TypeError(type(v))
+
+    put(root)
+    ints[0] = len(strings)
+    buf = bytearray(one)
+    buf += bytes((-len(buf)) % 4)
+    buf += struct.pack(f"<{len(ints)}i", *ints)
+    buf += bytes((-len(buf)) % 8)
+    buf += eights
+    strtypes = b"".join(t.encode() + b"\0" for t in strings) + bytes(types)
+    buf += strtypes
+    if blocks:
+        buf += struct.pack(f"<{len(blocks)}I", *[len(b) for b in blocks]) + struct.pack("<I", 0xFFEEDD00)
+        buf += struct.pack(f"<{len(blocks)}H", *[len(b) for b in blocks])
+    head = b"\x043VK" + bytes(16) + struct.pack("<IHH", 0, 0, 16384)
+    head += struct.pack("<IIIIHH", len(one), len(ints), len(eights) // 8, len(strtypes), 0, 0)
+    head += struct.pack("<IIII", len(buf), len(buf), len(blocks), sum(len(b) for b in blocks))
+    head += struct.pack("<II", 0, 0)
+    return head + bytes(buf) + b"".join(blocks)
+
+
+def build_vmdl_c(hulls, meshes=(), group: str = "default") -> bytes:
+    """A compiled Source 2 model with only a PHYS block: convex hulls [(lo, hi) boxes] and triangle
+    meshes [(vertices, triangles)], in model space."""
+    def hull(lo, hi):
+        verts = [(x, y, z) for x in (lo[0], hi[0]) for y in (lo[1], hi[1]) for z in (lo[2], hi[2])]
+        planes = []
+        for k in range(3):
+            n = [0.0, 0.0, 0.0]
+            n[k] = 1.0
+            planes.append((n[0], n[1], n[2], hi[k]))
+            planes.append((-n[0], -n[1], -n[2], -lo[k]))
+        return {"m_nCollisionAttributeIndex": 0, "m_Hull": {
+            "m_Vertices": b"".join(struct.pack("<3f", *v) for v in verts),
+            "m_Planes": b"".join(struct.pack("<4f", *p) for p in planes)}}
+
+    def mesh(verts, tris):
+        return {"m_nCollisionAttributeIndex": 0, "m_Mesh": {
+            "m_Vertices": b"".join(struct.pack("<3f", *v) for v in verts),
+            "m_Triangles": b"".join(struct.pack("<3i", *t) for t in tris)}}
+
+    root = {"m_boneNames": [], "m_bindPose": [],
+            "m_parts": [{"m_rnShape": {"m_hulls": [hull(lo, hi) for lo, hi in hulls],
+                                       "m_meshes": [mesh(v, t) for v, t in meshes]},
+                         "m_nCollisionAttributeIndex": 0}],
+            "m_collisionAttributes": [{"m_CollisionGroupString": group}]}
+    phys = kv3_encode(root)
+    # header: size, header version 12, version 1, block offset 8 (from offset 8), 1 block
+    table = b"PHYS" + struct.pack("<II", 8, len(phys))  # data right after the table entry
+    data = struct.pack("<IHHII", 0, 12, 1, 8, 1) + table + phys
+    return struct.pack("<I", len(data)) + data[4:]
+
+
+def box_mesh(lo, hi, offset=(0.0, 0.0, 0.0)):
+    """Vertices and triangles of a closed box."""
+    verts = [(x + offset[0], y + offset[1], z + offset[2])
+             for x in (lo[0], hi[0]) for y in (lo[1], hi[1]) for z in (lo[2], hi[2])]
+    quads = [(0, 1, 3, 2), (4, 6, 7, 5), (0, 4, 5, 1), (2, 3, 7, 6), (0, 2, 6, 4), (1, 5, 7, 3)]
+    tris = []
+    for a, b, c, d in quads:
+        tris += [(a, b, c), (a, c, d)]
+    return verts, tris
 
 
 def build_vvd(points) -> bytes:

@@ -26,6 +26,7 @@ def HULL_H() -> float:
     return HULL["height"]
 
 SUPPORT_GAP = 48.0
+ATTACH = 4.0  # a prop this close to map geometry (wall lights, ceiling lamps) is held by it
 CELL = 128.0
 SPACING = 32.0
 STEP_UP = 18.0
@@ -87,19 +88,32 @@ def floor_below(p, index: _Index, max_drop: float) -> Optional[float]:
 
 
 def remove_floating(sc: scene.Scene) -> int:
-    """Drop prop objects with nothing under them (map geometry only, not other props)."""
+    """Drop prop objects with nothing under them (map geometry only, not other props). A model
+    made of several pieces (a truck's wheels, body and roof) stays when any piece is supported."""
     base = [b for b in sc.brushes if b.kind in SUPPORTING and b.source not in ("prop", "backdrop")]
     from .spawns import _Solid
     index = _Index([_Solid(b) for b in base])
-    keep, dropped = [], 0
-    for b in sc.brushes:
-        if b.source != "prop":
-            keep.append(b)
-            continue
+
+    def supported(b: scene.Brush) -> bool:
         lo, hi = b.bounds()
         probes = [((lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2, lo[2] + 2.0),
                   (lo[0] + 1, lo[1] + 1, lo[2] + 2.0), (hi[0] - 1, hi[1] - 1, lo[2] + 2.0)]
         if any(floor_below(p, index, SUPPORT_GAP) is not None for p in probes):
+            return True
+        # mounted on a wall or hanging from a ceiling: touching map geometry (within ATTACH units)
+        lo = tuple(v - ATTACH for v in lo)
+        hi = tuple(v + ATTACH for v in hi)
+        corners = [(x, y, z) for x in (lo[0], hi[0]) for y in (lo[1], hi[1]) for z in (lo[2], hi[2])]
+        for s in index.near(lo, hi):
+            if all(s.lo[k] <= hi[k] and lo[k] <= s.hi[k] for k in range(3)) and \
+                    all(min(g.dot(n, c) for c in corners) <= d for n, d in s.planes):
+                return True
+        return False
+
+    held = {b.instance for b in sc.brushes if b.source == "prop" and b.instance >= 0 and supported(b)}
+    keep, dropped = [], 0
+    for b in sc.brushes:
+        if b.source != "prop" or (b.instance in held if b.instance >= 0 else supported(b)):
             keep.append(b)
         else:
             dropped += 1

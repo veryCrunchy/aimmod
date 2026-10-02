@@ -210,6 +210,161 @@ class PropTests(unittest.TestCase):
         self.assertEqual(len(parts), 2)  # the 1-unit speck is dropped
 
 
+class PropCollisionTests(unittest.TestCase):
+    """Props collide like the model they show (see props.add_props and collision.py)."""
+
+    def _prop(self, model, origin=(0.0, 0.0, 0.0), yaw=0.0, solid=6, **kw):
+        return dict({"model": model, "origin": origin, "angles": (0.0, yaw, 0.0), "solid": solid, "scale": 1.0}, **kw)
+
+    def test_phy_with_several_ledges(self):
+        from mapport import props
+        data = synthetic.build_phy_boxes([((0.0, 0.0, 8.0), 8.0), ((0.0, 0.0, 40.0), 8.0),
+                                          ((0.0, 0.0, 24.0), 24.0, True)])
+        pieces = props.parse_phy(data)[0]
+        self.assertEqual(len(pieces), 2, "every ledge is read, not just the first; the tree's hull is not one")
+        tops = sorted(max(p[2] for t in piece for p in t) for piece in pieces)
+        self.assertAlmostEqual(tops[0], 16.0, places=3)
+        self.assertAlmostEqual(tops[1], 48.0, places=3)
+
+    def test_lz4_block(self):
+        from mapport import source2
+        out = bytearray(b"ab")  # earlier output is the dictionary
+        # token: 3 literals, match length 4 + 3; literals "cde"; offset 5 (back to "a")
+        source2.lz4_block(bytes([0x33]) + b"cde" + bytes([5, 0]) + bytes([0x10]) + b"!", out, 100)
+        self.assertEqual(bytes(out), b"abcdeabcdeab!")
+
+    def test_source2_hulls_and_meshes(self):
+        from mapport import source2
+        verts, tris = synthetic.box_mesh((0, 0, 0), (32, 32, 4))
+        data = synthetic.build_vmdl_c([((-16, -16, 0), (16, 16, 48))], [(verts, tris)])
+        shapes = source2.physics_shapes(data)
+        self.assertEqual(len(shapes.hulls), 1)
+        hverts, planes = shapes.hulls[0]
+        self.assertEqual(len(hverts), 8)
+        self.assertEqual(len(planes), 6)
+        self.assertTrue(all(max(g.dot(p[:3], v) - p[3] for p in planes) <= 1e-4 for v in hverts))
+        self.assertEqual(len(shapes.meshes), 1)
+        self.assertEqual(len(shapes.meshes[0][1]), 12)
+        debris = source2.physics_shapes(synthetic.build_vmdl_c([((0, 0, 0), (8, 8, 8))], group="debris"))
+        self.assertFalse(debris)
+        self.assertEqual(debris.nonsolid_pieces, 1)
+
+    def test_stock_source2_model_collides(self):
+        from mapport import props, vpk
+        import struct
+        data = synthetic.build_vmdl_c([((-16, -16, 0), (16, 16, 48))])
+        with tempfile.TemporaryDirectory() as tmp:
+            game = os.path.join(tmp, "steamapps", "common", "SomeSource2Game", "game", "csgo")
+            os.makedirs(game)
+            # the model moved into a sub-folder: found by its unique file name
+            tree = b"vmdl_c\0models/props/x/moved\0crate\0" + struct.pack("<IHHIIH", 0, 0, 0x7FFF, 0, len(data), 0xFFFF) \
+                + b"\0\0\0"
+            with open(os.path.join(game, "pak01_dir.vpk"), "wb") as fh:
+                fh.write(struct.pack("<III", 0x55AA1234, 1, len(tree)) + tree + data)
+            stock = vpk.StockModels.discover(tmp)
+            self.assertIsNotNone(stock)
+            self.assertEqual(stock.source2_path("models/props/x/crate.mdl"), "models/props/x/moved/crate.vmdl_c")
+            sc = scene.Scene(name="s2")
+            props.add_props(sc, [self._prop("models/props/x/crate.mdl", (100.0, 0.0, 0.0), yaw=90.0)],
+                            vpk.ChainFiles({}, stock))
+            self.assertEqual([b.kind for b in sc.brushes], [scene.SOLID])
+            lo, hi = sc.brushes[0].bounds()
+            self.assertAlmostEqual(lo[0], 84.0, places=2)
+            self.assertAlmostEqual(hi[2], 48.0, places=2)
+            self.assertEqual(sc.stats.get("props_collision_source2"), 1)
+            self.assertEqual(stock.used, {"models/props/x/crate.mdl": "SomeSource2Game/csgo"})
+
+    def test_mesh_without_collision_model_keeps_openings(self):
+        from mapport import props
+        # an arch: two pillars and a lintel, one connected mesh, no .phy
+        parts = [synthetic.box_mesh((0, 0, 0), (16, 16, 96)), synthetic.box_mesh((80, 0, 0), (96, 16, 96)),
+                 synthetic.box_mesh((0, 0, 96), (96, 16, 112))]
+        verts, tris = [], []
+        for v, t in parts:
+            tris += [(a + len(verts), b + len(verts), c + len(verts)) for a, b, c in t]
+            verts += v
+        tri_pts = [(verts[a], verts[b], verts[c]) for a, b, c in tris]
+        shapes = props.solid_part_shapes(verts, tri_pts)
+        self.assertGreater(len(shapes), 1, "a hollow part becomes boxes, not one hull")
+        for kind, corners in shapes:
+            lo = [min(p[k] for p in corners) for k in range(3)]
+            hi = [max(p[k] for p in corners) for k in range(3)]
+            self.assertFalse(all(lo[k] < (48, 8, 40)[k] < hi[k] for k in range(3)), "the opening stays open")
+        cube = synthetic.box_mesh((0, 0, 0), (32, 32, 32))
+        self.assertEqual(len(props.solid_part_shapes(cube[0], [tuple(cube[0][i] for i in t) for t in cube[1]])), 1)
+
+    def test_solidity_flags(self):
+        from mapport import props
+        ents = [{"classname": "prop_physics_multiplayer", "model": "models/a.mdl", "spawnflags": "4"},
+                {"classname": "prop_dynamic", "model": "models/b.mdl", "solid": "0"},
+                {"classname": "prop_dynamic", "model": "models/c.mdl", "solid": "2"},
+                {"classname": "prop_dynamic", "model": "models/d.mdl", "StartDisabled": "1"},
+                {"classname": "prop_door_rotating", "model": "models/door.mdl", "angles": "0 90 0", "distance": "90"}]
+        found = {p["model"]: p for p in props.entity_props(ents)}
+        self.assertEqual(found["models/a.mdl"]["solid"], 0, "debris physics props don't collide")
+        self.assertEqual(found["models/b.mdl"]["solid"], 0)
+        self.assertEqual(found["models/c.mdl"]["solid"], props.SOLID_BBOX)
+        self.assertNotIn("models/d.mdl", found)
+        door = found["models/door.mdl"]
+        self.assertEqual((door["solid"], door["angles"][1]), (0, 180.0), "doors open and stop colliding")
+        # solid 2 collides as the model's bounding box
+        files = {"models/c.phy": synthetic.build_phy_boxes([((0.0, 0.0, 8.0), 8.0), ((0.0, 0.0, 40.0), 8.0)])}
+        sc = scene.Scene(name="bbox")
+        props.add_props(sc, [self._prop("models/c.mdl", solid=props.SOLID_BBOX)], files)
+        self.assertEqual(len(sc.brushes), 1)
+        lo, hi = sc.brushes[0].bounds()
+        self.assertAlmostEqual(hi[2] - lo[2], 48.0, places=2)
+        sc = scene.Scene(name="nonsolid")
+        props.add_props(sc, [self._prop("models/c.mdl", solid=0)], files)
+        self.assertTrue(sc.brushes and all(b.kind == scene.NONSOLID and b.tag == "nonsolid" for b in sc.brushes))
+
+    def test_crate_standins_collide_and_prop_clips_show(self):
+        from mapport import props
+        self.assertEqual(props.name_dims("models/props/de_dust/du_crate_64x64.mdl"), (64.0, 64.0, 64.0))
+        sc = bsp.load(synthetic.build_bsp(with_displacement=False), "s")  # floor top at z=16
+        clip = next(b for b in sc.brushes if b.kind == scene.CLIP)
+        lo, hi = clip.bounds()
+        inside = ((lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2, lo[2])
+        props.add_props(sc, [self._prop("models/x/crate_32x32.mdl", (-40.0, 0.0, 16.0)),
+                             self._prop("models/x/door_32x64.mdl", (52.0, 70.0, 16.0)),
+                             self._prop("models/x/unknown_plant.mdl", inside)], {})
+        kinds = {b.faces[0].texture: (b.kind, b.tag) for b in sc.brushes if b.source == "prop"}
+        self.assertEqual(kinds["prop:models/x/crate_32x32.mdl"], (scene.SOLID, ""))
+        self.assertEqual(kinds["prop:models/x/door_32x64.mdl"], (scene.NONSOLID, "standin"))
+        self.assertEqual(clip.kind, scene.SOLID, "the clip around a missing prop is shown in its place")
+        self.assertEqual(clip.faces[0].texture, "prop:models/x/unknown_plant.mdl")
+        self.assertEqual(sc.missing_models, {"models/x/unknown_plant.mdl": 1}, "stand-ins are not missing")
+
+    def test_floating_check_keeps_multi_piece_props(self):
+        from mapport import checks, props
+        sc = scene.Scene(name="f", brushes=[_box((-256, -256, -16), (256, 256, 0))])
+        files = {"models/tall.phy": synthetic.build_phy_boxes([((0.0, 0.0, 8.0), 8.0), ((0.0, 0.0, 120.0), 8.0)])}
+        props.add_props(sc, [self._prop("models/tall.mdl"), self._prop("models/tall.mdl", (0.0, 0.0, 400.0))], files)
+        self.assertEqual(sum(b.source == "prop" for b in sc.brushes), 4)
+        checks.remove_floating(sc)
+        kept = [b for b in sc.brushes if b.source == "prop"]
+        self.assertEqual(len(kept), 2, "the upper piece stays with its supported model; the floating copy goes")
+        self.assertEqual({b.instance for b in kept}, {0})
+
+    def test_stray_clips_and_audit(self):
+        from mapport import collision
+        sc = scene.Scene(name="c", brushes=[
+            _box((-512, -512, -16), (512, 512, 0)),
+            _box((0, 0, 0), (16, 64, 64), "tools/toolsplayerclip", scene.CLIP),        # against the floor
+            _box((200, 200, 300), (232, 232, 340), "tools/toolsplayerclip", scene.CLIP),  # in mid-air
+            _box((300, 0, 0), (320, 900, 200), "tools/toolsskybox", scene.CLIP),        # boundary
+            _box((-100, 0, 0), (-80, 20, 30), "prop:models/x.mdl", scene.NONSOLID, "prop")])
+        sc.brushes[-1].tag = ""
+        sc.spawns = [scene.Spawn(origin=(0.0, 0.0, 50.0), yaw=0.0, team=1)]
+        cats = sorted(c for _b, c in collision.classify_clips(sc))
+        self.assertEqual(cats, ["boundary", "stairs_edges", "stray"])
+        self.assertEqual(collision.remove_stray_clips(sc), 1)
+        rep = collision.audit(sc)
+        self.assertEqual(rep["invisible_collision"], {"boundary": 1, "stairs_edges": 1, "prop": 0, "stray": 0})
+        self.assertEqual(rep["visible_no_collision_unexpected"], 1)
+        self.assertEqual(rep["visible_no_collision"][0]["model"], "models/x.mdl")
+
+
 class CsMapTests(unittest.TestCase):
     def _doc(self, n=5):
         sp = [{"team": "terrorist", "origin": [-700.0 + i, 800.0, 170.0], "yaw": 0.0} for i in range(n)] +              [{"team": "counter_terrorist", "origin": [300.0 + i, -2300.0, -90.0], "yaw": 90.0} for i in range(n)]

@@ -30,6 +30,10 @@ class Brush:
     faces: List[Face]
     kind: str = SOLID
     source: str = "world"         # world, entity classname or "displacement"
+    # why a prop brush has no collision: "nonsolid" (solid 0, debris, open door), "detail" (a small
+    # part of a colliding model), "standin" (a name-sized box for a missing model); "" otherwise
+    tag: str = ""
+    instance: int = -1            # prop instance the brush belongs to (a model is several brushes)
 
     def points(self) -> List[Vec]:
         return [p for f in self.faces for p in f.polygon]
@@ -63,6 +67,8 @@ class Scene:
     # {"kind": "jumppad"|"teleporter"|"waypoint", "origin": Vec, "size": Vec, "name": str,
     #  "target": str, "yaw": float}. Origins and sizes are Source-style map coordinates.
     gameobjects: List[Dict] = field(default_factory=list)
+    # Prop models no packed or installed content provides: model -> instance count
+    missing_models: Dict[str, int] = field(default_factory=dict)
 
     def bump(self, key: str, n: int = 1) -> None:
         self.stats[key] = self.stats.get(key, 0) + n
