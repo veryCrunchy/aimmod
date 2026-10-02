@@ -834,7 +834,10 @@ namespace aimmod
         double eye[3]{}, rotation[3]{};
         std::vector<WorldTags::Avatar> avatars;
         const auto streams = m_output.avatars();
-        if (widget && camera && !streams->empty() && m_b.cameraLocation.Vector(camera, eye) && m_b.cameraRotation.Vector(camera, rotation))
+        WorldTags::Census census;
+        census.streams = static_cast<int>(streams->size());
+        census.camera = camera && m_b.cameraLocation.Vector(camera, eye) && m_b.cameraRotation.Vector(camera, rotation);
+        if (widget && census.camera && !streams->empty())
         {
             UObject* character = m_b.myCharacter.Object(player);
             std::vector<UObject*> actors;
@@ -843,6 +846,7 @@ namespace aimmod
                 {
                     if (actor == character) continue;
                     if (auto hidden = m_b.hidden.Bool(actor); hidden && *hidden) continue;
+                    ++census.characters;
                     const auto tag = streams->find(game::ObjectName(actor));
                     if (tag == streams->end()) continue;
                     UObject* capsule = m_b.capsule.Object(actor);
@@ -857,7 +861,7 @@ namespace aimmod
                     avatars.push_back(std::move(a));
                 }
         }
-        m_tags.Tick(now, player, eye, rotation, avatars, widget);
+        m_tags.Tick(now, player, eye, rotation, avatars, widget, census);
     }
 
     void Observer::UpdateMeasurements(bool running, double elapsed, double remaining, const Getter::ValueElseResult& score)

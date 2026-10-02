@@ -909,8 +909,21 @@ only change to OverlayHost is `Gameface()`, which exposes its widget.
   (`CohtmlWidget:CreateJSEvent`, `AddString`, `TriggerJSEvent`), carrying
   `{"tags":[{n,t,f,a,c,x,y,d}]}`. An empty list is sent once when the tags
   go away.
+  An event is only sent once the view `IsReadyForBindings`.
 - `ui/worldtags.js` keeps one node per tag and moves it: the name in its team
   colour (T orange, CT blue), the distance for teammates, grey when down.
+- The page gets AimModCore's events through Gameface's `engine` object, which
+  `cohtml.js` (`coui://uiresources/javascript/cohtml.js`) defines: `notify.html`
+  and `overlay.html` load it before their own scripts. Without it no event
+  (`AimModTags`, `AimModPointer`, `AimModVisibility`) ever reached those pages;
+  if it is missing, worldtags.js installs a minimal `engine.on`/`_trigger`.
+- Diagnostics: AimModCore logs `world tags: first count: …` once, then every
+  10 s while it changes (60 s while steady): characters per frame, those with
+  a stream in `avatars.tsv`, those in the roster (with the file's state:
+  fresh, stale, missing), shown, on screen, and the events pushed to the view
+  (or skipped while it isn't ready). The page reports its side to the service
+  log every 10 s while it changes (`[notify] world tags: listening via …; N
+  events …`).
 
 ### In-game HUD view (phase 2)
 

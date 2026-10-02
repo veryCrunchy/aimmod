@@ -43,10 +43,21 @@ static partial class MultiplayerChecks
         Check(health == 40 && armor == 20, "Armour halves HE damage to health");
         // Flash: full in your face, less to the side, a little behind you, nothing far away.
         Check(GrenadeRules.FlashAmount(1, 300) == 1 && GrenadeRules.FlashAmount(0.3, 300) is > 0.6 and < 0.75 && GrenadeRules.FlashAmount(-1, 300) == 0.1
-            && GrenadeRules.FlashAmount(1, 1800) is > 0.45 and < 0.55 && GrenadeRules.FlashAmount(1, GrenadeRules.FlashFarCm) == 0, "Flash amount by view angle and distance");
+            && GrenadeRules.FlashAmount(1, 1500) == 1 && GrenadeRules.FlashAmount(1, (GrenadeRules.FlashNearCm + GrenadeRules.FlashFarCm) / 2) is > 0.45 and < 0.55
+            && GrenadeRules.FlashAmount(1, GrenadeRules.FlashFarCm) == 0, "Flash amount by view angle and distance (full within 400 units, none past 1500)");
         var full = GrenadeRules.FlashFor(1000, 1)!;
-        Check(full is { HoldMs: 2000, FadeMs: 3200 } && GrenadeRules.FlashAlpha(full, 1500) == 1 && GrenadeRules.FlashAlpha(full, 3000 + 1600) is > 0.2 and < 0.3 && GrenadeRules.FlashAlpha(full, 6300) == 0
-            && GrenadeRules.FlashFor(0, 0.03) is null && GrenadeRules.FlashAlpha(GrenadeRules.FlashFor(0, 0.2), 10) < 0.6, "A full flash whites out for 2 s and clears over 3.2 s; a glance only dims");
+        Check(full is { HoldMs: 2500, FadeMs: 2800 } && GrenadeRules.FlashAlpha(full, 1500) == 1 && GrenadeRules.FlashAlpha(full, 3400) == 1 && GrenadeRules.FlashAlpha(full, 1000 + 2500 + 1400) is > 0.2 and < 0.3
+            && GrenadeRules.FlashAlpha(full, 6300) == 0 && GrenadeRules.FlashFor(0, 0.03) is null && GrenadeRules.FlashAlpha(GrenadeRules.FlashFor(0, 0.2), 10) < 0.6,
+            "A full flash whites out for 2.5 s and clears over 2.8 s (about 5 s, as in CS); a glance only dims");
+        var half = GrenadeRules.FlashFor(0, 0.6)!;
+        Check(half.HoldMs + half.FadeMs is > 2000 and < 3000 && GrenadeRules.FlashPeak(half) > 0.9, "A flash from the side or further off: fully white, about 2.5 s in all");
+        // The flash reaches this player's screen: grenades.tsv (AimModCore's white and after-image) in local
+        // time, and the notice page's own timing (so its white plays smoothly between polls).
+        var flashed = MultiplayerService.GrenadesBody("AimMod Match - X", null, false, 0, [], 400, full);
+        Check(flashed.Contains("\nflash\t1000\t600\t2500\t2800\t1\n", StringComparison.Ordinal), "grenades.tsv carries the flash that hit you, in this machine's time");
+        var me = new CsPlayerView("me", 1, CsRules.T, 800, true, 100, 0, false, false, null, "glock", 0, 0, Flash: full);
+        Check(MultiplayerService.FlashFx(me, 2000) is { Id: 1000, Age: 1000, Hold: 2500, Fade: 2800, Peak: 1 } && MultiplayerService.FlashFx(me, 6400) is null && MultiplayerService.FlashFx(me with { Flash = null }, 2000) is null,
+            "The HUD gets the flash's timing while it lasts");
         var shots = GrenadeRules.DecoyShots(7, "rifle");
         Check(shots.Count > 20 && shots.SequenceEqual(GrenadeRules.DecoyShots(7, "rifle")) && !shots.SequenceEqual(GrenadeRules.DecoyShots(8, "rifle")) && shots.All(t => t is > 0 and < GrenadeRules.DecoyMs)
             && GrenadeRules.DecoyShots(7, "sniper").Count < shots.Count / 3, "Decoy gunfire: bursts like the owner's weapon, the same on every machine");
@@ -141,8 +152,12 @@ static partial class MultiplayerChecks
             "HE damage by distance: " + string.Join(", ", new[] { "ct1", "ct2", "t1", "t2" }.Select(id => id + " " + Hp(id))));
         // A flash at t1's feet: t1 and ct1 face it, ct2 looks away.
         var t = live + 2000;
+        var flashLog = new List<string>();
+        m.Grenades.Trace = flashLog.Add;
         m.BotThrow("t1", "flash", [300, 0, 180], [0, 0, 0], t);
         Run(m, t, t + 1900);
+        Check(flashLog.Count == 1 && flashLog[0].Contains("t1 blinded 1.00", StringComparison.Ordinal) && flashLog[0].Contains("ct2 blinded 0.1", StringComparison.Ordinal)
+            && flashLog[0].Contains("counted clear", StringComparison.Ordinal), "The host logs what each flash did: who it blinded, how much, and whether the game answered the sight lines");
         var f1 = PlayerOf(m, "t1").Flash; var fc1 = PlayerOf(m, "ct1").Flash; var fc2 = PlayerOf(m, "ct2").Flash;
         Check(f1 is { Amount: 1 } && fc1 is { Amount: 1 } && fc2 is { Amount: < 0.2 } && fc2.HoldMs < 100 && PlayerOf(m, "t2").Flash is { Amount: 1 },
             "Flashes blind by where you look: the thrower, a teammate and an enemy facing it fully, someone looking away barely");

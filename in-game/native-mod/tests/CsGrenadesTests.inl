@@ -53,8 +53,8 @@ namespace csgrenades_checks
             bottom = std::min(bottom, p.offset[2] - p.size * 0.4);
         }
         CHECK(SmokePuffs().size() >= 12 && reach > SmokeRadius * 0.85 && reach < SmokeRadius * 1.25 && top > SmokeHalfHeight * 0.6 && bottom < -SmokeHalfHeight * 0.6, "the puffs fill the smoke's size");
-        CHECK(SmokeScale(1000, 19000, 1000) == 0 && SmokeScale(1000, 19000, 1750) == 0.5 && SmokeScale(1000, 19000, 9000) == 1 && SmokeScale(1000, 19000, 18000) == 0.5 && SmokeScale(1000, 19000, 19000) == 0,
-              "a smoke grows in over 1.5 s and thins over its last 2 s");
+        CHECK(SmokeScale(1000, 19000, 1000) == 0 && SmokeScale(1000, 19000, 1500) == 0.5 && SmokeScale(1000, 19000, 9000) == 1 && SmokeScale(1000, 19000, 18000) == 0.5 && SmokeScale(1000, 19000, 19000) == 0,
+              "a smoke spreads out over 1 s and thins over its last 2 s");
         CHECK(SmokeCentre(0, 0, 10).z == 10 + SmokeHalfHeight - 40, "the cloud sits on the ground");
         const auto flames = FireFlames(250, 2.0, 5.0, 3), later = FireFlames(250, 2.2, 5.0, 3), dying = FireFlames(250, 2.0, 0.5, 3);
         bool within = flames.size() > 6;
@@ -67,9 +67,63 @@ namespace csgrenades_checks
         CHECK(white[0] == 1 && white[1] == 1 && white[2] == 1 && fire[0] == 1 && fire[2] < 0.2, "the flash is white, fire is orange");
     }
 
+    // The smoke's puffs: out of the canister, spread to their places in about a second, drifting
+    // slowly, the edge thinning first at the end; the camera's depth inside; the flash's white and
+    // after-image.
+    inline void SmokeAndFlash()
+    {
+        const auto& puffs = SmokePuffs();
+        CHECK(puffs.size() == 40, "a smoke is 40 puffs");
+        bool fromCan = true, spread = true, bounded = true, drifts = false, gone = true;
+        double maxDelay = 0;
+        for (const Puff& p : puffs)
+        {
+            maxDelay = std::max(maxDelay, p.delay);
+            const PuffPose start = SmokePuff(p, p.delay + 0.02, 17), placed = SmokePuff(p, 1.2, 16), later = SmokePuff(p, 9.0, 9), end = SmokePuff(p, 17.99, 0.01);
+            const double home = std::hypot(p.offset[0], p.offset[1]);
+            fromCan = fromCan && std::hypot(start.offset[0], start.offset[1]) < home * 0.35 + 20 && start.size[0] < p.size * 0.5;
+            spread = spread && placed.shown && std::fabs(std::hypot(placed.offset[0], placed.offset[1]) - home) < 60 && placed.size[0] > p.size * 0.85;
+            const double moved = std::hypot(later.offset[0] - p.offset[0], later.offset[1] - p.offset[1]);
+            bounded = bounded && moved < 45 && std::fabs(later.size[0] / p.size - 1) < 0.15;
+            drifts = drifts || moved > 5;
+            gone = gone && end.size[0] < p.size * 0.1;
+        }
+        CHECK(fromCan && maxDelay < 0.4, "puffs come out of the canister, the inner ones first");
+        CHECK(spread, "about a second after the pop the cloud has spread to its full size");
+        CHECK(bounded && drifts, "the puffs drift and billow slowly, never far from their place");
+        const Puff* edge = nullptr;
+        const Puff* heart = nullptr;
+        for (const Puff& p : puffs)
+        {
+            if (!edge || p.inner < edge->inner) edge = &p;
+            if (!heart || p.inner > heart->inner) heart = &p;
+        }
+        CHECK(SmokePuff(*edge, 17, 1.0).size[0] / edge->size < SmokePuff(*heart, 17, 1.0).size[0] / heart->size && gone && !SmokePuff(*heart, 18, 0).shown,
+              "at the end the edge thins out first and the cloud is gone");
+        const std::vector<GrenadeState::Area> smokes = {{1, "smoke", 0, 0, 0, SmokeRadius, 1000, 19000}};
+        const Point c = SmokeCentre(0, 0, 0);
+        CHECK(SmokeDepth(smokes, 9000, c.x, c.y, c.z) == 1 && SmokeDepth(smokes, 9000, 2000, 0, c.z) == 0 && SmokeDepth(smokes, 500, c.x, c.y, c.z) == 0 &&
+                  SmokeDepth(smokes, 9000, SmokeRadius * 0.85, 0, c.z) > 0 && SmokeDepth(smokes, 9000, SmokeRadius * 0.85, 0, c.z) < 1,
+              "the camera is deep in the smoke at its heart, thinly at its edge, not at all outside it or before it pops");
+
+        std::string why;
+        const auto f = ParseGrenades("AIMMOD_GRENADES_1\t3\nmatch\tA\nhand\t-\t0\t0\nflash\t77\t1790000005000\t2000\t3000\t1\n", &why);
+        CHECK(f && f->flash && f->flash->id == 77 && f->flash->atMs == 1790000005000 && f->flash->holdMs == 2000 && f->flash->fadeMs == 3000 && f->flash->peak == 1,
+              "grenades.tsv: the flash that hit this player");
+        CHECK(!ParseGrenades("AIMMOD_GRENADES_1\t3\nmatch\tA\nflash\t1\t0\t2000\t3000\t1.5\n", &why) && why.rfind("flash", 0) == 0 &&
+                  !ParseGrenades("AIMMOD_GRENADES_1\t3\nhand\t-\t0\t0\n", &why) && why == "no match line",
+              "a bad file says which line was wrong");
+        const GrenadeState::Flash full{1, 10000, 2000, 3000, 1}, glance{2, 10000, 200, 1000, 0.45};
+        CHECK(FlashWhite(full, 9999) == 0 && FlashWhite(full, 11000) == 1 && FlashWhite(full, 13500) == 0.25 && FlashWhite(full, 15000) == 0 && FlashWhite(glance, 10100) == 0.45,
+              "the white: full while it holds, clearing after");
+        CHECK(FlashAfterImage(full, 11000) > 0.8 && FlashAfterImage(full, 13000) > 0.2 && FlashAfterImage(full, 14500) == 0 && FlashAfterImage(glance, 10100) == 0,
+              "a strong flash leaves a frozen after-image that lingers into the fade; a glance leaves none");
+    }
+
     inline void Run()
     {
         File();
+        SmokeAndFlash();
         Paths();
         Models();
     }

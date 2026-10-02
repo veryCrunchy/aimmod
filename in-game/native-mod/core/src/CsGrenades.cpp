@@ -43,9 +43,13 @@ namespace aimmod::cs
         return kind == "he" || kind == "flash" || kind == "smoke" || kind == "decoy" || kind == "molotov" || kind == "incendiary";
     }
 
-    std::optional<GrenadeState> ParseGrenades(std::string_view text)
+    std::optional<GrenadeState> ParseGrenades(std::string_view text, std::string* why)
     {
-        if (text.empty() || text.size() > 64 * 1024) return std::nullopt;
+        auto bad = [why](std::string_view line) -> std::optional<GrenadeState> {
+            if (why) *why = std::string(line.substr(0, 120));
+            return std::nullopt;
+        };
+        if (text.empty() || text.size() > 64 * 1024) return bad(text.empty() ? "empty" : "too large");
         GrenadeState s;
         bool first = true;
         while (!text.empty())
@@ -60,18 +64,18 @@ namespace aimmod::cs
             {
                 first = false;
                 std::int64_t seq = 0;
-                if (c.size() != 2 || c[0] != "AIMMOD_GRENADES_1" || !Int(c[1], seq)) return std::nullopt;
+                if (c.size() != 2 || c[0] != "AIMMOD_GRENADES_1" || !Int(c[1], seq)) return bad(line);
                 s.sequence = static_cast<std::uint64_t>(seq);
                 continue;
             }
             if (c[0] == "match" && c.size() == 2)
             {
-                if (c[1].empty() || c[1].size() > 256) return std::nullopt;
+                if (c[1].empty() || c[1].size() > 256) return bad(line);
                 s.scenario = std::string(c[1]);
             }
             else if (c[0] == "hand" && c.size() == 4)
             {
-                if ((c[1] != "-" && !KnownGrenade(c[1])) || (c[2] != "0" && c[2] != "1") || !Int(c[3], s.hand.thrownMs)) return std::nullopt;
+                if ((c[1] != "-" && !KnownGrenade(c[1])) || (c[2] != "0" && c[2] != "1") || !Int(c[3], s.hand.thrownMs)) return bad(line);
                 s.hand.kind = c[1] == "-" ? "" : std::string(c[1]);
                 s.hand.pin = c[2] == "1";
             }
@@ -81,15 +85,15 @@ namespace aimmod::cs
                 std::int64_t n = 0;
                 if (!Int(c[1], f.id) || !KnownGrenade(c[2]) || !Int(c[3], f.startMs) || !Int(c[4], f.endMs) || !Int(c[5], n) || n < 1 || n > 25 ||
                     c.size() != 6 + static_cast<std::size_t>(n) * 8 || s.flying.size() >= 48)
-                    return std::nullopt;
+                    return bad(line);
                 f.kind = std::string(c[2]);
                 for (std::int64_t k = 0; k < n; ++k)
                 {
                     GrenadeKey key;
                     const std::size_t at = 6 + static_cast<std::size_t>(k) * 8;
                     std::int64_t motion = 0;
-                    if (!Num(c[at], key.t) || !Xyz(c, at + 1, key.x, key.y, key.z) || !Xyz(c, at + 4, key.vx, key.vy, key.vz) || !Int(c[at + 7], motion) || motion > 2) return std::nullopt;
-                    if (!f.keys.empty() && key.t < f.keys.back().t) return std::nullopt;
+                    if (!Num(c[at], key.t) || !Xyz(c, at + 1, key.x, key.y, key.z) || !Xyz(c, at + 4, key.vx, key.vy, key.vz) || !Int(c[at + 7], motion) || motion > 2) return bad(line);
+                    if (!f.keys.empty() && key.t < f.keys.back().t) return bad(line);
                     key.motion = static_cast<int>(motion);
                     f.keys.push_back(key);
                 }
@@ -99,7 +103,7 @@ namespace aimmod::cs
             {
                 GrenadeState::Area a;
                 a.kind = std::string(c[0]);
-                if (!Int(c[1], a.id) || !Xyz(c, 2, a.x, a.y, a.z) || !Int(c[5], a.startMs) || !Int(c[6], a.endMs)) return std::nullopt;
+                if (!Int(c[1], a.id) || !Xyz(c, 2, a.x, a.y, a.z) || !Int(c[5], a.startMs) || !Int(c[6], a.endMs)) return bad(line);
                 a.radius = c[0] == "smoke" ? SmokeRadius : 0;
                 (c[0] == "smoke" ? s.smokes : s.decoys).push_back(a);
             }
@@ -108,20 +112,31 @@ namespace aimmod::cs
                 GrenadeState::Area a;
                 if (!Int(c[1], a.id) || (c[2] != "molotov" && c[2] != "incendiary") || !Xyz(c, 3, a.x, a.y, a.z) || !Num(c[6], a.radius) || a.radius <= 0 || a.radius > 2000 ||
                     !Int(c[7], a.startMs) || !Int(c[8], a.endMs))
-                    return std::nullopt;
+                    return bad(line);
                 a.kind = std::string(c[2]);
                 s.fires.push_back(a);
             }
             else if (c[0] == "blast" && c.size() == 7)
             {
                 GrenadeState::Blast b;
-                if (!Int(c[1], b.id) || (!KnownGrenade(c[2]) && c[2] != "extinguished") || !Xyz(c, 3, b.x, b.y, b.z) || !Int(c[6], b.atMs)) return std::nullopt;
+                if (!Int(c[1], b.id) || (!KnownGrenade(c[2]) && c[2] != "extinguished") || !Xyz(c, 3, b.x, b.y, b.z) || !Int(c[6], b.atMs)) return bad(line);
                 b.kind = std::string(c[2]);
                 s.blasts.push_back(b);
             }
-            else return std::nullopt;
+            else if (c[0] == "flash" && c.size() == 6 && !s.flash)
+            {
+                GrenadeState::Flash f;
+                std::int64_t hold = 0, fade = 0;
+                if (!Int(c[1], f.id) || !Int(c[2], f.atMs) || !Int(c[3], hold) || !Int(c[4], fade) || hold > 10000 || fade > 10000 || !Num(c[5], f.peak) || f.peak < 0 || f.peak > 1)
+                    return bad(line);
+                f.holdMs = static_cast<int>(hold);
+                f.fadeMs = static_cast<int>(fade);
+                s.flash = f;
+            }
+            else return bad(line);
         }
-        if (first || s.scenario.empty()) return std::nullopt;
+        if (first) return bad("no header");
+        if (s.scenario.empty()) return bad("no match line");
         return s;
     }
 
@@ -207,8 +222,9 @@ namespace aimmod::cs
     {
         static const std::vector<Puff> puffs = [] {
             std::vector<Puff> list;
-            // A fixed spread of puffs (the same cloud on every machine): a ring low down, a ring higher
-            // up and a crown, each sized so the cloud reaches its full radius and height.
+            // A fixed spread of 40 puffs (the same cloud on every machine): a heart, an inner ring, a wide
+            // ring on the ground, a ring through the middle, an outer ring, an upper ring and a crown, each
+            // sized so they overlap well and the cloud reaches its full radius and height.
             std::uint32_t state = 0x5eed;
             auto next = [&state] {
                 state = state * 1664525u + 1013904223u;
@@ -218,18 +234,53 @@ namespace aimmod::cs
             const struct
             {
                 int count;
-                double ring, z, size;
-            } layers[] = {{7, 0.62, -0.45, 430}, {6, 0.45, 0.1, 460}, {3, 0.2, 0.55, 420}, {1, 0, -0.1, 520}};
+                double ring, z, size, inner;
+            } layers[] = {{1, 0, -0.1, 470, 1.0}, {6, 0.3, 0.05, 400, 0.85}, {12, 0.7, -0.55, 330, 0.25}, {9, 0.52, -0.08, 380, 0.55},
+                          {6, 0.8, -0.2, 270, 0.0},  {4, 0.32, 0.5, 330, 0.6},   {2, 0.1, 0.76, 250, 0.4}};
             for (const auto& layer : layers)
                 for (int i = 0; i < layer.count; ++i)
                 {
-                    const double angle = 2 * Pi * (i + next() * 0.5) / layer.count;
+                    const double angle = 2 * Pi * (i + next() * 0.6) / layer.count + layer.ring * 2.1;
                     const double r = layer.ring * SmokeRadius * (0.9 + 0.2 * next());
-                    list.push_back({{std::cos(angle) * r, std::sin(angle) * r, layer.z * SmokeHalfHeight + (next() - 0.5) * 40}, layer.size * (0.9 + 0.2 * next()), next()});
+                    const double z = layer.z * SmokeHalfHeight + (next() - 0.5) * 40;
+                    const double up = std::clamp((z / SmokeHalfHeight + 0.7) / 1.5, 0.0, 1.0);
+                    const double size = layer.size * (0.88 + 0.24 * next());
+                    const double shade = std::clamp(0.25 + 0.6 * up + (next() - 0.5) * 0.2, 0.0, 1.0);
+                    const double delay = (1 - layer.inner) * 0.3 + next() * 0.08;
+                    list.push_back({{std::cos(angle) * r, std::sin(angle) * r, z}, size, shade, delay, next() * 2 * Pi, layer.inner});
                 }
             return list;
         }();
         return puffs;
+    }
+
+    PuffPose SmokePuff(const Puff& p, double age, double left)
+    {
+        PuffPose out;
+        if (age < 0 || left <= 0) return out;
+        constexpr double Spread = 0.7; // s each puff takes to reach its place
+        const double t = std::clamp((age - p.delay) / Spread, 0.0, 1.0);
+        const double grow = 1 - (1 - t) * (1 - t) * (1 - t); // fast out of the canister, settling gently
+        // Out of the canister on the ground under the cloud's centre, to its place.
+        const double from[3] = {p.offset[0] * 0.08, p.offset[1] * 0.08, -(SmokeHalfHeight - 40) + 30};
+        // Thinning out at the end: the edge first, the heart last; a thinning puff shrinks, spreads and sinks a little.
+        const double fade = std::clamp(left / (SmokeFadeSeconds * (1.0 - 0.45 * p.inner)), 0.0, 1.0);
+        const double thin = 1 - fade;
+        // Slow drift and billow once it has spread (never more than about 40 cm from its place).
+        const double settle = std::clamp(age / 2.0, 0.0, 1.0);
+        const double drift = (16 + 13 * (1 - p.inner)) * settle;
+        const double dx = drift * std::sin(age * 0.23 + p.phase), dy = drift * std::cos(age * 0.19 + p.phase * 1.3), dz = drift * 0.45 * std::sin(age * 0.31 + p.phase * 0.7);
+        const double billow = 1 + 0.07 * settle * std::sin(age * (0.6 + 0.35 * p.inner) + p.phase);
+        for (int i = 0; i < 3; ++i) out.offset[i] = from[i] + (p.offset[i] - from[i]) * grow;
+        out.offset[0] = out.offset[0] * (1 + 0.15 * thin) + dx;
+        out.offset[1] = out.offset[1] * (1 + 0.15 * thin) + dy;
+        out.offset[2] += dz - 40 * thin;
+        const double d = p.size * (0.18 + 0.82 * grow) * billow * std::pow(fade, 0.7);
+        out.size[0] = d * (1 + 0.04 * std::sin(age * 0.41 + p.phase));
+        out.size[1] = d * (1 + 0.04 * std::cos(age * 0.37 + p.phase));
+        out.size[2] = d * 0.8;
+        out.shown = age >= p.delay * 0.5 && d > 4;
+        return out;
     }
 
     double SmokeScale(std::int64_t startMs, std::int64_t endMs, std::int64_t nowMs)
@@ -240,6 +291,40 @@ namespace aimmod::cs
     }
 
     Point SmokeCentre(double x, double y, double z) { return {x, y, z + SmokeHalfHeight - 40}; }
+
+    double SmokeDepth(const std::vector<GrenadeState::Area>& smokes, std::int64_t nowMs, double x, double y, double z)
+    {
+        double most = 0;
+        for (const auto& s : smokes)
+        {
+            const double scale = SmokeScale(s.startMs, s.endMs, nowMs);
+            if (scale <= 0) continue;
+            const Point c = SmokeCentre(s.x, s.y, s.z);
+            const double lx = (x - c.x) / SmokeRadius, ly = (y - c.y) / SmokeRadius, lz = (z - c.z) / SmokeHalfHeight;
+            most = std::max(most, std::clamp((scale - std::sqrt(lx * lx + ly * ly + lz * lz)) / 0.3, 0.0, 1.0));
+        }
+        return most;
+    }
+
+    double FlashWhite(const GrenadeState::Flash& f, std::int64_t nowMs)
+    {
+        if (nowMs < f.atMs) return 0;
+        const double age = static_cast<double>(nowMs - f.atMs);
+        if (age < f.holdMs) return f.peak;
+        const double fade = 1 - (age - f.holdMs) / std::max(1, f.fadeMs);
+        return fade <= 0 ? 0 : f.peak * fade * fade;
+    }
+
+    double FlashAfterImage(const GrenadeState::Flash& f, std::int64_t nowMs)
+    {
+        if (f.peak < AfterImageMinPeak || nowMs < f.atMs) return 0;
+        const double age = static_cast<double>(nowMs - f.atMs);
+        if (age < f.holdMs) return 0.85;
+        // It lingers while the white clears, then fades a little ahead of it: the last of the flash is
+        // the live view through a thin white.
+        const double u = (age - f.holdMs) / std::max(1.0, f.fadeMs * 0.8);
+        return u >= 1 ? 0 : 0.85 * std::pow(1 - u, 1.5);
+    }
 
     std::vector<Flame> FireFlames(double radius, double seconds, double secondsLeft, std::int64_t seed)
     {

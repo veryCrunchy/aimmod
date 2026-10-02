@@ -223,7 +223,7 @@ namespace aimmod
         if (!moving) m_move = cs::KnifeMove::None;
     }
 
-    UObject* CsGear::BuildModel(UObject* owner, UObject* parent, const std::vector<cs::Part>& parts, std::vector<FWeakObjectPtr>* lights)
+    UObject* CsGear::BuildModel(UObject* owner, UObject* parent, const std::vector<cs::Part>& parts, std::vector<FWeakObjectPtr>* lights, std::vector<FWeakObjectPtr>* all)
     {
         UClass* sceneClass = game::FindClass(STR("/Script/Engine.SceneComponent"));
         UClass* meshClass = game::FindClass(STR("/Script/Engine.StaticMeshComponent"));
@@ -234,6 +234,7 @@ namespace aimmod
         int built = 0;
         for (const cs::Part& part : parts)
         {
+            if (all) all->emplace_back(); // this part's slot, filled once it is built
             UObject* mesh = LoadGameAsset(part.mesh);
             UObject* component = mesh ? AddComponent(owner, meshClass) : nullptr;
             if (!component) continue;
@@ -266,6 +267,7 @@ namespace aimmod
             const double scale[3] = {part.size[0] / 100, part.size[1] / 100, part.size[2] / 100};
             Relative(component, part.offset, part.rotation, scale);
             if (part.light && lights) lights->push_back(FWeakObjectPtr(component));
+            if (all) all->back() = FWeakObjectPtr(component);
             ++built;
         }
         return built > 0 ? root : nullptr;

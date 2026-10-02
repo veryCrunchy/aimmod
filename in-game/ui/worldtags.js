@@ -11,7 +11,9 @@
   function ensure(){
     if(layer)return layer;
     layer=root.document.createElement('div');layer.id='world-tags';layer.className='wt-layer';
-    root.document.body.appendChild(layer);return layer;
+    // Under the flash's white (#cs-flash), above everything else on the page.
+    var body=root.document.body,top=root.document.getElementById?root.document.getElementById('cs-flash'):null;
+    if(top&&top.parentNode===body&&body.insertBefore)body.insertBefore(layer,top);else body.appendChild(layer);return layer;
   }
   function span(cls,parent){var el=root.document.createElement('span');el.className=cls;parent.appendChild(el);return el;}
   function tagNode(i){
@@ -64,7 +66,37 @@
     }
     for(var j=tags.length;j<nodes.length;j++)if(nodes[j].style.display!=='none')nodes[j].style.display='none';
   }
-  function onTags(json){var data=null;try{data=typeof json==='string'?JSON.parse(json):json;}catch(e){data=null;}render(data);}
-  if(root.engine&&root.engine.on)root.engine.on('AimModTags',onTags);
-  root.AimModWorldTags={render:render,onTags:onTags,gearOf:gearOf};
+  // What arrived, for the service log (AimModCore logs what it pushed): the events, the tags in the
+  // last one, and how the page listens. Reported every 10 s while it changes.
+  var stats={events:0,bad:0,last:0,via:'none'},reported='',reportTimer=null;
+  function onTags(json){var data=null;try{data=typeof json==='string'?JSON.parse(json):json;}catch(e){data=null;}
+    stats.events++;if(!data)stats.bad++;stats.last=data&&data.tags&&data.tags.length?data.tags.length:0;render(data);}
+  function report(){
+    reportTimer=null;
+    var line='listening via '+stats.via+'; '+stats.events+' events in the last 10 s'+(stats.bad?' ('+stats.bad+' unreadable)':'')+', '+stats.last+' tags in the last one';
+    var quiet=stats.events===0&&reported.indexOf(' 0 events')>=0;
+    stats.events=0;stats.bad=0;
+    if(line!==reported&&!quiet&&root.XMLHttpRequest&&root.location){reported=line;
+      var p=root.location.pathname,x=new root.XMLHttpRequest();x.open('POST',p.slice(0,p.lastIndexOf('/'))+'/multiplayer',true);x.setRequestHeader('X-AimMod-UI','1');x.setRequestHeader('Content-Type','application/json');
+      x.send(JSON.stringify({action:'tags-debug',counts:line}));}
+    if(root.setTimeout)reportTimer=root.setTimeout(report,10000);
+  }
+  // AimModCore's events come through Gameface's engine object (cohtml.js, which notify.html loads
+  // first). Without it the page gets a minimal one: the native side delivers events by calling
+  // engine._trigger(name, ...args).
+  function listen(name,fn){
+    var e=root.engine;
+    if(e&&typeof e.on==='function'&&!e._aimmodHandlers){e.on(name,fn);return 'engine.on';}
+    if(!e)e=root.engine={};
+    if(!e._aimmodHandlers){
+      var handlers=e._aimmodHandlers={},before=e._trigger;
+      e._trigger=function(n){var list=handlers[n],args=Array.prototype.slice.call(arguments,1);if(list)for(var i=0;i<list.length;i++)list[i].apply(null,args);if(typeof before==='function')return before.apply(e,arguments);};
+      e.on=function(n,f){(handlers[n]=handlers[n]||[]).push(f);};
+    }
+    e.on(name,fn);return 'a minimal engine (no cohtml.js)';
+  }
+  root.AimModListen=function(name,fn){return listen(name,fn);};
+  stats.via=listen('AimModTags',onTags);
+  if(root.setTimeout)reportTimer=root.setTimeout(report,10000);
+  root.AimModWorldTags={render:render,onTags:onTags,gearOf:gearOf,stats:stats,report:report};
 })(window);

@@ -202,6 +202,13 @@ sealed partial class MultiplayerService : IDisposable
                         && counts.GetString() is { Length: > 0 and <= 200 } line && line.All(c => c is >= ' ' and <= '~'))
                         Console.Error.WriteLine("[notify] pointer events: " + line);
                     return LobbyResult.Success;
+                case "tags-debug":
+                    // The notify page's side of the world tags: how it listens for AimModCore's events
+                    // and how many arrived (the last link of the chain AimModCore's log counts).
+                    if (args.ValueKind == JsonValueKind.Object && args.TryGetProperty("counts", out var tagCounts) && tagCounts.ValueKind == JsonValueKind.String
+                        && tagCounts.GetString() is { Length: > 0 and <= 200 } tagLine && tagLine.All(c => c is >= ' ' and <= '~'))
+                        Console.Error.WriteLine("[notify] world tags: " + tagLine);
+                    return LobbyResult.Success;
                 case "invite":
                     if (Current is not { } lobby) return LobbyResult.Fail("no-lobby", "Create a lobby first.");
                     return transport.InviteOverlay(lobby) ? LobbyResult.Success : LobbyResult.Fail("invite-unavailable", "Steam invites need the Steam bridge. Share the room code " + lobby.Code + " for now.");

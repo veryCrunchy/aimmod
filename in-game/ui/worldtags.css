@@ -1,6 +1,6 @@
 /* Name tags over other players (worldtags.js). Anchored just above the head: the name, then for CS
    teammates their gear (bomb, weapon, armour, kit), a health bar and the distance. */
-.wt-layer{position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none;overflow:hidden}
+.wt-layer{position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none;overflow:hidden;z-index:50}
 .wt-tag{position:absolute;width:200px;margin-left:-100px;margin-top:-30px;text-align:center;font-family:Roboto,Arial,sans-serif;pointer-events:none}
 .wt-tag.geared{margin-top:-52px}
 .wt-name{display:block;font-size:14px;font-weight:700;line-height:16px;color:#eef5f1;text-shadow:0 1px 2px #000000,0 0 3px #000000}

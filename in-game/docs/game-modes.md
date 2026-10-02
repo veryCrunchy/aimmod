@@ -1699,13 +1699,25 @@ AimMod's own: procedural models of engine basic shapes and synthesised sounds.
   300 ms for them (then counts the line as clear). A smoke between the flash
   and you also keeps you from being blinded.
 - **Flashes.** The amount (0..1): full when you look within about 53 degrees
-  of the pop, less to the side, 0.1 behind you; full within 6 m, nothing at
-  30 m. The screen stays white for 2 s × amount², then clears over
-  3.2 s × amount (`CsPlayerView.Flash`). The HUD layer draws the white over
-  everything; a hard flash also rings in your ears. A flashed bot sees nothing.
+  of the pop, less to the side, 0.1 behind you; full within 400 units
+  (17.6 m), nothing at 1500 (66 m). The screen stays white for
+  2.5 s × amount², then clears over 2.8 s × amount (`CsPlayerView.Flash`):
+  about 5 s in all for a flash in your face, 2-3 s from the side or further
+  off. The white reaches your screen twice: AimModCore's flash layer (above
+  every view, from the `flash` line of `grenades.tsv`, with the frozen
+  after-image of the moment of the flash under it for a strong one) and the
+  notice page's top layer (`#cs-flash`, played from `cs.flashFx`). A hard
+  flash also rings in your ears. A flashed bot sees nothing. The host logs
+  what each flash did (`[grenades] flash #…`: who it blinded, by how much,
+  and whether the game answered the sight lines) and each player's service
+  logs `[grenades] you were flashed`.
 - **Smoke.** It blocks sight for bots (the service drops their sight of
   anyone behind it), enemy name tags (no `world-tags.tsv` row for an enemy
-  behind it from your camera) and flashes. Inside it the HUD greys the view.
+  behind it from your camera) and flashes; shots go through it, as in CS. It
+  spreads to its full size (about 12 m across, a chokepoint or a doorway and
+  its sides) over 1 s. Inside it AimModCore flattens the picture to grey (a
+  post-process blended in by how deep the camera is) and the HUD's veil greys
+  the view under the HUD.
   A smoke puts out a fire it covers, and a fire grenade landing in a smoke
   never catches (an `extinguished` blast with a hiss).
 - **Damage** goes through the host's `CombatMatch.AreaHit`: the CS armour
@@ -1716,7 +1728,10 @@ AimMod's own: procedural models of engine basic shapes and synthesised sounds.
   every second; `CsGrenades.hpp` has the contract): the grenade in hand on the
   first-person camera (drawn back with the pin pulled, gone for a moment after
   a throw), grenades in flight spinning along the host's path, smoke clouds of
-  grey puffs that grow in and thin out, the smoke canister and decoys lying
+  40 overlapping grey puffs (engine spheres, squashed, lighter on top) that
+  come out of the canister, spread over a second, drift and billow slowly and
+  thin out from the edge (one actor and 40 mesh components per smoke, posed
+  at 30 Hz), the smoke canister and decoys lying
   where they stopped, a burning pool with flickering flames, and blasts (an HE
   fireball, the flash's white pop, a fire grenade bursting or put out).
 - **Sounds** (`GrenadeSounds`, in `--write-bomb-sounds`): the pin, the throw,

@@ -33,12 +33,13 @@ static class GrenadeRules
     // HE (CS2 98 damage, 350 units at 4.4 cm): falls off with distance, half reaches health through armour.
     public const double HeDamage = 98, HeRadiusCm = 350 * GrenadePhysics.Unit, HeArmorPenetration = 0.5;
     public const long HeFuseMs = 1500, FlashFuseMs = 1500, FireFuseMs = 2000;
-    // Flash: full effect within 6 m, none beyond 30 m; at most about 5 s of blindness.
-    public const double FlashNearCm = 600, FlashFarCm = 3000;
-    public const int FlashHoldMaxMs = 2000, FlashFadeMaxMs = 3200;
-    // Smoke: a cloud about 12 m across and 6 m tall for 18 s; it grows in over 1.5 s and thins over the last 2 s.
+    // Flash (CS-like): full effect within 400 units (17.6 m), none beyond 1500 (66 m); looking at it
+    // close up: 2.5 s of full white, then 2.8 s clearing (about 5 s in all); less by angle and distance.
+    public const double FlashNearCm = 400 * GrenadePhysics.Unit, FlashFarCm = 1500 * GrenadePhysics.Unit;
+    public const int FlashHoldMaxMs = 2500, FlashFadeMaxMs = 2800;
+    // Smoke: a cloud about 12 m across and 6 m tall for 18 s; it spreads out over 1 s and thins over the last 2 s.
     public const double SmokeRadiusCm = 620, SmokeHalfHeightCm = 300;
-    public const long SmokeMs = 18_000, SmokeGrowMs = 1500, SmokeFadeMs = 2000;
+    public const long SmokeMs = 18_000, SmokeGrowMs = 1000, SmokeFadeMs = 2000;
     // Fire: a 2.5 m pool for 7 s, 40 damage a second (in 0.25 s ticks), armour doesn't help; a smoke puts it out.
     public const double FireRadiusCm = 250, FireDps = 40;
     public const long FireMs = 7_000, FireTickMs = 250;
@@ -105,10 +106,11 @@ static class GrenadeRules
     public static CsFlashView? FlashFor(long at, double amount) =>
         amount < 0.05 ? null : new CsFlashView(at, (int)Math.Round(FlashHoldMaxMs * amount * amount), (int)Math.Round(FlashFadeMaxMs * amount), amount);
     // The white over the screen `now`: full (by amount) while held, then clearing.
+    public static double FlashPeak(CsFlashView f) => Math.Round(Math.Min(1, 0.35 + f.Amount), 2);
     public static double FlashAlpha(CsFlashView? f, long now)
     {
         if (f is null || now < f.At) return 0;
-        var peak = Math.Min(1, 0.35 + f.Amount);
+        var peak = FlashPeak(f);
         var age = now - f.At;
         if (age < f.HoldMs) return Math.Round(peak, 2);
         var fade = 1 - (age - f.HoldMs) / (double)Math.Max(1, f.FadeMs);
@@ -425,6 +427,8 @@ sealed class CsGrenadeField
     public required Func<IEnumerable<(string Id, int Team, TrackSample? At, bool Alive)>> Players;
     public required Action<string, string, double, CsGrenade, long, double[]?> Damage;
     public required Action<string, CsFlashView> Flashed;
+    // The host's log of what each flash did (who it blinded and why not); set by the service.
+    public Action<string>? Trace;
     // A level floor under a throw when the game can't trace (eye height below the thrower).
     public Func<double[], GrenadePhysics.Trace> Fallback = o => GrenadePhysics.Floor(o[2] - GrenadeRules.EyeHeightCm);
 
@@ -544,12 +548,15 @@ sealed class CsGrenadeField
         Changed();
         var grenade = GrenadeRules.Find(b.Kind)!;
         var smokes = View().Where(v => v.State == "smoke").ToArray();
+        // For the log (flashes): what happened to everyone in reach.
+        var outcome = b.Kind == GrenadeRules.Flash ? new List<string>() : null;
         foreach (var victim in b.Checks.Select(c => c.Victim).Distinct())
         {
             var checks = b.Checks.Where(c => c.Victim == victim).ToList();
-            if (!checks.Any(c => c.Clear != false)) continue; // every line to them is blocked
+            var answered = checks.Count(c => c.Clear is not null);
+            if (!checks.Any(c => c.Clear != false)) { outcome?.Add(victim + " behind a wall"); continue; } // every line to them is blocked
             var p = Players().FirstOrDefault(x => x.Id == victim);
-            if (!p.Alive || p.At is not { } eye) continue;
+            if (!p.Alive || p.At is not { } eye) { outcome?.Add(victim + " down"); continue; }
             if (b.Kind == GrenadeRules.He)
             {
                 var centre = new[] { eye.X, eye.Y, eye.Z - 64 };
@@ -561,13 +568,21 @@ sealed class CsGrenadeField
             else
             {
                 var at = new[] { eye.X, eye.Y, eye.Z };
-                if (GrenadeRules.SmokeBlocks(smokes, b.At, at, now)) continue;
+                if (GrenadeRules.SmokeBlocks(smokes, b.At, at, now)) { outcome?.Add(victim + " behind a smoke"); continue; }
                 var dist = Distance(b.At, at);
                 var (fx, fy, fz) = TrackGeometry.Direction(eye.Pitch, eye.Yaw);
                 var dot = dist < 1 ? 1 : ((b.At[0] - at[0]) * fx + (b.At[1] - at[1]) * fy + (b.At[2] - at[2]) * fz) / dist;
-                if (GrenadeRules.FlashFor(b.T, GrenadeRules.FlashAmount(dot, dist)) is { } flash) Flashed(victim, flash);
+                var amount = GrenadeRules.FlashAmount(dot, dist);
+                var los = answered == checks.Count ? "sight from the game" : "no sight answer in " + LosWaitMs + " ms, counted clear";
+                if (GrenadeRules.FlashFor(b.T, amount) is { } flash)
+                {
+                    Flashed(victim, flash);
+                    outcome?.Add(FormattableString.Invariant($"{victim} blinded {amount:0.00} ({dist / 100:0} m, facing {dot:0.00}; {flash.HoldMs} ms white + {flash.FadeMs} ms; {los})"));
+                }
+                else outcome?.Add(FormattableString.Invariant($"{victim} untouched ({dist / 100:0} m, facing {dot:0.00})"));
             }
         }
+        if (outcome is not null) Trace?.Invoke("flash #" + b.Id + " by " + b.Owner + " " + (now - b.T) + " ms after the pop: " + (outcome.Count == 0 ? "nobody in reach" : string.Join("; ", outcome)));
     }
 
     static double Distance(double[] a, double[] b) => Math.Sqrt((a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1]) + (a[2] - b[2]) * (a[2] - b[2]));

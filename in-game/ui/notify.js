@@ -14,8 +14,13 @@
     root.AimModStandings.render(full,n&&n.boardFull,'full');full.className=n&&n.boardFull?'show':'';
   }
   // CS: its own full-screen HUD layer (edges only), drawn whenever its state changes.
-  var csRoot=root.document.getElementById('cs-hud'),lastCs='';
-  function cs(n){var c=n&&n.cs||null;var key=c?JSON.stringify(c):'';if(key===lastCs||!root.AimModCsHud||!csRoot)return;lastCs=key;root.AimModCsHud.render(csRoot,c,answer);}
+  var csRoot=root.document.getElementById('cs-hud'),flashLayer=root.document.getElementById('cs-flash'),lastCs='';
+  function cs(n){
+    var c=n&&n.cs||null;
+    // The flash's white plays on its own top layer, over the HUD and the name tags.
+    if(root.AimModCsHud&&root.AimModCsHud.flash&&flashLayer&&flashLayer!==csRoot)root.AimModCsHud.flash(flashLayer,c&&c.flashFx||null);
+    var key=c?JSON.stringify(c):'';if(key===lastCs||!root.AimModCsHud||!csRoot)return;lastCs=key;root.AimModCsHud.render(csRoot,c,answer);
+  }
   // The strips (duel, combat, badge) and the toast live in their own containers and are rebuilt
   // only when their own fields change: the HUD data ticks every poll, and rebuilding the toast
   // with it would swap its buttons between mouse down and mouse up, so clicks got lost.
@@ -227,7 +232,8 @@
     if(on&&!pointerTimer&&root.setTimeout){clickSeen=null;pointerTimer=root.setTimeout(pointerPoll,50);}
     if(!on&&debugNode){if(debugNode.parentNode)debugNode.parentNode.removeChild(debugNode);debugNode=null;}
   }
-  if(root.engine&&root.engine.on)root.engine.on('AimModPointer',pointer);
+  // AimModCore's events reach the page through Gameface's engine (cohtml.js, loaded first by notify.html).
+  if(root.AimModListen)root.AimModListen('AimModPointer',pointer);else if(root.engine&&root.engine.on)root.engine.on('AimModPointer',pointer);
   if(root.document.addEventListener){
     root.document.addEventListener('mousemove',function(){counts.gfMove++;},true);
     root.document.addEventListener('mousedown',function(){counts.gfDown++;nativeDownAt=Date.now();debug();},true);

@@ -115,9 +115,12 @@
     if(c.buyWindow&&!c.buyOpen)me.appendChild(node('div','cs-key-hint','Press '+c.buyKey+' to buy'));
     (c.keyClashes||[]).forEach(function(k){me.appendChild(node('div','cs-clash',k));});
     target.appendChild(me);
-    // Inside a smoke the view greys over; a flash whites out everything, the HUD too.
-    if(typeof c.smoke==='number'&&c.smoke>0){var fog=node('div','cs-smoke');fog.style.opacity=String(Math.min(0.92,c.smoke*0.92));target.appendChild(fog);}
-    if(typeof c.flash==='number'&&c.flash>0){var white=node('div','cs-flash');white.style.opacity=String(Math.min(1,c.flash));target.appendChild(white);}
+    // Inside a smoke the view greys over, under the HUD (CS keeps the HUD readable in a smoke).
+    if(typeof c.smoke==='number'&&c.smoke>0){var fog=node('div','cs-smoke');fog.style.opacity=String(Math.min(0.97,c.smoke*0.97));
+      if(target.insertBefore&&target.firstChild)target.insertBefore(fog,target.firstChild);else target.appendChild(fog);}
+    // A flash whites out everything, the HUD too: the page's own top layer plays it (flash()); this
+    // is the fallback when the service sends only the white's level.
+    if(!c.flashFx&&typeof c.flash==='number'&&c.flash>0){var white=node('div','cs-flash');white.style.opacity=String(Math.min(1,c.flash));target.appendChild(white);}
     settle(layers,top,root);
   }
   // The menu stays hidden until it is placed: Gameface may not have laid it out yet when it is
@@ -146,5 +149,27 @@
     menu.style.transformOrigin='0 0';menu.style.transform='scale('+s.toFixed(3)+')';
     return {left:Math.round(left),top:Math.round(top),scale:+s.toFixed(3)};
   }
-  root.AimModCsHud={render:render,place:place};
+  // The flash's white on the page's top layer (#cs-flash, above the tags and the HUD), played every
+  // frame from the service's timing ({id, age, hold, fade, peak}) so it doesn't step with the 250 ms
+  // poll: full white while it holds, then clearing (the curve of GrenadeRules.FlashAlpha). A flash
+  // keeps playing to its end even if a poll misses it.
+  var fx=null,fxTimer=null;
+  function flashAlpha(f,t){if(t<0)return 0;if(t<f.hold)return f.peak;var k=1-(t-f.hold)/Math.max(1,f.fade);return k<=0?0:f.peak*k*k;}
+  function paint(el,a){if(!el)return;var d=a>0.003?'block':'none';if(el.style.display!==d)el.style.display=d;if(d==='block')el.style.opacity=a.toFixed(3);}
+  function frame(now){
+    if(!fx)return;var a=flashAlpha(fx,now-fx.start);paint(fx.el,a);
+    if(a<=0&&now-fx.start>=fx.hold){fx=null;return;}
+    var later=root.setTimeout||(typeof setTimeout==='function'?setTimeout:null);
+    if(!fxTimer&&later)fxTimer=later(function(){fxTimer=null;frame(Date.now());},16);
+  }
+  function flash(el,info,now){
+    now=typeof now==='number'?now:Date.now();
+    if(info&&typeof info.age==='number'&&typeof info.hold==='number'&&typeof info.fade==='number'){
+      if(!fx||fx.id!==info.id)fx={id:info.id,start:now-info.age,hold:info.hold,fade:info.fade,peak:Math.max(0,Math.min(1,+info.peak||0)),el:el};
+      else fx.el=el;
+    }
+    if(!fx){paint(el,0);return null;}
+    frame(now);return fx?flashAlpha(fx,now-fx.start):0;
+  }
+  root.AimModCsHud={render:render,place:place,flash:flash,flashAlpha:flashAlpha};
 })(window);

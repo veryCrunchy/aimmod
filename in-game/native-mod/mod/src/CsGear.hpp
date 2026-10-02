@@ -52,7 +52,9 @@ namespace aimmod
 
         // Shared with CsGrenades: a model of tinted basic shapes on `parent` (owned by `owner`), a part's
         // place on its parent, and an AimMod actor (no collision) to hang models on in the world.
-        static game::UObject* BuildModel(game::UObject* owner, game::UObject* parent, const std::vector<cs::Part>& parts, std::vector<RC::Unreal::FWeakObjectPtr>* lights);
+        // `all` (optional) gets every part's component, in the order of `parts` (empty for a part that failed).
+        static game::UObject* BuildModel(game::UObject* owner, game::UObject* parent, const std::vector<cs::Part>& parts, std::vector<RC::Unreal::FWeakObjectPtr>* lights,
+                                         std::vector<RC::Unreal::FWeakObjectPtr>* all = nullptr);
         static void Place(game::UObject* component, const double location[3], const double rotation[3], const double* scale);
         static game::UObject* SpawnHolder(game::UObject* character, double x, double y, double z);
 

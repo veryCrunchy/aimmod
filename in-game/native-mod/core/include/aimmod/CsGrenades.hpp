@@ -17,9 +17,9 @@ namespace aimmod::cs
     // The service's GrenadePhysics constants that drawing a path needs.
     constexpr double GrenadeGravity = 800 * 0.4 * 4.4, GrenadeSlideDecel = 700;
     constexpr int GrenadeFlight = 0, GrenadeSlide = 1, GrenadeRest = 2;
-    // The smoke's size (GrenadeRules): 6.2 m round, 3 m half height, on the ground; it grows in over
-    // 1.5 s and thins over the last 2 s.
-    constexpr double SmokeRadius = 620, SmokeHalfHeight = 300, SmokeGrowSeconds = 1.5, SmokeFadeSeconds = 2.0;
+    // The smoke's size (GrenadeRules): 6.2 m round, 3 m half height, on the ground; it spreads out over
+    // 1 s and thins over the last 2 s.
+    constexpr double SmokeRadius = 620, SmokeHalfHeight = 300, SmokeGrowSeconds = 1.0, SmokeFadeSeconds = 2.0;
 
     struct GrenadeKey
     {
@@ -67,12 +67,20 @@ namespace aimmod::cs
             double x{}, y{}, z{};
             std::int64_t atMs{};
         };
+        // A flash that blinded this player: white `peak` for `holdMs` from `atMs`, then clearing over `fadeMs`.
+        struct Flash
+        {
+            std::int64_t id{}, atMs{};
+            int holdMs{}, fadeMs{};
+            double peak{};
+        };
         std::vector<Flying> flying;
         std::vector<Area> smokes, fires, decoys;
         std::vector<Blast> blasts;
+        std::optional<Flash> flash;
     };
-    // Validated; nullopt for a bad header or row (the whole file is ignored).
-    std::optional<GrenadeState> ParseGrenades(std::string_view text);
+    // Validated; nullopt for a bad header or row (the whole file is ignored). `why`: the first bad line.
+    std::optional<GrenadeState> ParseGrenades(std::string_view text, std::string* why = nullptr);
     bool KnownGrenade(std::string_view kind);
 
     // Where a grenade is `ms` after its throw (the host's path).
@@ -88,17 +96,40 @@ namespace aimmod::cs
     Hold GrenadeInHand(bool pin);
     constexpr double ThrownHideSeconds = 0.35;
 
-    // The smoke cloud: puffs (grey spheres) inside the cloud's size; `scale` 0..1 is its growth now.
+    // The smoke cloud: many soft grey puffs (squashed spheres) that overlap to fill the cloud's size.
+    // Each one comes out of the canister and spreads to its place over about a second (the inner ones
+    // first), then drifts and billows slowly; at the end the outer ones thin out first.
     struct Puff
     {
         double offset[3]; // cm from the cloud's centre at full size
         double size;      // diameter at full size
-        double shade;     // 0..1 lighter
+        double shade;     // 0..1 lighter (higher up is lighter, as if lit from above)
+        double delay;     // s after the pop before it starts spreading out
+        double phase;     // radians: where its drift and billow start
+        double inner;     // 0 at the cloud's edge .. 1 at its heart (the last to thin out)
     };
     const std::vector<Puff>& SmokePuffs();
+    // One puff `age` s after the pop with `left` s to go: where it is (cm from the cloud's centre),
+    // its size (cm, x y z) and whether it shows at all.
+    struct PuffPose
+    {
+        double offset[3]{}, size[3]{};
+        bool shown{};
+    };
+    PuffPose SmokePuff(const Puff& puff, double age, double left);
     double SmokeScale(std::int64_t startMs, std::int64_t endMs, std::int64_t nowMs);
     // The cloud's centre over the spot it popped (it sits on the ground).
     Point SmokeCentre(double x, double y, double z);
+    // How deep in a smoke a point is (0 outside .. 1 in the thick of it), as the service's
+    // GrenadeRules.SmokeInside: the camera's grey inside view.
+    double SmokeDepth(const std::vector<GrenadeState::Area>& smokes, std::int64_t nowMs, double x, double y, double z);
+
+    // The flash on this player's screen: the white (0..1, the service's GrenadeRules.FlashAlpha curve)
+    // and the frozen after-image under it (0..1: the frame from the moment of the flash, which lingers
+    // a little after the white starts clearing). Only a strong flash leaves an after-image.
+    double FlashWhite(const GrenadeState::Flash& flash, std::int64_t nowMs);
+    double FlashAfterImage(const GrenadeState::Flash& flash, std::int64_t nowMs);
+    constexpr double AfterImageMinPeak = 0.6;
 
     // Fire: low flames inside the radius that flicker with time (`seconds` since it caught) and die
     // down in the last second.

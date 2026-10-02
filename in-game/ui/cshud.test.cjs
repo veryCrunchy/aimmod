@@ -123,7 +123,19 @@ test('grenades: a Grenades buy category, what you carry with the one in hand, an
   const nades=s.walk(s.root).filter(e=>/cs-nade( |$)/.test(e.className));
   assert.deepEqual(nades.map(n=>n.textContent),['HE','FL ×2']);assert.match(nades[1].className,/hand/);
   const flash=s.walk(s.root).find(e=>e.className==='cs-flash'),fog=s.walk(s.root).find(e=>e.className==='cs-smoke');
-  assert.equal(flash.style.opacity,'0.8');assert.equal(fog.style.opacity,String(0.5*0.92));
+  assert.equal(flash.style.opacity,'0.8');assert.equal(fog.style.opacity,String(0.5*0.97));
   s.hud.render(s.root,Object.assign({},base,{buyOpen:false,phase:'live',flash:0,smoke:0}),()=>{});
   assert.ok(!s.walk(s.root).some(e=>e.className==='cs-flash'||e.className==='cs-smoke'),'no overlay once it clears');
+});
+test('a flash plays on the top layer from the service\'s timing: full white while it holds, clearing after, then gone',()=>{
+  const s=setup();const layer={style:{}};
+  const fx={id:5,age:0,hold:2500,fade:2800,peak:1};
+  assert.equal(s.hud.flash(layer,fx,10000),1);assert.equal(layer.style.display,'block');assert.equal(layer.style.opacity,'1.000');
+  assert.equal(s.hud.flash(layer,Object.assign({},fx,{age:1800}),12000),1,'the same flash keeps its own start (no step back with a late poll)');
+  assert.equal(s.hud.flash(layer,null,10000+2500+1400),0.25,'half way through the fade a quarter of the white is left');
+  s.hud.flash(layer,null,10000+5400);assert.equal(layer.style.display,'none');
+  assert.equal(s.hud.flash(layer,null,20000),null,'nothing playing');
+  assert.ok(Math.abs(s.hud.flashAlpha({hold:100,fade:1000,peak:0.5},600)-0.125)<1e-9);
+  s.hud.render(s.root,Object.assign({},base,{buyOpen:false,phase:'live',flash:0.8,flashFx:fx}),()=>{});
+  assert.ok(!s.walk(s.root).some(e=>e.className==='cs-flash'),'with the timing the HUD draws no second white');
 });

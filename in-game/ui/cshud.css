@@ -86,3 +86,5 @@
 .cs-nade.hand{background:#cfe0d8;color:#0f1714;font-weight:700}
 .cs-smoke{position:absolute;left:0;top:0;width:100%;height:100%;background:#8f969a;pointer-events:none}
 .cs-flash{position:absolute;left:0;top:0;width:100%;height:100%;background:#ffffff;pointer-events:none}
+/* The flash's white (cshud.js flash()): the top layer of the page, over the HUD and the name tags. */
+#cs-flash{display:none;position:absolute;left:0;top:0;width:100%;height:100%;background:#ffffff;pointer-events:none;z-index:100}

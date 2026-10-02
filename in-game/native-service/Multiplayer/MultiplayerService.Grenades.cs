@@ -23,6 +23,7 @@ sealed partial class MultiplayerService
         if (outputFolder is null || core is null) return;
         core.WithCsGrenades(field =>
         {
+            field.Trace ??= line => Console.Error.WriteLine("[grenades] " + line);
             ReadGrenadePaths(field);
             var paths = field.PathRequests; var los = field.LosRequests;
             var body = paths.Count + los.Count == 0 ? "" : GrenadeFiles.Sim(0, paths, los);
@@ -98,9 +99,10 @@ sealed partial class MultiplayerService
     //   fire\t<id>\t<kind>\t<x>\t<y>\t<z>\t<radius>\t<start>\t<end>
     //   decoy\t<id>\t<x>\t<y>\t<z>\t<start>\t<end>
     //   blast\t<id>\t<kind>\t<x>\t<y>\t<z>\t<at>
+    //   flash\t<id>\t<at>\t<hold ms>\t<fade ms>\t<peak 0..1>   (the flash that hit you: AimModCore's white and after-image)
     // Rewritten on change and every second (AimModCore drops it after 5 s).
     string? lastGrenades; long grenadesWrittenAt, grenadesSequence;
-    internal static string GrenadesBody(string scenario, string? hand, bool pin, long thrownLocal, IEnumerable<CsGrenadeView> grenades, long hostToLocal)
+    internal static string GrenadesBody(string scenario, string? hand, bool pin, long thrownLocal, IEnumerable<CsGrenadeView> grenades, long hostToLocal, CsFlashView? flash = null)
     {
         static string F(double v) => Math.Round(v, 1).ToString("0.#", CultureInfo.InvariantCulture);
         static string L(long v) => v.ToString(CultureInfo.InvariantCulture);
@@ -128,13 +130,20 @@ sealed partial class MultiplayerService
                 else if (g.State == "blast") sb.Append("blast\t").Append(g.Id).Append('\t').Append(g.Kind).Append('\t').Append(at).Append('\t').Append(L(start)).Append('\n');
             }
         }
+        if (flash is not null)
+            sb.Append("flash\t").Append(L(flash.At)).Append('\t').Append(L(Math.Max(0, flash.At - hostToLocal))).Append('\t').Append(Math.Clamp(flash.HoldMs, 0, 10000)).Append('\t')
+              .Append(Math.Clamp(flash.FadeMs, 0, 10000)).Append('\t').Append(GrenadeRules.FlashPeak(flash).ToString("0.##", CultureInfo.InvariantCulture)).Append('\n');
         return sb.ToString();
     }
+
+    // The flash on your screen for the notice page (null once it has cleared).
+    internal static CsFlashFx? FlashFx(CsPlayerView me, long hostNow) =>
+        me.Flash is { } f && hostNow >= f.At && hostNow < f.At + f.HoldMs + f.FadeMs ? new CsFlashFx(f.At, hostNow - f.At, f.HoldMs, f.FadeMs, GrenadeRules.FlashPeak(f)) : null;
     void WriteGrenades(MatchSnapshot match, CsView cs, CsPlayerView me)
     {
         if (outputFolder is null) return;
         var inHand = me.Alive && grenadeHand is not null && poseTracker?.Weapon == CsRules.GrenadeSlot;
-        var body = GrenadesBody(RoundScenario(match), inHand ? grenadeHand : null, inHand && pinPulled, grenadeThrownAt, cs.Grenades ?? [], HostOffset());
+        var body = GrenadesBody(RoundScenario(match), inHand ? grenadeHand : null, inHand && pinPulled, grenadeThrownAt, cs.Grenades ?? [], HostOffset(), me.Alive ? me.Flash : null);
         var now = clock();
         if (body == lastGrenades && now - grenadesWrittenAt < 1000) return;
         lastGrenades = body; grenadesWrittenAt = now;
@@ -150,10 +159,17 @@ sealed partial class MultiplayerService
         foreach (var cue in grenadeSounds.Update(match.Id, cs, SelfId, clock() + HostOffset())) roundAudio.Play(cue, listener);
     }
 
+    long loggedFlashAt = -1;
     // Everything above for the local player, once a service tick in a CS round (CsInput).
     void CsGrenades(MatchSnapshot match, CsView cs, CsPlayerView me, bool foreground)
     {
         CsGrenadeInput(match, cs, me, foreground);
+        // Every flash that reaches this player's view, once (the white on the notice page and AimModCore's layer).
+        if (me.Flash is { } f && f.At != loggedFlashAt)
+        {
+            loggedFlashAt = f.At;
+            Console.Error.WriteLine(FormattableString.Invariant($"[grenades] you were flashed: amount {f.Amount:0.00}, white {GrenadeRules.FlashPeak(f):0.00} for {f.HoldMs} ms, clearing over {f.FadeMs} ms ({clock() + HostOffset() - f.At} ms after the pop)"));
+        }
         WriteGrenades(match, cs, me);
         GrenadeSoundCues(match, cs);
     }
