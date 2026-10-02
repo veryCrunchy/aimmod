@@ -36,7 +36,9 @@ static class StreamIds
         return "s-" + hash.ToString("x16", System.Globalization.CultureInfo.InvariantCulture);
     }
 }
-sealed record TrackBatch(string MatchId, int Round, IReadOnlyList<TrackSample> Samples, IReadOnlyList<TrackSeen> Seen)
+// Hull (optional): the sender's camera height above its capsule centre, its capsule radius and half
+// height (standing), so the host turns its camera track back into the hull its game hit-tests.
+sealed record TrackBatch(string MatchId, int Round, IReadOnlyList<TrackSample> Samples, IReadOnlyList<TrackSeen> Seen, double[]? Hull = null)
 {
     public const int MaxSamples = 64, MaxSeen = 64;
 
@@ -46,6 +48,7 @@ sealed record TrackBatch(string MatchId, int Round, IReadOnlyList<TrackSample> S
         s = Samples.Select(x => new double[] { x.T, R(x.X), R(x.Y), R(x.Z), R(x.Pitch), R(x.Yaw), x.Fire ? 1 : 0 }),
         v = Seen.Select(x => new double[] { x.T, x.Id, R(x.X), R(x.Y), R(x.Z), R(x.Radius), R(x.HalfHeight) }),
         // Target id -> member, for drawn avatars AimModCore tagged.
+        b = Hull?.Select(R).ToArray(),
         who = Seen.Where(x => x.Member is not null).GroupBy(x => x.Id).ToDictionary(g => g.Key.ToString(System.Globalization.CultureInfo.InvariantCulture), g => g.First().Member),
     };
     static double R(double v) => Math.Round(v, 2);
@@ -90,7 +93,10 @@ sealed record TrackBatch(string MatchId, int Round, IReadOnlyList<TrackSample> S
                 }
                 seen = seen.Select(x => names.TryGetValue(x.Id, out var m) ? x with { Member = m } : x).ToList();
             }
-            return new TrackBatch(match, round, samples, seen);
+            double[]? body = null;
+            if (b.TryGetProperty("b", out var bv) && bv.ValueKind == JsonValueKind.Array)
+                body = Row(bv, 3) is { } br && br.All(x => Math.Abs(x) <= 1000) ? br : null;
+            return new TrackBatch(match, round, samples, seen, body);
         }
         catch (Exception ex) when (ex is KeyNotFoundException or InvalidOperationException or FormatException) { return null; }
     }
@@ -361,6 +367,8 @@ sealed class SelfPoseTracker(string outputFolder)
     public int? Weapon { get; private set; }
     // This player's standing camera height over their feet (cm), once seen.
     public double? EyeHeight { get; private set; }
+    // Camera above capsule centre, radius and half height while standing (TrackBatch.Hull), once seen.
+    public double[]? Hull { get; private set; }
 
     public void Reset() { lastPose = long.MinValue; lastSequence = -1; samples.Clear(); seenRows.Clear(); lastSeen.Clear(); seenHistory.Clear(); Weapon = null; }
 
@@ -407,6 +415,8 @@ sealed class SelfPoseTracker(string outputFolder)
         {
             var eye = frame.Poses[^1].Camera[2] - (self[3] - self[5]);
             if (eye is > 30 and < 600) EyeHeight = eye;
+            var above = frame.Poses[^1].Camera[2] - self[3];
+            if (above is > 0 and < 500) Hull = [above, self[4], self[5]];
         }
         // The fire row covers this publication (about 33 ms): its poses count as firing.
         var fired = frame.Fire is { } f && f[2] == 1;
@@ -449,7 +459,7 @@ sealed class SelfPoseTracker(string outputFolder)
         {
             var s = samples.Take(TrackBatch.MaxSamples).ToArray(); samples.RemoveRange(0, s.Length);
             var v = seenRows.Take(TrackBatch.MaxSeen).ToArray(); seenRows.RemoveRange(0, v.Length);
-            yield return new TrackBatch(matchId, round, s, v);
+            yield return new TrackBatch(matchId, round, s, v, Hull);
         }
     }
 }

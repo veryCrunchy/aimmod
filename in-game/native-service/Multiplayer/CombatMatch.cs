@@ -141,6 +141,9 @@ sealed class CombatMatch
         public readonly Dictionary<string, (long At, double? Lag)> Lag = new();
         public readonly Dictionary<string, int> Reasons = new();
         public int Accepted, Pending, Duplicates;
+        // The body behind the track: how far the camera sits above the capsule centre, and the capsule
+        // (reported with the track; the defaults are AimMod's standing avatar).
+        public double EyeAbove = TrackingRound.DefaultEyeAboveCentre; public double? BodyRadius, BodyHalf;
     }
     readonly Dictionary<string, Player> players = new();
     readonly List<CombatEvent> events = [];
@@ -213,6 +216,8 @@ sealed class CombatMatch
     public void Track(string from, TrackBatch batch)
     {
         if (!players.TryGetValue(from, out var p)) return;
+        if (batch.Hull is [var eye, var radius, var half] && eye is >= 20 and <= 400 && radius is >= 10 and <= 200 && half >= radius && half <= 400)
+        { p.EyeAbove = eye; p.BodyRadius = radius; p.BodyHalf = half; }
         foreach (var s in batch.Samples)
         {
             if (s.T < Start - 1000 || s.T > End + 1000) continue;
@@ -403,6 +408,15 @@ sealed class CombatMatch
     long RewindCap(Player shooter, Player victim, long now) =>
         (long)Math.Clamp(Math.Max(TrackingRound.RewindCapMs, (ViewDelay(shooter, victim, now) ?? 0) + 100), 0, CombatRules.MaxRewindMs);
 
+    // A drawn hull sits at the victim's own height (its camera minus its eye height, within 50 cm),
+    // and is at most the victim's body (or AimMod's avatar, the larger) plus 8 cm: a claim can't
+    // move or enlarge the target onto the ray. CS bodies on the scaled maps are taller than the avatar.
+    static bool Plausible(Player p, double eyeAboveCentre) => Math.Abs(eyeAboveCentre - p.EyeAbove) <= TrackingRound.HeightToleranceCm;
+    static double CapRadius(Player p, double claimed) => Math.Min(claimed, Math.Max(TrackingRound.DefaultRadius, p.BodyRadius ?? 0) + TrackingRound.HullToleranceCm);
+    static double CapHalf(Player p, double claimed) => Math.Min(claimed, Math.Max(TrackingRound.DefaultHalfHeight, p.BodyHalf ?? 0) + TrackingRound.HullToleranceCm);
+    // The body a player's track stands for (tests and the logs).
+    public (double EyeAbove, double? Radius, double? Half)? Body(string id) => players.TryGetValue(id, out var p) ? (p.EyeAbove, p.BodyRadius, p.BodyHalf) : null;
+
     sealed record Candidate(Player Victim, double X, double Y, double Z, double Radius, double Half, string How, long Lag, double Along);
 
     string? Evaluate(Player shooter, HitClaim c, long now, long received, int? shooterRtt)
@@ -455,21 +469,21 @@ sealed class CombatMatch
                 {
                     if (At(p.Track, c.T - lag) is not { } d) continue;
                     var dist = Math.Sqrt((d.X - tx) * (d.X - tx) + (d.Y - c.TargetY!.Value) * (d.Y - c.TargetY.Value));
-                    if (dist < nearestDistance) { nearestDistance = dist; nearest = "nearest track " + F(dist) + " cm away at " + lag + " ms (rewind cap " + cap + " ms" + (TrackingRound.PlausibleHeight(d.Z - c.TargetZ!.Value) ? "" : ", height off by " + F(d.Z - c.TargetZ.Value - TrackingRound.DefaultEyeAboveCentre) + " cm") + ")"; }
-                    if (dist > TrackingRound.MatchToleranceCm || !TrackingRound.PlausibleHeight(d.Z - c.TargetZ!.Value)) continue;
+                    if (dist < nearestDistance) { nearestDistance = dist; nearest = "nearest track " + F(dist) + " cm away at " + lag + " ms (rewind cap " + cap + " ms" + (Plausible(p, d.Z - c.TargetZ!.Value) ? "" : ", height off by " + F(d.Z - c.TargetZ.Value - p.EyeAbove) + " cm") + ")"; }
+                    if (dist > TrackingRound.MatchToleranceCm || !Plausible(p, d.Z - c.TargetZ!.Value)) continue;
                     if (best is null || dist < best.Value.Dist - 0.5) best = (dist, lag);
                 }
                 if (best is { } b)
                 {
-                    candidates.Add(new(p, tx, c.TargetY!.Value, c.TargetZ!.Value, TrackingRound.HullRadius(c.TargetRadius!.Value), TrackingRound.HullHalfHeight(c.TargetHalfHeight!.Value), "drawn", b.Lag, Dist(c.X, c.Y, c.Z, tx, c.TargetY.Value, c.TargetZ.Value)));
+                    candidates.Add(new(p, tx, c.TargetY!.Value, c.TargetZ!.Value, CapRadius(p, c.TargetRadius!.Value), CapHalf(p, c.TargetHalfHeight!.Value), "drawn", b.Lag, Dist(c.X, c.Y, c.Z, tx, c.TargetY.Value, c.TargetZ.Value)));
                     continue;
                 }
             }
             var rewind = (long)Math.Clamp(ViewDelay(shooter, p, now) ?? 100 + (shooterRtt ?? 0) / 2.0, 0, cap);
             if (At(p.Track, c.T - rewind) is not { } at) continue;
-            var radius = c.TargetRadius is { } tr ? TrackingRound.HullRadius(tr) : TrackingRound.DefaultRadius;
-            var half = c.TargetHalfHeight is { } th ? TrackingRound.HullHalfHeight(th) : TrackingRound.DefaultHalfHeight;
-            var centreZ = at.Z - TrackingRound.DefaultEyeAboveCentre;
+            var radius = c.TargetRadius is { } tr ? CapRadius(p, tr) : p.BodyRadius ?? TrackingRound.DefaultRadius;
+            var half = c.TargetHalfHeight is { } th ? CapHalf(p, th) : p.BodyHalf ?? TrackingRound.DefaultHalfHeight;
+            var centreZ = at.Z - p.EyeAbove; // the track is the camera: back to the capsule centre
             if (c.TargetX is { } dxv && Math.Sqrt((at.X - dxv) * (at.X - dxv) + (at.Y - c.TargetY!.Value) * (at.Y - c.TargetY.Value)) > CombatRules.FallbackMatchCm) continue;
             if (!OnRay(TrackingRound.RayLengthCm, at.X, at.Y, centreZ, radius, half)) continue;
             candidates.Add(new(p, at.X, at.Y, centreZ, radius, half, "rewound", rewind, Dist(c.X, c.Y, c.Z, at.X, at.Y, centreZ)));

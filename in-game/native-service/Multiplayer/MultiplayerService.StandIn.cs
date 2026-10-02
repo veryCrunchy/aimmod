@@ -94,7 +94,8 @@ sealed partial class MultiplayerService
         foreach (var group in batch.Seen.Where(v => v.Member is { } m && standIns.ContainsKey(m) && Current?.Members.FirstOrDefault(x => x.Id == m) is not { Bot: not null }).GroupBy(v => v.Member!))
         {
             var samples = group.Select(v => new TrackSample(v.T, v.X, v.Y, v.Z + TrackingRound.DefaultEyeAboveCentre, 0, 0)).ToArray();
-            core.Track(group.Key, new TrackBatch(batch.MatchId, batch.Round, samples, []));
+            var last = group.Last();
+            core.Track(group.Key, new TrackBatch(batch.MatchId, batch.Round, samples, [], [TrackingRound.DefaultEyeAboveCentre, last.Radius, last.HalfHeight]));
         }
     }
 

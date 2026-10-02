@@ -137,6 +137,15 @@ sealed partial class MultiplayerService
     public const double DefaultBotEyeHeight = TrackingRound.DefaultHalfHeight + TrackingRound.DefaultEyeAboveCentre;
     double BotEyeHeight() => poseTracker?.EyeHeight ?? (Current?.Match?.Cs is not null ? CsRules.SpawnEyeAbove + 160 : DefaultBotEyeHeight);
     internal double BotEye(BotSight s) => s.Floor is { } floor ? floor + BotEyeHeight() : s.Z + BotBrain.EyeAboveCentre;
+    // The hull a bot's track stands for (TrackBatch.Hull): its avatar as this machine's game draws it
+    // (the capsule the game hit-tests) when seen, and the camera height above that capsule's centre,
+    // so the host turns the track's camera Z back into the drawn centre and head (CS: about 167 cm).
+    internal double[] BotBody(string member, BotSight s)
+    {
+        var drawn = poseTracker?.LastSeen.Values.FirstOrDefault(v => v.Member == member);
+        var centre = drawn?.Z ?? s.Z;
+        return [BotEye(s) - centre, drawn?.Radius ?? TrackingRound.DefaultRadius, drawn?.HalfHeight ?? (s.Floor is { } floor && s.Z - floor is > 20 and < 400 ? s.Z - floor : TrackingRound.DefaultHalfHeight)];
+    }
 
     // The host's bots are its own simulation: their tracks come from where its game walks them
     // (bot-sight.tsv), every new report, so hits on them (from any player) validate against that.
@@ -148,7 +157,7 @@ sealed partial class MultiplayerService
         {
             if (!match.Players.Contains(member) || now - s.At > BotBrain.SightFreshMs || botTrackFed.GetValueOrDefault(member) == s.At) continue;
             botTrackFed[member] = s.At;
-            core.Track(member, new TrackBatch(match.Id, match.Round, [new TrackSample(now, s.X, s.Y, BotEye(s), 0, s.Yaw)], []));
+            core.Track(member, new TrackBatch(match.Id, match.Round, [new TrackSample(now, s.X, s.Y, BotEye(s), 0, s.Yaw)], [], BotBody(member, s)));
         }
     }
 

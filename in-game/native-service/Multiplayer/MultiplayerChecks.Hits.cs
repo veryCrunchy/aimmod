@@ -9,6 +9,7 @@ static partial class MultiplayerChecks
 {
     static void HitRegistration(string root)
     {
+        BotHulls();
         const long t0 = 9_000_000;
         // a at the origin looking along +x; b 10 m away, its eye 64 cm above its capsule centre (z 100).
         CombatMatch Arena(string mode = LobbyModes.Deathmatch, Func<long, double>? bY = null, long until = t0 + 9_000, double aYaw = 0)
@@ -209,5 +210,48 @@ static partial class MultiplayerChecks
         Check(me.Accepted >= 5 && me.Accepted + me.Reasons.Values.Sum() == 30 && me.Reasons.Keys.All(k => k is "victim-dead" or "spawn-protected"),
             "The game hits on the drawn stand-in land; the rest are refused only while it is down or protected: " + string.Join(", ", me.Reasons.Select(kv => kv.Key + " " + kv.Value)));
         Check(acked == 30 && shots.Count == 0, "The service acknowledged every shot, so AimModCore's log is empty again");
+    }
+
+    // Bot tracks follow the player convention: the floor plus a standing camera height. In CS (the
+    // scaled ports) that camera is about 167 cm above the bot's capsule centre, elsewhere 64 cm. Every
+    // path must turn the track back into the drawn hull: the drawn target's height check, the rewound
+    // ray test, the hull size cap and the head zone.
+    static void BotHulls()
+    {
+        const long t0 = 9_900_000;
+        foreach (var (mode, eye, radius, half) in new[] { (LobbyModes.Cs, CsRules.SpawnEyeAbove + 160.0, 60.0, 145.0), (LobbyModes.Deathmatch, MultiplayerService.DefaultBotEyeHeight, 45.0, 115.0) })
+        {
+            var weapon = mode == LobbyModes.Cs ? CsRules.Find("ak47")!.Combat : CombatRules.Rifle;
+            // The bot stands on the floor (z 0) 10 m ahead: its capsule centre is at its half height.
+            var centre = half; var above = eye - centre; var at = t0 + 3000;
+            double PitchTo(double z) => Math.Atan2(z - eye, 1000) * 180 / Math.PI;
+            // The shooter's own camera looks where it shoots.
+            CombatMatch Arena(double aimZ = 0)
+            {
+                var c = new CombatMatch(mode, ["shooter", "bot"], 20, 0, t0, t0 + 60_000);
+                if (mode == LobbyModes.Cs) c.WeaponFor = (_, _) => weapon;
+                var a = new List<TrackSample>(); var b = new List<TrackSample>();
+                for (long t = t0; t < t0 + 6000; t += 17) { a.Add(new(t, 0, 0, eye, aimZ == 0 ? 0 : PitchTo(aimZ), 0)); b.Add(new(t, 1000, 0, eye, 0, 180)); }
+                c.Track("shooter", new TrackBatch("m", 1, a, [], [above, radius, half]));
+                c.Track("bot", new TrackBatch("m", 1, b, [], [above, radius, half]));
+                return c;
+            }
+            HitClaim Shot(double z, bool drawn) => new("m", 1, 1, at, 0, 0, eye, PitchTo(z), 0, false, drawn ? 1000 : null, drawn ? 0 : null, drawn ? centre : null, drawn ? radius : null, drawn ? half : null);
+            var headZ = centre + half * 0.8; var bodyZ = centre + half * 0.2; var overZ = centre + half + 10;
+            foreach (var drawn in new[] { true, false })
+            {
+                var path = drawn ? "drawn" : "rewound";
+                var head = Arena(headZ);
+                Check(head.Claim("shooter", Shot(headZ, drawn), at + 20, 40) is null && head.View().Events.Last(e => e.Kind == "damage") is { Head: true } h && h.Amount == Math.Min(100, weapon.Damage * weapon.HeadMultiplier)
+                    && head.LastDetail!.StartsWith(path, StringComparison.Ordinal), mode + ": a head shot on a bot is accepted on the " + path + " path, as a headshot (" + head.LastDetail + ")");
+                var body = Arena(bodyZ);
+                Check(body.Claim("shooter", Shot(bodyZ, drawn), at + 20, 40) is null && body.View().Events.Last(e => e.Kind == "damage") is { Head: false } bd && bd.Amount == weapon.Damage,
+                    mode + ": a body shot on a bot is accepted on the " + path + " path as a body hit (" + body.LastDetail + ")");
+                var over = Arena(overZ);
+                Check(over.Claim("shooter", Shot(overZ, drawn), at + 20, 40) is not null and not "pending" && over.View().Players.First(p => p.Member == "bot").Health == 100,
+                    mode + ": a shot 10 cm over the bot's head is refused on the " + path + " path (" + over.LastDetail + ")");
+            }
+            Check(Arena().Body("bot") is { } hull && Math.Abs(hull.EyeAbove - above) < 0.01 && hull.Half == half, mode + ": the bot's track carries its hull (camera " + Math.Round(above) + " cm above the centre)");
+        }
     }
 }

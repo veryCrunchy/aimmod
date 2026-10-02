@@ -937,7 +937,10 @@ should. The pipeline, end to end:
    targets, where its game drew everyone else. From those it measures each
    shooter's view delay per victim (the median lag at which its drawn rows
    match the victim's track; a remote bot's relay can be 300 ms) and rewinds
-   the victim that far (see 6.2.1 for every check). The bots' own tracks are
+   the victim that far (see 6.2.1 for every check). A track is a camera: each one carries its
+   hull (	rack field `b`: camera height above the capsule centre, radius, half
+   height; bots: their drawn avatar, about 167 cm in CS ports, 64 cm elsewhere),
+   and every check turns the camera Z back into that capsule centre and head. The bots' own tracks are
    the host's drawn avatars, so the hull the host validates against is the
    one its game hit-tests. `self-pose.tsv` carries the last 16 camera samples
    and the drawn targets of the previous publications (`seen` rows), so no
