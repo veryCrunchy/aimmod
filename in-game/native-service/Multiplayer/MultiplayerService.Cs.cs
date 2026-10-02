@@ -386,9 +386,11 @@ sealed class CsKeyReader
     [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(nint window, out uint processId);
     [DllImport("user32.dll")] static extern short GetAsyncKeyState(int key);
     readonly HashSet<char> wasDown = [];
+    // Checks set this: the desktop's real window and keys never reach them (the game may be running).
+    internal static bool Detached;
     public bool Foreground()
     {
-        if (!OperatingSystem.IsWindows()) return false;
+        if (Detached || !OperatingSystem.IsWindows()) return false;
         try
         {
             var window = GetForegroundWindow();
@@ -398,11 +400,11 @@ sealed class CsKeyReader
         }
         catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception or ArgumentException or OverflowException) { return false; }
     }
-    public bool Down(char key) => OperatingSystem.IsWindows() && (GetAsyncKeyState(char.ToUpperInvariant(key)) & 0x8000) != 0;
+    public bool Down(char key) => !Detached && OperatingSystem.IsWindows() && (GetAsyncKeyState(char.ToUpperInvariant(key)) & 0x8000) != 0;
     // Down now, and whether it went down since the last read (a click shorter than a service tick).
     public (bool Down, bool Tapped) State(char key)
     {
-        if (!OperatingSystem.IsWindows()) return (false, false);
+        if (Detached || !OperatingSystem.IsWindows()) return (false, false);
         var s = GetAsyncKeyState(char.ToUpperInvariant(key));
         return ((s & 0x8000) != 0, (s & 1) != 0);
     }
