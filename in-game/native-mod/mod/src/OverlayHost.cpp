@@ -238,6 +238,7 @@ namespace aimmod
         m_player = FWeakObjectPtr(player);
         m_url = url;
         m_layoutSet = false;
+        Layout(true); // full screen from the start: the slot's default is a small box at the top left
         m_fresh = true;
         m_plan = overlay::Plan{};
         m_failures = 0;
