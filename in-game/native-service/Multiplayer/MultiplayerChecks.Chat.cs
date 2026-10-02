@@ -107,6 +107,11 @@ static partial class MultiplayerChecks
         Check(line is { Scope: MatchChat.Team, Place: "Long A", Dead: false, Radio: false } && line.Team == TeamOf("host") && line.Match == m.Id, "A team line carries the team, the match and the caller's callout");
         Check(Seen(mate).Any(l => l.Id == line.Id) && Seen("host").Any(l => l.Id == line.Id) && !Seen(foe).Any(l => l.Id == line.Id), "Team chat reaches the team only");
         Check(!Seen("someone-else").Any(l => l.Id == line.Id), "Lobby members outside the match don't get team chat");
+        // A bot's line (BotSay posts it this way) gets its place too: B has no callout zone, so the site.
+        core.Track(mate, new TrackBatch(m.Id, m.Round, [new TrackSample(clock(), -1100, -2500, 104, 0, 0), new TrackSample(clock() + 100, -1100, -2500, 104, 0, 0)], []));
+        core.Apply(mate, "chat", J(new { text = "2 enemies B site", scope = "team" }), content);
+        Check(core.Snapshot().Chat.Last() is { Place: "B Site", Scope: MatchChat.Team } botLine && botLine.From == mate && Seen("host").Any(l => l.Id == botLine.Id),
+            "A bot's team callout carries its location (B Site) and reaches its team");
         core.Apply("host", "chat", J(new { text = "gl hf", scope = "all" }), content);
         var all = core.Snapshot().Chat.Last();
         Check(all is { Scope: MatchChat.All, Place: null } && Seen(foe).Any(l => l.Id == all.Id) && Seen(mate).Any(l => l.Id == all.Id), "All chat reaches everyone, with no location");

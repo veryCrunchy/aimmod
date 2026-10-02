@@ -27,11 +27,11 @@ sealed partial class MultiplayerService
     // The chat input or a radio menu has the keys: the CS keys, the scoreboard key and the rest wait.
     internal bool ChatCapturing => chatInput.Open || radioGroup is not null;
 
-    // The bot chat contract (game-modes.md 6.11.3): BotSay(member, teamOnly, text) posts a line for a
-    // bot of this lobby, as team chat (with the bot's location, like a player's) or all chat. Set by
-    // the service itself; the bot AI calls it. Host only, rate limited (BotChatLimiter: one line per
-    // bot every 3 s, the same callout once per team in 5 s); anything else is dropped silently.
-    public Action<string, bool, string>? BotSay { get; set; }
+    // The bot chat contract (game-modes.md 6.11.3): BotSay (declared with the bots,
+    // MultiplayerService.Bots.cs) is (member, teamOnly, text); the service sets it to SayAsBot, which
+    // posts a line for a bot of this lobby as team chat (with the bot's location, like a player's) or
+    // all chat. Host only, rate limited (BotChatLimiter: one line per bot every 3 s, the same callout
+    // once per team in 5 s); anything else is dropped silently.
 
     // Is this machine's player in a match where chat is on: countdown, play and between rounds.
     MatchSnapshot? ChatMatch(LobbySnapshot? lobby) =>
