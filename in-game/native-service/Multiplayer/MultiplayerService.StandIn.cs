@@ -25,7 +25,7 @@ sealed partial class MultiplayerService
         standIns.Clear();
         var dev = Simulation is not null && core is not null;
         if (Current is { Match: { Phase: MatchPhases.Loading or MatchPhases.Countdown or MatchPhases.Live } match } lobby && match.Players.Contains(SelfId))
-            foreach (var (id, i) in match.Players.Where(id => id != SelfId && lobby.Members.Any(m => m.Id == id && (IsBot(m) || (dev && m.Simulated)))).Take(MaxStandIns).Select((id, i) => (id, i)))
+            foreach (var (id, i) in match.Players.Where(id => id != SelfId && lobby.Members.Any(m => m.Id == id && ((IsBot(m) && LobbyModes.Shooting(match.Mode)) || (dev && m.Simulated)))).Take(MaxStandIns).Select((id, i) => (id, i)))
                 standIns[id] = (i + 1).ToString(System.Globalization.CultureInfo.InvariantCulture);
         if (standIns.Count == 0)
         {
@@ -90,7 +90,8 @@ sealed partial class MultiplayerService
     void FeedStandIn(TrackBatch batch)
     {
         if (core is null || standIns.Count == 0) return;
-        foreach (var group in batch.Seen.Where(v => v.Member is { } m && standIns.ContainsKey(m)).GroupBy(v => v.Member!))
+        // Bots have their own, authoritative feed (MultiplayerService.Bots.cs FeedBotTracks).
+        foreach (var group in batch.Seen.Where(v => v.Member is { } m && standIns.ContainsKey(m) && Current?.Members.FirstOrDefault(x => x.Id == m) is not { Bot: not null }).GroupBy(v => v.Member!))
         {
             var samples = group.Select(v => new TrackSample(v.T, v.X, v.Y, v.Z + TrackingRound.DefaultEyeAboveCentre, 0, 0)).ToArray();
             core.Track(group.Key, new TrackBatch(batch.MatchId, batch.Round, samples, []));

@@ -45,10 +45,10 @@
   // The selected mode, larger, with what the lobby starts with.
   function modeHero(id){var m=mode(id);var card=node('div','mp-mode-hero');add(card,add(node('span','mp-mode-pic'),modeArt(m.id,true,true)),add(node('div','mp-mode-hero-text'),node('div','eyebrow',m.group==='pvp'?'PvP mode':'Score mode'),node('strong','',m.label),node('span','',m.text),node('span','mp-mode-detail',m.detail)));return card;}
   function combat(m){return m==='deathmatch'||m==='vampiric'||m==='instagib'||m==='team-deathmatch';}
-  // Bots play the shooting modes (not in tournament lobbies); the host adds them at this difficulty.
+  // Bots play every mode but the tracking duel (not in tournament lobbies); the host adds them at this difficulty.
   var botSkill='normal';
   var BOT_SKILLS=[{id:'easy',label:'Easy'},{id:'normal',label:'Normal'},{id:'hard',label:'Hard'}];
-  function botsAllowed(s){return !!s&&(s.mode==='cs'||combat(s.mode))&&!s.tournament;}
+  function botsAllowed(s){return !!s&&s.mode!=='tracking-duel'&&!s.tournament;}
   function botLabel(k){return k==='easy'?'Easy':k==='hard'?'Hard':'Normal';}
   var PRIVACY={friends:'Friends only',invite:'Invite only',public:'Public (room code)'};
   var PRESETS=[{id:'default',label:'Scenario default'},{id:'cs',label:'Counter-Strike-like'},{id:'valorant',label:'Valorant-like'},{id:'apex',label:'Apex-like'},{id:'quake',label:'Quake-like'},{id:'custom',label:'Custom'}];

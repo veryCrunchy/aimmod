@@ -150,6 +150,153 @@ namespace bridge::ghost
             return best;
         }
 
+        // The link from a to its neighbour in direction d (-1: none).
+        int Link(int a, int d) const { return nodes[static_cast<std::size_t>(a)].link[static_cast<std::size_t>(d)]; }
+        int Dir(int a, int b) const
+        {
+            for (int d = 0; d < 4; ++d)
+                if (Link(a, d) == b) return d;
+            return -1;
+        }
+
+        // Stuck recovery: a link the body could not pass after all is taken out (both ways).
+        void Block(int a, int b)
+        {
+            if (a < 0 || b < 0 || a >= static_cast<int>(nodes.size()) || b >= static_cast<int>(nodes.size())) return;
+            for (auto& l : nodes[static_cast<std::size_t>(a)].link)
+                if (l == b) l = -1;
+            for (auto& l : nodes[static_cast<std::size_t>(b)].link)
+                if (l == a) l = -1;
+            ++blocked;
+        }
+        int blocked = 0;
+        // A grid point the body can't stand on after all: no link reaches it any more.
+        void BlockNode(int n)
+        {
+            if (n < 0 || n >= static_cast<int>(nodes.size())) return;
+            for (const int m : nodes[static_cast<std::size_t>(n)].link)
+                if (m >= 0) Block(n, m);
+            for (auto& other : nodes)
+                for (auto& l : other.link)
+                    if (l == n) l = -1;
+        }
+
+        // A straight walk from node a to node b over the grid alone (no traces): every grid cell the
+        // line crosses has a floor point linked to the last one; a diagonal step needs both of its
+        // corner cells, so the body keeps clear of a corner. For string-pulling paths.
+        bool Straight(int a, int b) const
+        {
+            const auto& A = nodes[static_cast<std::size_t>(a)];
+            const auto& B = nodes[static_cast<std::size_t>(b)];
+            int cx = A.ix, cy = A.iy, cur = a;
+            const int tx = B.ix, ty = B.iy;
+            const double dx = tx - cx, dy = ty - cy;
+            const int steps = static_cast<int>(std::max(std::fabs(dx), std::fabs(dy)) * 2);
+            for (int s = 1; s <= steps && cur != b; ++s)
+            {
+                const double u = static_cast<double>(s) / steps;
+                const int nx = static_cast<int>(std::lround(A.ix + dx * u)), ny = static_cast<int>(std::lround(A.iy + dy * u));
+                if (nx == cx && ny == cy) continue;
+                const auto step = [&](int from, int ddx, int ddy) -> int {
+                    const int d = ddx > 0 ? 0 : ddx < 0 ? 1 : ddy > 0 ? 2 : 3;
+                    return Link(from, d);
+                };
+                const int sx = nx - cx, sy = ny - cy;
+                if (std::abs(sx) > 1 || std::abs(sy) > 1) return false;
+                int next = -1;
+                if (sx != 0 && sy != 0)
+                {
+                    // Diagonal: through both corner cells, and they must agree.
+                    const int viaX = step(cur, sx, 0), viaY = step(cur, 0, sy);
+                    if (viaX < 0 || viaY < 0) return false;
+                    const int n1 = step(viaX, 0, sy), n2 = step(viaY, sx, 0);
+                    if (n1 < 0 || n1 != n2) return false;
+                    next = n1;
+                }
+                else next = step(cur, sx, sy);
+                if (next < 0) return false;
+                cur = next;
+                cx = nx;
+                cy = ny;
+            }
+            return cur == b;
+        }
+
+        // String-pulling: from each kept point, the farthest later one a straight walk reaches.
+        std::vector<int> Smooth(const std::vector<int>& path, std::size_t lookahead = 24) const
+        {
+            if (path.size() < 3) return path;
+            std::vector<int> out{path.front()};
+            std::size_t i = 0;
+            while (i + 1 < path.size())
+            {
+                std::size_t j = std::min(path.size() - 1, i + lookahead);
+                while (j > i + 1 && !Straight(path[i], path[j])) --j;
+                out.push_back(path[j]);
+                i = j;
+            }
+            return out;
+        }
+
+        // How open the floor is from node a in direction d: grid points in a straight line (at most max).
+        int Openness(int a, int d, int max = 24) const
+        {
+            int n = 0;
+            for (int cur = a; n < max; ++n)
+            {
+                const int next = Link(cur, d);
+                if (next < 0) break;
+                cur = next;
+            }
+            return n;
+        }
+
+        // A* over the grid: node ids from the node nearest `from` to the one nearest `to` (or to the
+        // node closest to it, `reached` false, when it isn't connected yet).
+        std::vector<int> PathNodes(const std::array<double, 3>& from, const std::array<double, 3>& to, bool& reached) const
+        {
+            reached = false;
+            std::vector<int> out;
+            const int a = Nearest(from[0], from[1], from[2]), b = Nearest(to[0], to[1], to[2]);
+            if (a < 0) return out;
+            const auto& goal = b >= 0 ? nodes[static_cast<std::size_t>(b)] : nodes[static_cast<std::size_t>(a)];
+            const double gx = b >= 0 ? goal.x : to[0], gy = b >= 0 ? goal.y : to[1];
+            const auto h = [&](int n) { const auto& p = nodes[static_cast<std::size_t>(n)]; return std::hypot(p.x - gx, p.y - gy); };
+            std::vector<double> cost(nodes.size(), std::numeric_limits<double>::infinity());
+            std::vector<int> parent(nodes.size(), -1);
+            using Item = std::pair<double, int>;
+            std::priority_queue<Item, std::vector<Item>, std::greater<Item>> open;
+            cost[static_cast<std::size_t>(a)] = 0;
+            open.push({h(a), a});
+            int closest = a;
+            double closestH = h(a);
+            while (!open.empty())
+            {
+                const auto [f, u] = open.top();
+                open.pop();
+                if (f > cost[static_cast<std::size_t>(u)] + h(u) + 1e-6) continue;
+                if (u == b) { closest = b; reached = true; break; }
+                if (const double hu = h(u); hu < closestH) { closestH = hu; closest = u; }
+                for (const int v : nodes[static_cast<std::size_t>(u)].link)
+                {
+                    if (v < 0) continue;
+                    // A climb costs a little more than flat floor, so routes don't zigzag over steps.
+                    const double c = cost[static_cast<std::size_t>(u)] + spacing + std::fabs(nodes[static_cast<std::size_t>(v)].z - nodes[static_cast<std::size_t>(u)].z) * 0.5;
+                    if (c >= cost[static_cast<std::size_t>(v)]) continue;
+                    cost[static_cast<std::size_t>(v)] = c;
+                    parent[static_cast<std::size_t>(v)] = u;
+                    open.push({c + h(v), v});
+                }
+            }
+            for (int n = closest; n >= 0; n = parent[static_cast<std::size_t>(n)])
+            {
+                out.push_back(n);
+                if (n == a) break;
+            }
+            std::reverse(out.begin(), out.end());
+            return out;
+        }
+
         // A* from the node nearest `from` to the node nearest `to`: the floor points to walk, in order.
         // `reached` is false when the goal isn't connected (yet): the path then ends at the node
         // closest to it.

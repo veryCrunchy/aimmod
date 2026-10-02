@@ -1441,11 +1441,16 @@ preset):
 
 #### 6.6.4 Bots (built)
 
-Host-run players for CS, deathmatch and team deathmatch (not score modes,
-not tournament lobbies). The host adds them in the lobby (**Add bot** at
-Easy, Normal or Hard, or **Fill with bots**); they're named `BOT <name>`,
-always ready, load at once, survive a host change and leave if the mode
-changes to one without shooting.
+Host-run players for every mode but the tracking duel (not tournament
+lobbies). The host adds them in the lobby (**Add bot** at Easy, Normal or
+Hard, or **Fill with bots**); they're named `BOT <name>`, always ready, load
+at once, survive a host change (the new host runs them on) and leave if the
+mode changes to the tracking duel. The shooting modes play the bot brain
+below; the score modes (score race, duel, free-for-all rounds, practice)
+play `BotScorer`: the host sends a bot's score frames and finish like a
+player's game would, from a pace off the host's best on the scenario (else
+about 1,000 a minute) times its difficulty (62 / 84 / 102 %) and its own
+form, rising with streaks and slumps but never falling.
 
 - **Drawing and moving.** Each bot is one of AimModSteam's walking stand-in
   avatars (synthetic peers 1 to 16). The host's walkers get waypoints (own
@@ -1460,9 +1465,34 @@ changes to one without shooting.
     waypoint and goal by line traces (no step over the step height, no
     drop over 1.6 steps, nothing across at foot or waist height), about
     1500 traces a tick, so a whole map is covered in a few seconds. A bot
-    walks the A* path over it, skipping ahead where a straight walk is
-    clear. Without a grid (other arenas) a goal is reached by a route over
-    the waypoints, checked a few straight walks at a time.
+    walks the A* path over it, string-pulled into straight legs over the
+    grid alone (no traces). Without a grid (other arenas) a goal is reached
+    by a route over the waypoints, checked a few straight walks at a time.
+  - On a single grid step the walker trusts the grid's floor (a trace that
+    began in a low ceiling, a step read differently) but never walks through
+    a wall; a string-pulled leg it can't take is walked again grid step by
+    grid step. Stuck (under 40 cm in 1.5 s), it climbs a ladder of
+    recoveries, starting over only once well past the spot: hop and back off
+    to the last point; take the link out of the grid and plan again; take
+    the grid point beyond it out; hop over to the next point.
+  - It keeps clear of other bodies (bots, players, the local player): slows
+    behind one ahead, steps aside from one alongside, stops beside one
+    already standing on its spot. It turns no faster than its turn rate
+    (`turn`, by difficulty), faces where it walks, checks the most open
+    angles from where it stands (the grid's straight runs) and strafes side
+    to side in a fight (`fight`).
+  - Orders also say how far to go (`stop`, a fraction of the way: map
+    control, post-plant spots) and a detour first (`via`, a split).
+  - `aimmod_nav_probe <map.json> <map.aimmod.json>` (steam-bridge tools)
+    runs the same grid and walkers offline on a ported map's brushes
+    (convex hulls of each brush's vertices), and reports coverage, which
+    spawns and sites connect, and how walkers and five-bot squads fare from
+    each spawn to each site. Both ported CS maps (de_d2_remake, de_d2_beta):
+    every spawn and site connected, every walk and squad arrives.
+  - In game, once the grid is complete, AimModSteam logs its coverage: how
+    many spawn-to-waypoint pairs connect, and the ones that don't.
+  - Bot debug (developer menu): AimModSteam draws each bot's path as small
+    spheres and its goal as a cube, and logs every bot's job every second.
   - Logs: the grid's growth, and every 5 s each bot's order, goal,
     distance, path length and progress; the service adds the orders to
     its 30 s bot line.
@@ -1498,18 +1528,43 @@ changes to one without shooting.
 - **Sight.** The host asks its game to trace from each bot's eye to the
   nearest enemies; AimModSteam answers in `bot-sight.tsv`. A bot only targets
   a player its trace says is in sight.
-- **Aim** (`BotBrain`, by difficulty): a reaction time (650 / 380 / 220 ms)
-  before the first shot, a hit chance per shot (28 / 45 / 62 % at close
-  range on a still target, less with distance, a moving target and deeper
-  into a spray), headshot share, bursts and pauses. A landed shot goes
+- **Aim** (`BotBrain` and `BotAim`, by difficulty): the crosshair turns onto
+  a target at 260 / 450 / 720 degrees a second, settles on it for
+  220 / 130 / 60 ms after a reaction time (650 / 380 / 220 ms), then fires
+  in bursts. A shot lands by a hit chance (28 / 45 / 62 % at close range on
+  a still target, less with distance, a moving target and deeper into a
+  spray) times how close the crosshair is to the body. A landed shot goes
   through `CombatMatch.BotHit`: alive, fire rate, round phase, spawn
-  protection, friendly fire and armour, like a player's hit.
-- **CS.** Bots buy in freeze time (armour on the pistol round, a rifle and
-  armour when they can, an SMG on a half buy, a kit for CTs), the carrier
-  takes the round's site and plants, a Terrorist fetches a dropped bomb, CTs
-  split between the sites and defuse (Hard bots keep defusing through a
-  fight near the end). A bot that loses sight of an enemy goes where it last
-  saw them.
+  protection, friendly fire and armour, like a player's hit. It strafes in
+  a fight (25 / 60 / 100 %).
+- **Eyes and ears** (`TeamKnowledge`): what any bot of a side sees, and
+  running footsteps (22 m) and gunfire (45 m) it hears, the whole side knows
+  for 6 s. A bot watches the nearest such spot, hunts it when it has nothing
+  else to do, and rotations follow it.
+- **CS** (`BotStrategy`, `BotEconomy`). The side buys together: pistol
+  rounds, a full buy (rifles, helmets, kits) from $3,700 a head, a half buy
+  (SMGs) from $2,000, a force on the last round of a half or at match point,
+  else an eco. Terrorists plan the round (the same on every machine): a
+  rush, a default (map control part of the way to both sites, then at a
+  call 20 to 35 s in, the site together) or a split (half by way of the
+  other site's approach); ecos rush. The carrier plants, the nearest
+  Terrorist fetches a dropped bomb, and after the plant they hold around it
+  facing the way the defence comes back. Counter-Terrorists anchor both
+  sites with one playing forward; a sighting or sound near a site pulls all
+  but one anchor over; with the bomb down they gather short of it (two of
+  them, or 6 s), then retake: the nearest defuses, the others cover (Hard
+  bots keep defusing through a fight near the end). Low on health with
+  nothing in sight, a bot falls back to its nearest teammate. A bot that
+  loses sight of an enemy goes where it last saw them.
+- **Tracks.** A bot's track (hits, a dropped bomb) uses a player's
+  convention: the floor its game reports under it plus a standing player's
+  camera height (this machine's own, once seen). A carrier with no track
+  drops the bomb where it was last seen, else at its spawn.
+- **Online.** The host runs every bot (brain and walker); its game's bot
+  positions go to everyone 10 times a second and every client draws them
+  there (`pose` orders, no logic of their own). A client's hit on a bot is
+  a claim to the host like any other. A new host keeps the bots and runs
+  them on.
 - **Never counted.** Bots post no runs and never reach the Hub or KovaaK's
   leaderboards; recent matches mark them as bots, the scoreboard tags them
   BOT.

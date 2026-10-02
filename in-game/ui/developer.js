@@ -100,6 +100,8 @@
     av.body.appendChild(node('p','dev-note',av0&&av0.on?'Test avatar on, '+(av0.mode==='path'?'walking a run’s path':'circling you')+(av0.look?', wearing '+av0.look:'')+'.':'Test avatar off.'+(drafts.scenario?' It spawns in '+drafts.scenario+'.':'')));
     av.body.appendChild(actions([button('Spawn circling avatar',function(){spawnAvatar('circle');},'compact'+(av0&&av0.on&&av0.mode==='circle'?' primary':'')),button('Despawn',function(){once('avatar-off',function(done){act({action:'avatar',on:false,mode:'circle'},function(ok){done();if(ok)toast('Test avatar despawned.');});});},'compact quiet')]));
     if(tools.avatarPath)av.body.appendChild(node('p','dev-note','Path ready from a run of '+tools.avatarPath+'. Load that scenario in freeplay to see the avatar walk it.'));
+    // Bot debug: each bot's path (spheres) and goal (a cube) in the world, and its job logged every second.
+    av.body.appendChild(add(node('div','dev-line'),node('span','dev-label','Bot debug'),segmented([{id:'off',label:'Off'},{id:'on',label:'Paths and goals'}],st.botDebug?'on':'off',function(id){act({action:'bot-debug',on:id==='on'},function(ok){if(ok)toast(id==='on'?'Bot paths and goals are drawn in the match.':'Bot debug off.');});},'bot debug')));
     if(st.looks)add(av.body,add(node('div','dev-line'),node('span','dev-label','Your look'),segmented(st.looks.map(function(l){return {id:l.id,label:l.label};}),st.look,function(id){other('POST','/multiplayer',{action:'avatar',avatar:id},function(ok){if(ok)refreshSoon();});},'look')));
     // Replays: pick runs for the tools below.
     var rp=section('Replays');left.appendChild(rp.panel);

@@ -105,6 +105,9 @@ static class DeveloperEndpoints
                 return multiplayer.DevAvatar(root.TryGetProperty("on", out var av) && av.ValueKind == JsonValueKind.True, Text("mode"));
             case "workshop":
                 return multiplayer.DevWorkshop(Text("text"));
+            case "bot-debug":
+                // The bots' paths and goals drawn in the world, and their jobs logged every second.
+                return multiplayer.SetBotDebug(root.TryGetProperty("on", out var bd) && bd.ValueKind == JsonValueKind.True);
             case "tournament":
                 // Simulated Hub: a whole event against simulated players (op: simulate, sim-advance, sim-opponent-reports, sim-stop).
                 if (multiplayer.Tournaments is not { } tournaments) return LobbyResult.Fail("unavailable", "Tournaments aren’t available here.");

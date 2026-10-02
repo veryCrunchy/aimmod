@@ -4,7 +4,12 @@
 //
 // bot-orders.tsv (service -> AimModSteam), rewritten on change and every second:
 //   AIMMOD_BOTS_1\t<sequence>
-//   bot\t<peer>\t<roam|goal|hold>[\t<x>\t<y>\t<z>]   goal: walk there and stay; hold: stand still
+//   bot\t<peer>\t<roam|goal|hold>[\t<x>\t<y>\t<z>[\t<stop>]]   goal: walk there and stay (stop: only
+//                                                    that fraction of the way, 0..1); hold: stand still
+//   via\t<peer>\t<x>\t<y>\t<z>\t<fraction>         first that fraction of the way to this point, then the goal
+//   fight\t<peer>\t<0..1>                            holding in a fight: strafe that hard
+//   turn\t<peer>\t<degrees per second>               how fast it turns (by difficulty)
+//   debug\t<0|1>                                     draw the bots' paths and goals in the world
 //   face\t<peer>\t<x>\t<y>\t<z>                       look at that point (an enemy's eye)
 //   place\t<peer>\t<token>\t<x>\t<y>\t<z>\t<yaw>      stand there once per token (a round start, a respawn)
 //   sight\t<peer>\t<tag>\t<x>\t<y>\t<z>               trace from the bot's eye to that point
@@ -12,7 +17,7 @@
 //
 // bot-sight.tsv (AimModSteam -> service), 10 times a second while bots are ordered:
 //   AIMMOD_BOTSIGHT_1\t<unix ms>
-//   bot\t<peer>\t<x>\t<y>\t<z>\t<yaw>                 the bot avatar's capsule centre
+//   bot\t<peer>\t<x>\t<y>\t<z>\t<yaw>\t<floor>        the bot avatar's capsule centre, and the floor under it
 //   seen\t<peer>\t<tag>\t<0|1>                        whether the line from its eye to the target is clear
 
 #include <array>
@@ -43,11 +48,16 @@ namespace bridge::bots
         };
         std::vector<Target> sight;
         std::array<double, 4> pose{}; // x, y, z, yaw (Mode::Pose)
+        double stop = 1;                                  // walk only this fraction of the way to the goal
+        std::optional<std::array<double, 4>> via;          // x, y, z, fraction: a detour first
+        double fight = 0;                                 // strafe in a fight (0..1)
+        double turn = 0;                                  // degrees per second, 0: the walker's default
     };
     struct Orders
     {
         std::int64_t sequence = 0;
         std::map<std::uint64_t, Order> bots;
+        bool debug = false;
     };
 
     namespace detail
@@ -130,6 +140,7 @@ namespace bridge::bots
                 header = true;
                 continue;
             }
+            if (p[0] == "debug" && p.size() == 2) { orders.debug = p[1] == "1"; continue; }
             if (p.size() < 3) continue;
             const auto peer = detail::Peer(p[1]);
             if (!peer) continue;
@@ -139,9 +150,27 @@ namespace bridge::bots
             {
                 if (p[2] == "roam") o.mode = Order::Mode::Roam;
                 else if (p[2] == "hold") o.mode = Order::Mode::Hold;
-                else if (p[2] == "goal" && detail::Point(p, 3, xyz)) { o.mode = Order::Mode::Goal; o.goal = xyz; }
+                else if (p[2] == "goal" && detail::Point(p, 3, xyz))
+                {
+                    o.mode = Order::Mode::Goal;
+                    o.goal = xyz;
+                    if (p.size() >= 7)
+                        if (const auto stop = detail::Number(p[6]); stop && *stop > 0 && *stop <= 1) o.stop = *stop;
+                }
             }
             else if (p[0] == "face" && detail::Point(p, 2, xyz)) o.face = xyz;
+            else if (p[0] == "via" && p.size() >= 6 && detail::Point(p, 2, xyz))
+            {
+                if (const auto f = detail::Number(p[5]); f && *f > 0 && *f <= 1) o.via = std::array<double, 4>{xyz[0], xyz[1], xyz[2], *f};
+            }
+            else if (p[0] == "fight" && p.size() >= 3)
+            {
+                if (const auto f = detail::Number(p[2]); f && *f >= 0 && *f <= 1) o.fight = *f;
+            }
+            else if (p[0] == "turn" && p.size() >= 3)
+            {
+                if (const auto t = detail::Number(p[2]); t && *t >= 30 && *t <= 3600) o.turn = *t;
+            }
             else if (p[0] == "place" && p.size() >= 7 && p[2].size() <= 32 && detail::Point(p, 3, xyz))
             {
                 const auto yaw = detail::Number(p[6]);
@@ -169,6 +198,7 @@ namespace bridge::bots
     {
         std::uint64_t peer = 0;
         double x = 0, y = 0, z = 0, yaw = 0;
+        double floor = 0; // the floor under it (feet), where a dropped bomb lands
         std::vector<std::pair<int, bool>> seen;
     };
     inline std::string Format(std::int64_t unixMs, const std::vector<Report>& reports)
@@ -177,7 +207,7 @@ namespace bridge::bots
         char line[160];
         for (const auto& r : reports)
         {
-            std::snprintf(line, sizeof(line), "bot\t%llu\t%.1f\t%.1f\t%.1f\t%.1f\n", static_cast<unsigned long long>(r.peer), r.x, r.y, r.z, r.yaw);
+            std::snprintf(line, sizeof(line), "bot\t%llu\t%.1f\t%.1f\t%.1f\t%.1f\t%.1f\n", static_cast<unsigned long long>(r.peer), r.x, r.y, r.z, r.yaw, r.floor);
             text += line;
             for (const auto& [tag, visible] : r.seen)
             {

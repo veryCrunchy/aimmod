@@ -43,6 +43,13 @@ if(MSVC)
     target_compile_options(aimmod_steam_tests PRIVATE /W4 /utf-8 /permissive-)
 endif()
 
+# Development tool (not shipped): the bots' navigation on a ported map, offline.
+add_executable(aimmod_nav_probe tools/NavProbe.cpp)
+target_link_libraries(aimmod_nav_probe PRIVATE aimmod_steam_core)
+if(MSVC)
+    target_compile_options(aimmod_nav_probe PRIVATE /W4 /utf-8 /permissive-)
+endif()
+
 # Development harness (not shipped): the bridge outside the game.
 add_executable(aimmod_steam_bridge_harness tools/BridgeHarness.cpp)
 target_link_libraries(aimmod_steam_bridge_harness PRIVATE aimmod_steam_bridge)

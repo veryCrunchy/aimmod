@@ -127,10 +127,12 @@ sealed class LobbyCore
     // ---- bots (host-run players for the shooting modes) ------------------
     static readonly string[] BotNames = ["Ace", "Blaze", "Cobra", "Dash", "Echo", "Flint", "Ghost", "Hawk", "Iron", "Jinx", "Kilo", "Lynx", "Moss", "Nyx", "Onyx", "Pike"];
     int botNameIndex;
-    public static bool BotsAllowed(LobbySettings s) => LobbyModes.Shooting(s.Mode) && s.Mode != LobbyModes.Tracking && s.Tournament is null;
+    // Every mode but the tracking duel (a bot can't hold a crosshair on a dodging player or dodge one
+    // believably) and tournaments: the shooting modes play the bot brain, the score modes BotScorer.
+    public static bool BotsAllowed(LobbySettings s) => s.Mode != LobbyModes.Tracking && s.Tournament is null;
     LobbyResult AddBots(JsonElement args)
     {
-        if (!BotsAllowed(Settings)) return LobbyResult.Fail("mode", Settings.Tournament is not null ? "Tournament lobbies can't have bots." : "Bots play the shooting modes (CS, deathmatch, team deathmatch).");
+        if (!BotsAllowed(Settings)) return LobbyResult.Fail("mode", Settings.Tournament is not null ? "Tournament lobbies can't have bots." : "Bots play every mode but the tracking duel.");
         if (match is { Phase: not MatchPhases.Final }) return LobbyResult.Fail("in-match", "Add bots between matches.");
         var skill = BotSkills.Parse(args.ValueKind == JsonValueKind.Object && args.TryGetProperty("skill", out var sv) && sv.ValueKind == JsonValueKind.String ? sv.GetString() : null) ?? BotSkills.Normal;
         var fill = args.ValueKind == JsonValueKind.Object && args.TryGetProperty("fill", out var fv) && fv.ValueKind == JsonValueKind.True;
@@ -317,7 +319,7 @@ sealed class LobbyCore
                 Settings = next;
                 if (reset) foreach (var m in members.Where(m => m.Bot is null)) m.Ready = false;
                 if (scenarioChanged) foreach (var m in members.Where(m => m.Id != HostId && m.Bot is null)) { m.Scenario = ContentStates.Unknown; m.Map = ContentStates.Unknown; }
-                if (!BotsAllowed(Settings)) RemoveBots("Bots left: they only play the shooting modes.");
+                if (!BotsAllowed(Settings)) RemoveBots("Bots left: they don't play the tracking duel.");
                 if (scenarioChanged && Settings.Scenario is not null) System("Scenario set to " + Settings.Scenario.Name + ".");
                 Changed();
                 return LobbyResult.Success;

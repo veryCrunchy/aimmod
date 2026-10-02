@@ -1342,6 +1342,7 @@ sealed partial class MultiplayerService : IDisposable
             PlanRound();
             UpdateStandIn();
             StepBots();
+            StepScoreBots();
             TrackLocalRun();
             Remember();
         }

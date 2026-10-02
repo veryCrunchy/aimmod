@@ -20,6 +20,9 @@ sealed partial class MultiplayerService
     long botSightStamp = -1, botOrdersSeq, botPosesSentAt, botSightLoggedAt = long.MinValue / 2;
     string? lastBotOrders; bool botOrdersWritten;
     internal BotStep? LastBotStep { get; private set; }
+    // Bot debug (developer menu): the bridge draws each bot's path and goal, and logs every second.
+    public bool BotDebug { get; set; }
+    public LobbyResult SetBotDebug(bool on) { lock (gate) { BotDebug = on; lastBotOrders = null; return LobbyResult.Success; } }
 
     static bool IsBot(LobbyMember m) => m.Bot is not null;
     // Members that have no machine of their own (simulated players, bots): no network, no camera.
@@ -39,6 +42,7 @@ sealed partial class MultiplayerService
         ReadBotSight();
         if (core is null) { WritePuppetOrders(match); return; }
         var now = clock();
+        FeedBotTracks(match, now);
         botBrain.Reset(match.Id + "#" + match.Round);
         var positions = core.CombatPositions();
         var view = match.Combat;
@@ -48,7 +52,7 @@ sealed partial class MultiplayerService
             var team = view?.Players.FirstOrDefault(p => p.Member == id)?.Team ?? 0;
             // A bot's own position: its avatar as its game reports it, else its track.
             if (botSight.TryGetValue(id, out var s) && now - s.At <= BotBrain.SightFreshMs)
-                return new BotPlayer(id, tag, s.X, s.Y, s.Z + BotBrain.EyeAboveCentre, team, alive, positions.TryGetValue(id, out var ps) ? ps.Speed : 0);
+                return new BotPlayer(id, tag, s.X, s.Y, BotEye(s), team, alive, positions.TryGetValue(id, out var ps) ? ps.Speed : 0);
             return positions.TryGetValue(id, out var p) ? new BotPlayer(id, tag, p.At.X, p.At.Y, p.At.Z, team, alive, p.Speed) : null;
         }).Where(p => p is not null).Select(p => p!).ToList();
         var bots = lobby.Members.Where(m => IsBot(m) && match.Players.Contains(m.Id)).Select(m => (m.Id, m.Bot!)).ToList();
@@ -77,6 +81,75 @@ sealed partial class MultiplayerService
         }
     }
     static double R(double v) => Math.Round(v, 1);
+
+    // Test hooks (checks only): a bot's track and health on the host, and a client's shot at a bot
+    // the way its game would send it (its own camera track, then the hit on the ray to the bot).
+    internal TrackSample? BotTrackForTest(string member) { lock (gate) return core?.CombatPositions().TryGetValue(member, out var p) == true ? p.At : null; }
+    internal double BotHealthForTest(string member) { lock (gate) return Current?.Match?.Combat?.Players.FirstOrDefault(p => p.Member == member)?.Health ?? -1; }
+    internal bool ClaimForTest(string bot)
+    {
+        lock (gate)
+        {
+            if (hostPeer is null || Current?.Match is not { } match || !botPoses.TryGetValue(bot, out var pose)) return false;
+            var t = clock() + HostOffset();
+            // Standing 6 m south of the bot, at its camera height (floor 0 in the check), looking north at it.
+            var eye = DefaultBotEyeHeight;
+            var samples = Enumerable.Range(0, 5).Select(i => new TrackSample(t - 200 + i * 50, pose.Pose[0], pose.Pose[1] - 600, eye, 0, 90)).ToArray();
+            Send(hostPeer, "track", new TrackBatch(match.Id, match.Round, samples, []).Body());
+            Send(hostPeer, "hit", new HitClaim(match.Id, match.Round, 1, t, pose.Pose[0], pose.Pose[1] - 600, eye, 0, 90, false, null, null, null, null, null).Body());
+            return true;
+        }
+    }
+
+    // Score modes: the host plays its bots' runs (BotScorer), a score frame every 250 ms and the
+    // finish when the time is up, through the same host rules as a player's frames.
+    readonly Dictionary<string, (string Round, long FrameAt, bool Done)> scoreBots = new(StringComparer.Ordinal);
+    void StepScoreBots()
+    {
+        if (core is null || Current is not { Match: { Phase: MatchPhases.Live } match } lobby || LobbyModes.Shooting(match.Mode) || match.Mode == LobbyModes.Tracking) return;
+        var now = clock();
+        var key = match.Id + "#" + match.Round;
+        double? reference = null;
+        foreach (var m in lobby.Members.Where(m => IsBot(m) && match.Players.Contains(m.Id)))
+        {
+            var line = match.Live.FirstOrDefault(l => l.MemberId == m.Id);
+            if (line is null || line.Status is LineStates.Finished or LineStates.Left or LineStates.Dnf) continue;
+            var st = scoreBots.TryGetValue(m.Id, out var have) && have.Round == key ? have : (key, 0L, false);
+            if (st.Item3 || now < st.Item2) continue;
+            var elapsed = Math.Max(0, (now - (match.StartsAt ?? now)) / 1000.0);
+            reference ??= BotScorer.Reference(completedRuns().Where(r => r.Scenario.Equals(match.Scenario, StringComparison.OrdinalIgnoreCase)).Select(r => r.Score), match.TimeLimit);
+            var (score, shots, hits) = BotScorer.At(m.Id, m.Bot!, key, reference.Value, match.TimeLimit, elapsed);
+            if (elapsed >= match.TimeLimit)
+            {
+                core.Finish(m.Id, new RunFinish(match.Id, match.Round, score, match.TimeLimit, shots, hits, hits, null));
+                st.Item3 = true;
+            }
+            else core.Score(m.Id, new ScoreFrame(match.Id, match.Round, Math.Round(elapsed, 2), score, shots, hits, hits, Math.Round(match.TimeLimit - elapsed, 2)));
+            st.Item2 = now + 250;
+            scoreBots[m.Id] = st;
+        }
+    }
+
+    // A bot's track uses a player's convention: a player's track is their camera, so a bot's is its
+    // floor plus the camera height of a standing player (this machine's own, once seen; CS ports
+    // otherwise). A dropped bomb (CsMatch.DropBomb) and the hit checks then mean the same for both.
+    public const double DefaultBotEyeHeight = TrackingRound.DefaultHalfHeight + TrackingRound.DefaultEyeAboveCentre;
+    double BotEyeHeight() => poseTracker?.EyeHeight ?? (Current?.Match?.Cs is not null ? CsRules.SpawnEyeAbove + 160 : DefaultBotEyeHeight);
+    internal double BotEye(BotSight s) => s.Floor is { } floor ? floor + BotEyeHeight() : s.Z + BotBrain.EyeAboveCentre;
+
+    // The host's bots are its own simulation: their tracks come from where its game walks them
+    // (bot-sight.tsv), every new report, so hits on them (from any player) validate against that.
+    readonly Dictionary<string, long> botTrackFed = new(StringComparer.Ordinal);
+    void FeedBotTracks(MatchSnapshot match, long now)
+    {
+        if (core is null) return;
+        foreach (var (member, s) in botSight)
+        {
+            if (!match.Players.Contains(member) || now - s.At > BotBrain.SightFreshMs || botTrackFed.GetValueOrDefault(member) == s.At) continue;
+            botTrackFed[member] = s.At;
+            core.Track(member, new TrackBatch(match.Id, match.Round, [new TrackSample(now, s.X, s.Y, BotEye(s), 0, s.Yaw)], []));
+        }
+    }
 
     // Client: the host's bot positions.
     void ReceiveBots(JsonElement body)
@@ -109,12 +182,20 @@ sealed partial class MultiplayerService
     {
         static string F(double v) => v.ToString("0.#", CultureInfo.InvariantCulture);
         var sb = new System.Text.StringBuilder();
+        if (BotDebug) sb.Append("debug\t1\n");
         foreach (var o in orders)
         {
             if (!StandIns.TryGetValue(o.Member, out var peer)) continue;
             sb.Append("bot\t").Append(peer).Append('\t').Append(o.Mode);
-            if (o.Goal is { Length: >= 3 } g) sb.Append('\t').Append(F(g[0])).Append('\t').Append(F(g[1])).Append('\t').Append(F(g[2]));
+            if (o.Goal is { Length: >= 3 } g)
+            {
+                sb.Append('\t').Append(F(g[0])).Append('\t').Append(F(g[1])).Append('\t').Append(F(g[2]));
+                if (o.Stop is > 0 and < 1) sb.Append('\t').Append(o.Stop.ToString("0.##", CultureInfo.InvariantCulture));
+            }
             sb.Append('\n');
+            if (o.Via is { Length: >= 4 } via) sb.Append("via\t").Append(peer).Append('\t').Append(F(via[0])).Append('\t').Append(F(via[1])).Append('\t').Append(F(via[2])).Append('\t').Append(via[3].ToString("0.##", CultureInfo.InvariantCulture)).Append('\n');
+            if (o.Fight > 0) sb.Append("fight\t").Append(peer).Append('\t').Append(o.Fight.ToString("0.##", CultureInfo.InvariantCulture)).Append('\n');
+            if (o.Turn > 0) sb.Append("turn\t").Append(peer).Append('\t').Append(F(o.Turn)).Append('\n');
             if (o.Face is { Length: >= 3 } f) sb.Append("face\t").Append(peer).Append('\t').Append(F(f[0])).Append('\t').Append(F(f[1])).Append('\t').Append(F(f[2])).Append('\n');
             if (o.PlaceToken is { } token && o.PlaceAt is { Length: >= 3 } at)
                 sb.Append("place\t").Append(peer).Append('\t').Append(token).Append('\t').Append(F(at[0])).Append('\t').Append(F(at[1])).Append('\t').Append(F(at[2])).Append('\t').Append(F(at.Length > 3 ? at[3] : 0)).Append('\n');
@@ -168,13 +249,15 @@ sealed partial class MultiplayerService
         foreach (var line in lines.Skip(1).Take(256))
         {
             var p = line.Split('\t');
-            if (p.Length == 6 && p[0] == "bot" && p[1].Length is > 0 and <= 2 && Num(p[2]) is { } x && Num(p[3]) is { } y && Num(p[4]) is { } z && Num(p[5]) is { } yaw) pos[p[1]] = [x, y, z, yaw];
+            // bot\t<peer>\tx\ty\tz\tyaw[\tfloor]: the floor column is newer (a bridge without it gives 6).
+            if (p.Length is 6 or 7 && p[0] == "bot" && p[1].Length is > 0 and <= 2 && Num(p[2]) is { } x && Num(p[3]) is { } y && Num(p[4]) is { } z && Num(p[5]) is { } yaw)
+                pos[p[1]] = p.Length == 7 && Num(p[6]) is { } fl && fl <= z ? [x, y, z, yaw, fl] : [x, y, z, yaw];
             else if (p.Length == 4 && p[0] == "seen" && int.TryParse(p[2], NumberStyles.None, CultureInfo.InvariantCulture, out var tag) && tag < 64 && p[3] is "0" or "1")
             {
                 if (!seen.TryGetValue(p[1], out var set)) seen[p[1]] = set = [];
                 if (p[3] == "1") set.Add(tag);
             }
         }
-        return pos.ToDictionary(kv => kv.Key, kv => new BotSight(at, kv.Value[0], kv.Value[1], kv.Value[2], kv.Value[3], seen.TryGetValue(kv.Key, out var s) ? s : new HashSet<int>()));
+        return pos.ToDictionary(kv => kv.Key, kv => new BotSight(at, kv.Value[0], kv.Value[1], kv.Value[2], kv.Value[3], seen.TryGetValue(kv.Key, out var s) ? s : new HashSet<int>(), kv.Value.Length > 4 ? kv.Value[4] : null));
     }
 }

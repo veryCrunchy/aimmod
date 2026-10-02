@@ -48,6 +48,9 @@ static class CsRules
     public const int TeamKillPenalty = 300;
     public const double PlantRadiusCm = 0, DefuseRadiusCm = 100, BombPickupCm = 80, PlantMoveCm = 40;
     public const double MaxHealth = 100, MaxArmor = 100;
+    // A CS port's spawn point sits 160 cm over the feet (map port SPAWN_GAP), a CS player's camera 312 cm
+    // (half-height 168 plus 144): the camera stands this far above a spawn point.
+    public const double SpawnEyeAbove = 152;
     public const string T = "T", CT = "CT";
 
     static CombatWeapon W(string label, double damage, double tbs, bool auto) => new("AimMod CS " + label, damage, 4, tbs, auto);
@@ -302,17 +305,29 @@ sealed class CsMatch
         if (defuser == victim) { defuser = null; defuseDoneAt = null; }
     }
 
+    // Where the bomb lands when its carrier drops it or goes down: the carrier's track (a player's
+    // camera; a bot's floor plus the same camera height), 64 below like the eye-to-centre AimModCore
+    // undoes (CsGear). Without a track now: where they were last seen this round, else their spawn.
     void DropBomb(string from)
     {
         carrier = null; bombState = "dropped";
         if (Combat.Position(from) is { } at) bombAt = [at.X, at.Y, at.Z - 64];
+        else if (lastAt.TryGetValue(from, out var seen)) bombAt = [seen[0], seen[1], seen[2] - 64];
+        else if (roundSpawns.TryGetValue(from, out var s)) bombAt = [s[0], s[1], s[2] + CsRules.SpawnEyeAbove - 64];
+    }
+    readonly Dictionary<string, double[]> lastAt = new();
+    // Remembered every tick while alive, for a drop with no track at that moment.
+    void RememberPositions()
+    {
+        foreach (var p in players.Values)
+            if (Combat.Alive(p.Id) && Combat.Position(p.Id) is { } at) lastAt[p.Id] = [at.X, at.Y, at.Z];
     }
 
     void StartRound(long now)
     {
         Round++;
         Phase = "freeze"; PhaseEndsAt = now + CsRules.FreezeMs; LiveAt = null;
-        roundSpawns.Clear();
+        roundSpawns.Clear(); lastAt.Clear();
         var index = new Dictionary<string, int>();
         foreach (var p in players.Values)
         {
@@ -462,6 +477,7 @@ sealed class CsMatch
     public void Tick(long now)
     {
         if (Over) return;
+        RememberPositions();
         if (Phase == "freeze" && now >= PhaseEndsAt) { Phase = "live"; LiveAt = now; PhaseEndsAt = now + CsRules.RoundMs; Event("live", now, null, null); }
         if (Phase == "freeze") PickUp(now);
         if (Phase is "live" or "planted")

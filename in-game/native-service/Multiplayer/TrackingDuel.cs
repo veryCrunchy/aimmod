@@ -309,6 +309,8 @@ sealed class SelfPoseTracker(string outputFolder)
     public IReadOnlyDictionary<int, TrackSeen> LastSeen => lastSeen;
     // The weapon slot the local player holds (AimModCore's weapon row), null before the first one.
     public int? Weapon { get; private set; }
+    // This player's standing camera height over their feet (cm), once seen.
+    public double? EyeHeight { get; private set; }
 
     public void Reset() { lastPose = long.MinValue; lastSequence = -1; samples.Clear(); seenRows.Clear(); lastSeen.Clear(); seenHistory.Clear(); Weapon = null; }
 
@@ -349,6 +351,13 @@ sealed class SelfPoseTracker(string outputFolder)
         if (frame is null || frame.Sequence == lastSequence) return;
         lastSequence = frame.Sequence;
         if (frame.Weapon is { } held) Weapon = held;
+        // The camera's height over the feet (self row: capsule centre and half-height). A player's
+        // track is their camera, so a bot's track is its floor plus this: the same convention.
+        if (frame.Self is { } self && frame.Poses.Count > 0 && frame.Self[6] == 0)
+        {
+            var eye = frame.Poses[^1].Camera[2] - (self[3] - self[5]);
+            if (eye is > 30 and < 600) EyeHeight = eye;
+        }
         // The fire row covers this publication (about 33 ms): its poses count as firing.
         var fired = frame.Fire is { } f && f[2] == 1;
         foreach (var p in frame.Poses)

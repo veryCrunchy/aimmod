@@ -45,7 +45,7 @@ namespace bridge::ghost
         static constexpr double StrafeAmplitude = 90, StrafePeriod = 2.6;
         static constexpr double StepUp = 45, StepDown = 70; // larger changes count as a wall or a ledge
         static constexpr double Arrive = 70;         // cm from a spawn counts as there
-        static constexpr double WaistAbove = 10;     // wall checks at waist height above the centre
+        static constexpr double WaistAbove = 0;      // wall checks at the centre: the height the nav grid checks
         static constexpr double JumpHeight = 50, JumpTime = 0.55;
         static constexpr int PlanBudget = 6;         // straight-walk checks per planning step
         static constexpr int PlanFanout = 10;        // neighbours tried from each waypoint
@@ -97,8 +97,30 @@ namespace bridge::ghost
         std::size_t navIndex = 0;
         bool navReached = false;
         double navPlannedAt = -1, clockNow = 0;
-        int navBlocked = 0;
+        int navBlocked = 0, stuckRecoveries = 0;
         double NavArrive() const { return nav ? std::min(arrive, nav->spacing * 0.3) : arrive; }
+        std::vector<int> navNodes;                   // grid node of each path point (-1: the goal itself)
+        std::array<double, 3> legFrom{};             // where the current path leg starts
+        bool navEndsShort = false;                   // the path stops short of the goal (stop, via)
+        double exactUntil = -1;                      // grid steps only (no string-pulling) until then
+        // Orders beyond walk-and-stay: walk only `goalStop` of the way (a default or post-plant spot);
+        // first a detour `via` (x, y, z, fraction of the way to it), then the goal.
+        double goalStop = 1;
+        std::optional<std::array<double, 4>> via;
+        bool viaDone = false;
+        std::optional<std::array<double, 3>> stoppedFor;
+        double routeStop = 1;
+        std::optional<std::array<double, 4>> routeVia;
+        // Other bodies to keep clear of (x, y), set before each step.
+        std::vector<std::array<double, 2>> others;
+        static constexpr double Separation = 130, TrustDistance = 60, StrafeRange = 180;
+        // Turning: degrees per second (by difficulty); a fight's strafe (0 none .. 1 full).
+        double turnRate = 540, fight = 0;
+        double wantYaw = 0, lookYaw = 0, nextLook = 0, strafeFlipAt = 0, strafeSign = 1;
+        std::optional<std::array<double, 2>> holdAnchor;
+        double progressX = 0, progressY = 0, progressAt = 0;
+        int stuckLevel = 0;
+        double stuckX = 1e30, stuckY = 1e30;
 
         std::uint32_t Next()
         {
@@ -160,7 +182,7 @@ namespace bridge::ghost
             y = py;
             z = ground ? *ground + halfHeight : pz;
             grounded = ground.has_value();
-            yaw = facing;
+            yaw = wantYaw = lookYaw = facing;
             at = NodeAt(px, py);
             target = -1;
             blocked = 0;
@@ -322,15 +344,28 @@ namespace bridge::ghost
                 if (nav && !nav->nodes.empty())
                 {
                     if (!navPath.empty() && navIndex < navPath.size()) { target = NavTarget; return false; }
+                    // Stopping short (a default position, a post-plant spot): there already.
+                    if (stoppedFor && std::hypot((*stoppedFor)[0] - g[0], (*stoppedFor)[1] - g[1]) < arrive) return false;
+                    // A detour first (a split), then the goal; walk `stop` of the way only.
+                    const bool viaLeg = via && !viaDone;
+                    const std::array<double, 3> dest = viaLeg ? std::array<double, 3>{(*via)[0], (*via)[1], (*via)[2]} : g;
+                    const double fraction = viaLeg ? (*via)[3] : goalStop;
                     bool reached = false;
-                    auto path = nav->Path({x, y, z}, g, reached);
-                    if (!path.empty())
+                    auto ids = nav->PathNodes({x, y, z}, dest, reached);
+                    if (!ids.empty())
                     {
-                        if (reached) path.push_back(g);
-                        navPath = std::move(path);
+                        const bool shortened = reached && fraction < 0.999;
+                        if (shortened) ids.resize(std::max<std::size_t>(1, static_cast<std::size_t>(std::ceil(ids.size() * std::clamp(fraction, 0.0, 1.0)))));
+                        if (clockNow >= exactUntil) ids = nav->Smooth(ids);
+                        navNodes = ids;
+                        navPath.clear();
+                        for (const int id : ids) navPath.push_back({nav->nodes[static_cast<std::size_t>(id)].x, nav->nodes[static_cast<std::size_t>(id)].y, nav->nodes[static_cast<std::size_t>(id)].z});
+                        if (reached && !shortened && !viaLeg) { navPath.push_back(g); navNodes.push_back(-1); }
                         navIndex = 0;
                         while (navIndex + 1 < navPath.size() && std::hypot(navPath[navIndex][0] - x, navPath[navIndex][1] - y) < NavArrive()) ++navIndex;
+                        legFrom = {x, y, z};
                         navReached = reached;
+                        navEndsShort = shortened || viaLeg;
                         navPlannedAt = clockNow;
                         routeGoal = g;
                         reached ? ++plansFound : ++plansPending;
@@ -368,8 +403,111 @@ namespace bridge::ghost
             return false;
         }
 
+        // Stuck recovery: no progress for StuckSeconds while walking. Each time it happens again
+        // the next step is tried: 1 hop and back off to the last point, 2 take the link it can't pass
+        // out of the grid and plan again without shortcuts, 3 the same for the grid point beyond it,
+        // 4 hop over to the next point (or onto the nearest grid point). The ladder starts over only
+        // once it is well past the spot.
+        static constexpr double StuckSeconds = 1.5, StuckDistance = 40;
+        void Recover(double now, double halfHeight)
+        {
+            ++stuckRecoveries;
+            const int level = stuckLevel++ % 4;
+            if (level == 0)
+            {
+                jumpStart = now; // a hop over whatever the feet caught on
+                if (target == NavTarget && navIndex > 0) --navIndex;
+            }
+            else if (level == 1 || level == 2)
+            {
+                // First the link it can't pass, then the grid point beyond it, out of the grid.
+                if (nav && target == NavTarget && navIndex > 0 && navIndex < navNodes.size() && navNodes[navIndex - 1] >= 0 && navNodes[navIndex] >= 0 &&
+                    nav->Dir(navNodes[navIndex - 1], navNodes[navIndex]) >= 0)
+                {
+                    if (level == 1) nav->Block(navNodes[navIndex - 1], navNodes[navIndex]);
+                    else nav->BlockNode(navNodes[navIndex]);
+                }
+                exactUntil = now + 10; // grid steps only for a while (no shortcut past the snag)
+                ForgetRoute();
+                target = -1;
+                nextChoose = 0;
+            }
+            else
+            {
+                // Hop over to the next point of the path when it is close (the grid says the floor goes on
+                // there; whatever the traces disagree about is jumped), else onto the nearest grid point.
+                if (target == NavTarget && navIndex < navPath.size() && navIndex < navNodes.size() && navNodes[navIndex] >= 0 && std::hypot(navPath[navIndex][0] - x, navPath[navIndex][1] - y) < (nav ? nav->spacing * 2.5 : 0))
+                {
+                    x = navPath[navIndex][0];
+                    y = navPath[navIndex][1];
+                    z = navPath[navIndex][2] + halfHeight;
+                    legFrom = navPath[navIndex];
+                    ++navIndex;
+                    jumpStart = now;
+                    return;
+                }
+                if (nav)
+                    if (const int n = nav->Nearest(x, y, z); n >= 0)
+                    {
+                        const auto& p = nav->nodes[static_cast<std::size_t>(n)];
+                        x = p.x;
+                        y = p.y;
+                        z = p.z + halfHeight;
+                        jumpStart = now;
+                    }
+                ForgetRoute();
+                target = -1;
+                nextChoose = 0;
+            }
+        }
+
+        // Distance from (px, py) to the segment a-b.
+        static double SegmentDistance(double px, double py, const std::array<double, 3>& a, const std::array<double, 3>& b, double& u)
+        {
+            const double dx = b[0] - a[0], dy = b[1] - a[1], len = dx * dx + dy * dy;
+            u = len > 1e-9 ? std::clamp(((px - a[0]) * dx + (py - a[1]) * dy) / len, 0.0, 1.0) : 1.0;
+            return std::hypot(a[0] + dx * u - px, a[1] + dy * u - py);
+        }
+
+        static double Approach(double from, double to, double maxStep)
+        {
+            const double d = WrapAngle(to - from);
+            return from + std::clamp(d, -maxStep, maxStep);
+        }
+
+        // Moves by (vx, vy) for dt if the floor and walls allow; `trust` (on a grid link) walks on
+        // where the step checks are stricter than the grid's. Returns whether it moved.
+        bool Move(double vx, double vy, double dt, double halfHeight, const Floor& floor, const Clear& clear, bool trust, double trustZ)
+        {
+            const double nx = x + vx * dt, ny = y + vy * dt;
+            const auto ground = floor(nx, ny, z + stepUp);
+            const double nz = ground ? *ground + halfHeight : 0;
+            const double moving = std::max(1.0, std::hypot(vx, vy));
+            const double ahead = std::max(50.0, std::min(arrive * 0.7, moving * 0.12));
+            // The look ahead follows the slope under the feet (stairs, ramps), so the steps ahead
+            // don't read as a wall.
+            const double stepLen = std::max(1e-6, std::hypot(nx - x, ny - y));
+            const double slope = ground ? std::clamp((nz - z) / stepLen, -1.5, 1.5) : 0;
+            const bool wall = !clear(x, y, z + WaistAbove, x + vx / moving * ahead, y + vy / moving * ahead, z + WaistAbove + slope * ahead);
+            if (ground && !wall && nz <= z + stepUp && nz >= z - stepDown)
+            {
+                x = nx;
+                y = ny;
+                z = nz;
+                return true;
+            }
+            // On a grid link only the floor is trusted (a trace that began in a low ceiling, a step the
+            // probe read differently); a wall in the way is never walked through.
+            if (!trust || wall) return false;
+            x = nx;
+            y = ny;
+            z = ground && nz <= z + stepUp * 1.5 && nz >= z - stepDown * 1.5 ? nz : trustZ;
+            return true;
+        }
+
         // One step of `dt` seconds at time `now` (seconds). Never moves through a wall, off a
-        // ledge or up a step higher than stepUp; a blocked way picks another spawn.
+        // ledge or up a step higher than stepUp (on a grid link it trusts the grid); turns no faster
+        // than turnRate, keeps clear of other bodies, looks around while holding and strafes in a fight.
         RemoteTransform Step(double now, double dt, double halfHeight, const Floor& floor, const Clear& clear)
         {
             RemoteTransform s;
@@ -385,16 +523,30 @@ namespace bridge::ghost
                     grounded = true;
                 }
             }
-            // A new goal while walking somewhere else: choose again now.
+            // A new goal (or a new way to it) while walking somewhere else: choose again now.
+            const bool planChanged = routeStop != goalStop || routeVia != via;
+            if (planChanged)
+            {
+                routeStop = goalStop;
+                routeVia = via;
+                viaDone = false;
+                stoppedFor.reset();
+                ForgetRoute();
+                nextChoose = 0;
+            }
             if (goal && target != -1 && (!routeGoal || std::hypot((*routeGoal)[0] - (*goal)[0], (*routeGoal)[1] - (*goal)[1]) > arrive))
             {
+                ForgetRoute();
                 target = -1;
                 nextChoose = 0;
             }
+            if (goal && stoppedFor && std::hypot((*stoppedFor)[0] - (*goal)[0], (*stoppedFor)[1] - (*goal)[1]) > arrive) { stoppedFor.reset(); viaDone = false; }
             if (!goal)
             {
                 if (routeGoal) ForgetRoute();
                 if (target == GoalTarget) target = -1;
+                stoppedFor.reset();
+                viaDone = false;
             }
             clockNow = now;
             // A path that ended short of the goal (the grid was still growing): look again now and then.
@@ -410,27 +562,25 @@ namespace bridge::ghost
                 if (target < 0) nextChoose = now + (pending ? 0.15 : 1.0); // nothing reachable from here: look again soon
             }
             double vx = 0, vy = 0;
-            if (hold) target = -1;
+            if (hold && target != -1) { target = -1; }
+            if (!hold) holdAnchor.reset();
+            bool walking = false;
             if (target != -1 && grounded && !hold)
             {
                 const auto dest = Point(target);
                 const double dx = dest[0] - x, dy = dest[1] - y, d = std::hypot(dx, dy);
                 if (target == NavTarget && d < NavArrive())
                 {
-                    // Next point of the path; skip ahead where a straight walk is clear (fewer turns).
+                    legFrom = navPath[navIndex];
                     ++navIndex;
-                    for (const std::size_t skip : {std::size_t{5}, std::size_t{3}})
-                        if (navIndex + skip < navPath.size() &&
-                            WalkableFrom(x, y, z - halfHeight, navPath[navIndex + skip][0], navPath[navIndex + skip][1], halfHeight, floor, clear))
-                        {
-                            navIndex += skip;
-                            break;
-                        }
                     if (navIndex >= navPath.size())
                     {
                         navPath.clear();
+                        navNodes.clear();
                         target = -1;
                         at = NodeAt(x, y);
+                        if (via && !viaDone) { viaDone = true; nextChoose = 0; }  // the detour done: on to the goal
+                        else if (navEndsShort && goal) stoppedFor = *goal;          // as far as it was told to go
                     }
                 }
                 else if (target != NavTarget && d < arrive)
@@ -443,31 +593,59 @@ namespace bridge::ghost
                 else
                 {
                     const double fx = dx / d, fy = dy / d;
-                    // Strafe left and right while walking, like a bot dodging (less near a turn).
+                    // Strafe left and right while roaming, like a bot dodging; never along a nav path.
                     walkedFor += dt;
                     const double w = 2 * 3.14159265358979 / StrafePeriod;
-                    // Not along a nav path: corridors leave no room to dodge.
                     const double side = target == NavTarget ? 0 : strafe * w * std::cos(walkedFor * w) * std::min(1.0, d / (arrive * 3));
                     vx = fx * speed - fy * side;
                     vy = fy * speed + fx * side;
-                    const double nx = x + vx * dt, ny = y + vy * dt;
-                    const auto ground = floor(nx, ny, z + stepUp);
-                    const double nz = ground ? *ground + halfHeight : 0;
-                    // Look about the body's radius plus a step ahead for a wall.
-                    const double moving = std::max(1.0, std::hypot(vx, vy));
-                    const double ahead = std::min(std::max(50.0, arrive * 0.7), std::max(50.0, d));
-                    const bool wall = !clear(x, y, z + WaistAbove, x + vx / moving * ahead, y + vy / moving * ahead, z + WaistAbove);
-                    if (!ground || wall || nz > z + stepUp || nz < z - stepDown)
+                    // Keep clear of other bodies: slow down behind one ahead (single file through a
+                    // door), step aside from one alongside; never walk into them.
+                    double pace = 1;
+                    for (const auto& o : others)
+                    {
+                        const double ox = x - o[0], oy = y - o[1], od = std::hypot(ox, oy);
+                        if (od >= Separation || od < 1) continue;
+                        const double aheadOf = -(ox * fx + oy * fy) / od; // 1: right in front
+                        if (aheadOf > 0.3) pace = std::min(pace, std::clamp((od - Separation * 0.55) / (Separation * 0.45), 0.0, 1.0));
+                        const double push = (Separation - od) / Separation * speed * 0.6;
+                        const double across = (ox * -fy + oy * fx) / od;
+                        const double sign = across >= 0 ? 1 : -1;
+                        vx += -fy * sign * push;
+                        vy += fx * sign * push;
+                    }
+                    vx -= fx * speed * (1 - pace);
+                    vy -= fy * speed * (1 - pace);
+                    // At the goal with someone already standing there: stop alongside instead.
+                    if (target == NavTarget && navIndex + 1 >= navPath.size() && d < Separation * 2)
+                        for (const auto& o : others)
+                            if (std::hypot(o[0] - dest[0], o[1] - dest[1]) < Separation * 0.8 && std::hypot(x - o[0], y - o[1]) < Separation * 1.3)
+                            {
+                                navPath.clear();
+                                navNodes.clear();
+                                target = -1;
+                                if (goal) stoppedFor = *goal;
+                                break;
+                            }
+                    if (target == -1) { vx = vy = 0; }
+                    // On a grid link (near the segment from the last point to this one) the grid's checks hold.
+                    // Only a single grid step is trusted: a string-pulled leg is checked like any walk.
+                    double u = 1;
+                    const bool gridStep = nav && navIndex > 0 && navIndex < navNodes.size() && navNodes[navIndex - 1] >= 0 && navNodes[navIndex] >= 0
+                                              ? nav->Dir(navNodes[navIndex - 1], navNodes[navIndex]) >= 0
+                                              : std::hypot(dest[0] - legFrom[0], dest[1] - legFrom[1]) <= (nav ? nav->spacing * 1.5 : 0);
+                    const bool onLink = target == NavTarget && gridStep && SegmentDistance(x, y, legFrom, dest, u) < TrustDistance;
+                    const double linkZ = legFrom[2] + (dest[2] - legFrom[2]) * u + halfHeight;
+                    if (Move(vx, vy, dt, halfHeight, floor, clear, onLink, linkZ))
+                    {
+                        blocked = 0;
+                        walking = true;
+                        wantYaw = std::atan2(fy, fx) * 180.0 / 3.14159265358979; // face where it walks
+                    }
+                    else
                     {
                         vx = vy = 0;
-                        if (++blocked > 3 && target == NavTarget && navIndex > 0 && ++navBlocked % 8 != 0)
-                        {
-                            // Off the grid line (a corner cut at a door jamb): back to the path's last point,
-                            // which it came from, and on from there.
-                            --navIndex;
-                            blocked = 0;
-                        }
-                        else if (blocked > 3)
+                        if (++blocked > 3 && target != NavTarget)
                         {
                             // The straight walk looked clear but the body can't pass: remember it and go another way.
                             if (links && at >= 0 && target >= 0)
@@ -483,35 +661,87 @@ namespace bridge::ghost
                             ForgetRoute();
                             nextChoose = now + 0.5;
                         }
-                    }
-                    else
-                    {
-                        blocked = 0;
-                        x = nx;
-                        y = ny;
-                        z = nz;
-                        yaw = std::atan2(fy, fx) * 180.0 / 3.14159265358979;
+                        else if (target == NavTarget)
+                        {
+                            ++navBlocked;
+                            // A shortcut the body can't take: the same way again, grid step by grid step.
+                            if (!gridStep && blocked > 2)
+                            {
+                                exactUntil = now + 10;
+                                ForgetRoute();
+                                target = -1;
+                                nextChoose = 0;
+                                blocked = 0;
+                            }
+                        }
                     }
                 }
             }
+            // Stuck: walking somewhere without getting anywhere.
+            if (target != -1 && !hold)
+            {
+                // Progress resets the recovery ladder only once well past the spot it got stuck at.
+                if (std::hypot(x - progressX, y - progressY) > StuckDistance) { progressX = x; progressY = y; progressAt = now; if (std::hypot(x - stuckX, y - stuckY) > 250) stuckLevel = 0; }
+                else if (now - progressAt > StuckSeconds) { stuckX = x; stuckY = y; Recover(now, halfHeight); progressAt = now; progressX = x; progressY = y; }
+            }
+            else { progressX = x; progressY = y; progressAt = now; }
+
+            // Holding: a fight strafes (ADAD across the line to the enemy, near where it stood); otherwise
+            // it checks the open angles around it, a few seconds each.
+            if (hold && grounded)
+            {
+                if (!holdAnchor) holdAnchor = std::array<double, 2>{x, y};
+                if (face && fight > 0)
+                {
+                    const auto& f = *face;
+                    const double fdx = f[0] - x, fdy = f[1] - y, fd = std::max(1.0, std::hypot(fdx, fdy));
+                    if (now >= strafeFlipAt) { strafeSign = -strafeSign; strafeFlipAt = now + Uniform(0.35, 0.9); }
+                    const double sx = -fdy / fd * strafeSign, sy = fdx / fd * strafeSign, sp = speed * 0.55 * std::clamp(fight, 0.0, 1.0);
+                    if (std::hypot(x + sx * sp * dt - (*holdAnchor)[0], y + sy * sp * dt - (*holdAnchor)[1]) > StrafeRange || !Move(sx * sp, sy * sp, dt, halfHeight, floor, clear, false, z))
+                        strafeSign = -strafeSign;
+                    else { vx = sx * sp; vy = sy * sp; }
+                }
+                else if (!face && now >= nextLook)
+                {
+                    nextLook = now + Uniform(1.5, 3.5);
+                    lookYaw = LookAround();
+                }
+            }
+            // Standing (holding, or there) too close to another body: a step aside.
+            if (!walking && grounded)
+                for (const auto& o : others)
+                {
+                    const double ox = x - o[0], oy = y - o[1], od = std::hypot(ox, oy);
+                    if (od < Separation * 0.8 && od > 1 && Move(ox / od * 200, oy / od * 200, dt, halfHeight, floor, clear, false, z)) break;
+                }
+            // Standing still and looking around, also once there.
+            if (!hold && !walking && target == -1 && !face && now >= nextLook)
+            {
+                nextLook = now + Uniform(1.5, 3.5);
+                lookYaw = LookAround();
+            }
             // Crouch now and then, jump rarely (visual only: the capsule centre stays on the floor).
-            if (now >= nextCrouch && crouchUntil < now)
+            if (!hold && now >= nextCrouch && crouchUntil < now)
             {
                 crouchUntil = now + Uniform(0.8, 1.6);
                 nextCrouch = now + Uniform(7, 12);
             }
-            // Facing a point (an enemy): turn the body and the aim there.
+            // Facing a point (an enemy): turn the body and the aim there; else where it walks or looks.
+            double wantPitch = 0;
             if (face)
             {
                 const auto& f = *face;
                 const double dx = f[0] - x, dy = f[1] - y, dz = f[2] - (z + EyeAbove);
                 if (std::hypot(dx, dy) > 1)
                 {
-                    yaw = std::atan2(dy, dx) * 180.0 / 3.14159265358979;
-                    pitch = std::atan2(dz, std::hypot(dx, dy)) * 180.0 / 3.14159265358979;
+                    wantYaw = std::atan2(dy, dx) * 180.0 / 3.14159265358979;
+                    wantPitch = std::atan2(dz, std::hypot(dx, dy)) * 180.0 / 3.14159265358979;
                 }
             }
-            else pitch = 0;
+            else if (!walking) wantYaw = lookYaw;
+            // Human turning: no faster than turnRate (degrees per second).
+            yaw = WrapAngle(Approach(yaw, wantYaw, turnRate * dt));
+            pitch = pitch + std::clamp(wantPitch - pitch, -turnRate * dt, turnRate * dt);
             if (hold) nextJump = std::max(nextJump, now + 2); // no hops while standing to shoot or plant
             if (now >= nextJump && jumpStart < 0 && now >= crouchUntil)
             {
@@ -541,6 +771,26 @@ namespace bridge::ghost
             s.yaw = yaw;
             s.pitch = pitch;
             return s;
+        }
+
+        // Holding without an enemy: a look along one of the most open ways from here (the grid's
+        // straight runs; a corner or a long angle), a little off its line.
+        double LookAround()
+        {
+            static constexpr double Angles[4]{0, 180, 90, -90}; // NavGrid directions +x, -x, +y, -y
+            if (nav && !nav->nodes.empty())
+                if (const int n = nav->Nearest(x, y, z); n >= 0)
+                {
+                    int open[4]{}, total = 0;
+                    for (int d = 0; d < 4; ++d) total += open[d] = nav->Openness(n, d) * nav->Openness(n, d);
+                    if (total > 0)
+                    {
+                        int pick = static_cast<int>(Next() % static_cast<std::uint32_t>(total));
+                        for (int d = 0; d < 4; ++d)
+                            if ((pick -= open[d]) < 0) return Angles[d] + Uniform(-25, 25);
+                    }
+                }
+            return yaw + Uniform(-70, 70);
         }
     };
 } // namespace bridge::ghost

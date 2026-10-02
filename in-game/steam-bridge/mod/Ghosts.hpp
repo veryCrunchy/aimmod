@@ -181,6 +181,11 @@ namespace aimmod
         double m_nextNavLog = 0;
         bool m_navDoneLogged = false;
         bool m_movementLogged = false;
+        // Bot debug (bot-orders.tsv "debug 1"): each bot's path as small spheres and its goal as a cube.
+        std::map<std::uint64_t, std::vector<RC::Unreal::FWeakObjectPtr>> m_debugMarkers;
+        void DrawBotDebug(std::uint64_t peer, const DevWalk& walk, RC::Unreal::UObject* world, double now);
+        void ClearBotDebug();
+        bool m_navCoverageLogged = false;
         void GrowNav(const std::vector<bridge::Bridge::DevAvatar::Walker>& walkers, RC::Unreal::UObject* character, double now);
         std::shared_ptr<bridge::ghost::LinkCache> m_linkCache; // reset with the scenario
         double m_runSpeed = -1, m_stepHeight = -1;              // the local player's movement (CharacterMovement)

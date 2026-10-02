@@ -688,6 +688,8 @@ namespace aimmod
                 m_nav.reset();
                 m_navSeeds.clear();
                 m_navDoneLogged = false;
+                m_navCoverageLogged = false;
+                m_debugMarkers.clear(); // the markers went with the old world
                 m_botsAllowed = bridge::ghost::AvatarBotsAllowed(scene);
                 m_parkedHelpers.clear();
                 m_nextHelperPark = 0;
@@ -849,6 +851,17 @@ namespace aimmod
                         walk.walker.goal = order && order->mode == bridge::bots::Order::Mode::Goal ? order->goal : std::nullopt;
                         walk.walker.hold = order && order->mode == bridge::bots::Order::Mode::Hold;
                         walk.walker.face = order ? order->face : std::nullopt;
+                        walk.walker.goalStop = order ? order->stop : 1;
+                        walk.walker.via = order ? order->via : std::nullopt;
+                        walk.walker.fight = order ? order->fight : 0;
+                        if (order && order->turn > 0) walk.walker.turnRate = order->turn;
+                        // Everyone else's body: the other bots, the remote players and the local player.
+                        walk.walker.others.clear();
+                        for (const auto& [otherPeer, other] : m_walkers)
+                            if (otherPeer != w.peer && other.walker.placed) walk.walker.others.push_back({other.walker.x, other.walker.y});
+                        for (const auto& [ghostPeer, g] : m_ghosts)
+                            if (!IsDevPeer(ghostPeer) && g.shownValid && !g.dead) walk.walker.others.push_back({g.shown.x, g.shown.y});
+                        walk.walker.others.push_back({location[0], location[1]});
                         if (order && !order->placeToken.empty() && order->placeToken != walk.placeToken)
                         {
                             walk.placeToken = order->placeToken;
@@ -880,11 +893,13 @@ namespace aimmod
                                 walk.seen.push_back({t.tag, visible});
                             }
                         }
-                        if (order) m_botReports.push_back({w.peer, ws.x, ws.y, ws.z, ws.yaw, walk.seen});
+                        // The floor under it as well (the walker's own z is on the traced floor): a bomb it drops lands there.
+                        if (order) m_botReports.push_back({w.peer, ws.x, ws.y, ws.z, ws.yaw, walk.walker.z - half, walk.seen});
+                        if (m_botOrders && m_botOrders->debug) DrawBotDebug(w.peer, walk, world, now);
                         // Every 5 s: what each bot is told and how far along it is.
                         if (order && now >= walk.nextStatusLog)
                         {
-                            walk.nextStatusLog = now + 5.0;
+                            walk.nextStatusLog = now + (m_botOrders && m_botOrders->debug ? 1.0 : 5.0);
                             const auto& b = walk.walker;
                             const char* mode = order->mode == bridge::bots::Order::Mode::Goal ? "goal" : order->mode == bridge::bots::Order::Mode::Hold ? "hold" : "roam";
                             char line[320];
@@ -957,6 +972,8 @@ namespace aimmod
                     Show(TestPeer, m_ghosts[TestPeer], s, world, character);
                 }
             }
+
+            if (!(m_botOrders && m_botOrders->debug) && !m_debugMarkers.empty()) ClearBotDebug();
 
             // Remote players: everything below comes from their samples only.
             const std::string localScene = m_bridge.LocalScene();
@@ -1102,6 +1119,47 @@ namespace aimmod
         }
     }
 
+    // Bot debug overlay: up to 24 small spheres along the bot's path (from where it is) and a cube on
+    // its goal, moved four times a second; unused markers wait far below the map.
+    void GhostDemo::DrawBotDebug(std::uint64_t peer, const DevWalk& walk, UObject* world, double now)
+    {
+        (void)now;
+        if (m_shapesFailed || !world) return;
+        auto& markers = m_debugMarkers[peer];
+        constexpr std::size_t Count = 25;
+        UObject* sphere = m_sphere.Get();
+        if (!sphere && (sphere = LoadMesh(STR("/Engine/BasicShapes/Sphere.Sphere")))) m_sphere = sphere;
+        UObject* cube = m_cube.Get();
+        if (!cube && (cube = LoadMesh(STR("/Engine/BasicShapes/Cube.Cube")))) m_cube = cube;
+        if (!sphere || !cube) return;
+        while (markers.size() < Count)
+        {
+            UObject* actor = SpawnShape(world, markers.empty() ? cube : sphere, markers.empty() ? 0.6 : 0.25, markers.empty() ? 0.6 : 0.25, markers.empty() ? 0.6 : 0.25);
+            if (!actor) return;
+            markers.push_back(actor);
+        }
+        const auto& b = walk.walker;
+        std::vector<std::array<double, 3>> points;
+        if (b.goal) points.push_back(*b.goal);
+        else points.push_back({0, 0, -100000});
+        for (std::size_t i = b.navIndex; i < b.navPath.size() && points.size() < Count; ++i) points.push_back({b.navPath[i][0], b.navPath[i][1], b.navPath[i][2] + 40});
+        for (std::size_t i = 0; i < markers.size(); ++i)
+            if (UObject* actor = markers[i].Get())
+            {
+                const auto p = i < points.size() ? points[i] : std::array<double, 3>{0, 0, -100000};
+                FHitResult hit{};
+                static_cast<AActor*>(actor)->K2_SetActorLocationAndRotation(FVector(p[0], p[1], p[2]), FRotator(0, 0, 0), false, hit, true);
+            }
+    }
+
+    void GhostDemo::ClearBotDebug()
+    {
+        for (auto& [_, markers] : m_debugMarkers)
+            for (auto& m : markers)
+                if (UObject* actor = m.Get()) static_cast<AActor*>(actor)->K2_DestroyActor();
+        m_debugMarkers.clear();
+    }
+
     // The bots' nav grid: seeded at every walker's spawns and waypoints and at their goals, grown a
     // trace budget per tick (about 1500 traces: a few seconds for a whole ported map, during freeze time).
     void GhostDemo::GrowNav(const std::vector<bridge::Bridge::DevAvatar::Walker>& walkers, UObject* character, double now)
@@ -1144,6 +1202,37 @@ namespace aimmod
         for (const auto& [_, o] : m_botOrders->bots)
             if (o.goal) seed(*o.goal);
         if (!m_nav->Done()) m_nav->Grow(1500, floor, clear);
+        // Coverage, once the grid is complete: from each walker's own spawn, which of its waypoints and
+        // goals (the bomb sites, the other spawns) the grid connects; the ones it doesn't are named.
+        if (m_nav->Done() && !m_navCoverageLogged)
+        {
+            m_navCoverageLogged = true;
+            int pairs = 0, linked = 0;
+            std::string missing;
+            for (const auto& w : walkers)
+            {
+                if (w.spawns.empty()) continue;
+                std::vector<std::array<double, 3>> goals(w.spawns.begin() + std::min<std::size_t>(w.spawns.size(), static_cast<std::size_t>(std::max(1, w.own))), w.spawns.end());
+                if (const auto it = m_botOrders->bots.find(w.peer); it != m_botOrders->bots.end() && it->second.goal) goals.push_back(*it->second.goal);
+                for (const auto& g : goals)
+                {
+                    bool reached = false;
+                    m_nav->PathNodes(w.spawns.front(), g, reached);
+                    ++pairs;
+                    if (reached) ++linked;
+                    else if (missing.size() < 240)
+                    {
+                        char item[64];
+                        std::snprintf(item, sizeof(item), "%s(%.0f, %.0f, %.0f) from bot %llu", missing.empty() ? "" : "; ", g[0], g[1], g[2], static_cast<unsigned long long>(w.peer));
+                        missing += item;
+                    }
+                }
+            }
+            char line[200];
+            std::snprintf(line, sizeof(line), "avatars: nav coverage %d/%d spawn-to-waypoint pairs connected (%.0f%%), %zu grid points", linked, pairs, pairs ? 100.0 * linked / pairs : 100.0,
+                          m_nav->nodes.size());
+            m_log(std::string(line) + (missing.empty() ? "" : "; unreachable: " + missing));
+        }
         if (!m_navDoneLogged && (m_nav->Done() || now >= m_nextNavLog))
         {
             m_nextNavLog = now + 5.0;

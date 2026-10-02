@@ -15,6 +15,7 @@ static partial class MultiplayerChecks
         BotLooks();
         DeadSpectate();
         BotService(root);
+        BotAi(root);
     }
 
     // Each bot wears its own look, picked from its id: stable for the match, varied in a lobby.
@@ -84,10 +85,12 @@ static partial class MultiplayerChecks
         // A changed play key resets readiness, but not a bot's.
         core.Apply("host", "settings", J(new { settings = new { fragLimit = 15 } }), content);
         Check(core.Snapshot().Members.Where(m => m.Bot is not null).All(m => m.Ready), "Bots stay ready when the host changes settings");
-        // Score modes have no bots: switching drops them.
+        // Score modes keep them (they play the scenario); the tracking duel has none.
         core.Apply("host", "settings", J(new { settings = new { mode = LobbyModes.Rounds } }), content);
-        Check(core.Snapshot().Members.All(m => m.Bot is null), "Bots leave when the mode isn't a shooting mode");
-        Check(!core.Apply("host", "add-bot", default, content).Ok, "No bots in score modes");
+        Check(core.Snapshot().Members.Any(m => m.Bot is not null), "Bots stay for a score mode");
+        Check(!LobbyCore.BotsAllowed(new LobbySettings(Mode: LobbyModes.Tracking)) && LobbyModes.All.Where(m => m != LobbyModes.Tracking).All(m => LobbyCore.BotsAllowed(new LobbySettings(Mode: m))),
+            "Bots play every mode but the tracking duel");
+        foreach (var b in core.Snapshot().Members.Where(m => m.Bot is not null).ToArray()) core.Apply("host", "remove-bot", J(new { member = b.Id }), content);
         core.Apply("host", "settings", J(new { settings = new { mode = LobbyModes.Deathmatch } }), content);
         foreach (var who in new[] { "host", "guest" }) core.Apply(who, "content", J(new { scenario = ContentStates.Ok, map = ContentStates.Ok }), content);
         core.Apply("guest", "ready", J(new { ready = true }), content);

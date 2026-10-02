@@ -827,6 +827,123 @@ int main()
         bool climbed = false;
         const auto upPath = up.Path({-1500, 0, 145}, {1500, 0, 545}, climbed);
         Check(climbed && !upPath.empty() && upPath.back()[2] == 400, "the grid climbs stairs no higher than a step");
+
+        // String-pulling: across the open room the path is a few straight legs, not a grid staircase.
+        std::vector<int> raw;
+        {
+            bool ok = false;
+            raw = grid->PathNodes({-2000, -2000, 145}, {-200, -400, 145}, ok);
+            const auto pulled = grid->Smooth(raw);
+            Check(ok && raw.size() > 20 && pulled.size() <= 3 && pulled.front() == raw.front() && pulled.back() == raw.back(), "paths are string-pulled into straight legs");
+        }
+        // Stuck recovery: a pillar the grid never saw (the traces missed it) blocks the way. The bot
+        // hops, backs off, takes the link out of the grid and goes around.
+        auto pillar = [&](double ax, double ay, double az, double bx, double by, double bz) {
+            for (int k = 0; k <= 10; ++k)
+            {
+                const double px = ax + (bx - ax) * k / 10.0, py = ay + (by - ay) * k / 10.0;
+                if (std::hypot(px + 1000, py + 1000) < 100) return false;
+            }
+            return door(ax, ay, az, bx, by, bz);
+        };
+        auto pillarGrid = std::make_shared<ghost::NavGrid>(*grid); // grown without the pillar
+        ghost::Walker st;
+        st.nav = pillarGrid;
+        st.spawns = {{-1600, -1000, 150}};
+        st.Tune(1100, 79);
+        st.Place(0, half, floor);
+        st.goal = std::array<double, 3>{-400, -1000, 145};
+        bool passed = false, insidePillar = false;
+        for (int i = 0; i < 60 * 30 && !passed; ++i)
+        {
+            const auto s = st.Step(i / 60.0, 1 / 60.0, half, floor, pillar);
+            insidePillar |= std::hypot(s.x + 1000, s.y + 1000) < 60;
+            passed |= std::hypot(s.x + 400, s.y + 1000) < st.arrive + 10;
+        }
+        Check(passed && st.stuckRecoveries >= 1 && !insidePillar, "a bot stuck on an unseen obstacle recovers and goes around it");
+        Check(pillarGrid->blocked >= 1 || st.navBlocked >= 1, "and the way it couldn't pass is marked");
+        // Turning: never faster than its turn rate.
+        ghost::Walker tr;
+        tr.nav = grid;
+        tr.spawns = {{0, -2000, 150}};
+        tr.Place(0, half, floor);
+        tr.turnRate = 180;
+        tr.hold = true;
+        tr.face = std::array<double, 3>{-1000, -2000, 200}; // straight behind (yaw 180)
+        double lastYaw = tr.yaw, maxTurn = 0;
+        for (int i = 0; i < 90; ++i)
+        {
+            const auto s = tr.Step(i / 60.0, 1 / 60.0, half, floor, open);
+            maxTurn = std::max(maxTurn, std::fabs(ghost::WrapAngle(s.yaw - lastYaw)));
+            lastYaw = s.yaw;
+        }
+        Check(maxTurn <= 180.0 / 60 + 0.01 && std::fabs(ghost::WrapAngle(lastYaw - 180)) < 1, "a bot turns no faster than its turn rate, then faces its target");
+        // Stopping short (a default position): it walks part of the way and stays there.
+        ghost::Walker sh;
+        sh.nav = grid;
+        sh.spawns = {{-2000, -2000, 150}};
+        sh.Tune(1100, 79);
+        sh.Place(0, half, floor);
+        sh.goal = std::array<double, 3>{2000, -2000, 145};
+        sh.goalStop = 0.5;
+        for (int i = 0; i < 60 * 20; ++i) sh.Step(i / 60.0, 1 / 60.0, half, floor, door);
+        const double leftover = std::hypot(sh.x - 2000, sh.y + 2000);
+        Check(sh.target == -1 && leftover > 1500 && std::hypot(sh.x + 2000, sh.y + 2000) > 1000, "told to go part of the way, a bot stops there and stays");
+        sh.goalStop = 1;
+        for (int i = 0; i < 60 * 20; ++i) sh.Step(20 + i / 60.0, 1 / 60.0, half, floor, door);
+        Check(std::hypot(sh.x - 2000, sh.y + 2000) < sh.arrive + 10, "then told to go all the way, it goes on");
+        // A detour first (a split): by way of the far corner of its room, then the goal.
+        ghost::Walker vi;
+        vi.nav = grid;
+        vi.spawns = {{-2000, -2000, 150}};
+        vi.Tune(1100, 79);
+        vi.Place(0, half, floor);
+        vi.goal = std::array<double, 3>{2000, -2000, 145};
+        vi.via = std::array<double, 4>{-2000, 2400, 145, 1.0};
+        bool corner = false, viaThere = false;
+        for (int i = 0; i < 60 * 40 && !viaThere; ++i)
+        {
+            const auto s = vi.Step(i / 60.0, 1 / 60.0, half, floor, door);
+            corner |= s.y > 2000;
+            viaThere |= corner && std::hypot(s.x - 2000, s.y + 2000) < vi.arrive + 10;
+        }
+        Check(corner && viaThere, "a bot told to go by way of a point goes there first, then to its goal");
+        // In a fight it strafes across the line to the enemy, near where it stood.
+        ghost::Walker fi;
+        fi.nav = grid;
+        fi.spawns = {{-1500, -1500, 150}};
+        fi.Tune(1100, 79);
+        fi.Place(0, half, floor);
+        fi.hold = true;
+        fi.fight = 1;
+        fi.face = std::array<double, 3>{-1500, 0, 200};
+        double minX = 1e9, maxX = -1e9, maxY = -1e9, minY = 1e9;
+        for (int i = 0; i < 60 * 4; ++i)
+        {
+            const auto s = fi.Step(i / 60.0, 1 / 60.0, half, floor, open);
+            minX = std::min(minX, s.x); maxX = std::max(maxX, s.x); minY = std::min(minY, s.y); maxY = std::max(maxY, s.y);
+        }
+        Check(maxX - minX > 100 && maxX - minX <= 2 * ghost::Walker::StrafeRange + 20 && maxY - minY < 30, "fighting, a bot strafes side to side across the enemy's line, within a short range");
+        // Two bots sent to the same spot end up side by side, not inside each other.
+        ghost::Walker a1, a2;
+        for (auto* w2 : {&a1, &a2})
+        {
+            w2->nav = grid;
+            w2->Tune(1100, 79);
+            w2->goal = std::array<double, 3>{-500, -500, 145};
+        }
+        a1.spawns = {{-2000, -1900, 150}};
+        a2.spawns = {{-1900, -2000, 150}};
+        a1.Place(0, half, floor);
+        a2.Place(0, half, floor);
+        for (int i = 0; i < 60 * 15; ++i)
+        {
+            a1.others = {{a2.x, a2.y}};
+            a1.Step(i / 60.0, 1 / 60.0, half, floor, open);
+            a2.others = {{a1.x, a1.y}};
+            a2.Step(i / 60.0, 1 / 60.0, half, floor, open);
+        }
+        Check(std::hypot(a1.x - a2.x, a1.y - a2.y) > 80 && std::hypot(a1.x + 500, a1.y + 500) < 400 && std::hypot(a2.x + 500, a2.y + 500) < 400, "two bots sent to one spot stand side by side");
     }
     // Avatar placement: the actor follows the simulated position every tick.
     {
@@ -878,10 +995,16 @@ int main()
         Check(!bridge::bots::Parse("bot\t1\troam\n") && !bridge::bots::Parse("AIMMOD_BOTS_2\t1\n"), "bot orders need their header");
         Check(bridge::bots::Parse("AIMMOD_BOTS_1\t1\nsight\t1\t2\tnan\t0\t0\nbot\t1\tgoal\t1e9\t0\t0\n")->bots.at(1).sight.empty(), "refuses non-finite and huge numbers");
         bridge::bots::Report r;
-        r.peer = 2; r.x = 1; r.y = 2.25; r.z = -3; r.yaw = 90; r.seen = {{4, true}, {9, false}};
-        Check(bridge::bots::Format(1759300000000, {r}) == "AIMMOD_BOTSIGHT_1\t1759300000000\nbot\t2\t1.0\t2.2\t-3.0\t90.0\nseen\t2\t4\t1\nseen\t2\t9\t0\n" ||
-                  bridge::bots::Format(1759300000000, {r}) == "AIMMOD_BOTSIGHT_1\t1759300000000\nbot\t2\t1.0\t2.3\t-3.0\t90.0\nseen\t2\t4\t1\nseen\t2\t9\t0\n",
-              "formats bot-sight.tsv");
+        r.peer = 2; r.x = 1; r.y = 2.25; r.z = -3; r.yaw = 90; r.floor = -148; r.seen = {{4, true}, {9, false}};
+        Check(bridge::bots::Format(1759300000000, {r}) == "AIMMOD_BOTSIGHT_1\t1759300000000\nbot\t2\t1.0\t2.2\t-3.0\t90.0\t-148.0\nseen\t2\t4\t1\nseen\t2\t9\t0\n" ||
+                  bridge::bots::Format(1759300000000, {r}) == "AIMMOD_BOTSIGHT_1\t1759300000000\nbot\t2\t1.0\t2.3\t-3.0\t90.0\t-148.0\nseen\t2\t4\t1\nseen\t2\t9\t0\n",
+              "formats bot-sight.tsv, with the floor under each bot");
+        // The overhaul's orders: stop short, a detour, fight strafing, turn rate, the debug overlay.
+        const auto more = bridge::bots::Parse("AIMMOD_BOTS_1\t8\ndebug\t1\nbot\t1\tgoal\t100\t200\t30\t0.6\nvia\t1\t-50\t60\t30\t0.5\nfight\t1\t0.8\nturn\t1\t420\n"
+                                              "bot\t2\tgoal\t1\t2\t3\t7\nvia\t2\t1\t2\t3\t2\nfight\t2\t5\nturn\t2\t1\n");
+        Check(more && more->debug && more->bots.at(1).stop == 0.6 && more->bots.at(1).via && (*more->bots.at(1).via)[3] == 0.5 && more->bots.at(1).fight == 0.8 && more->bots.at(1).turn == 420,
+              "parses stop-short goals, detours, fight strafing, turn rates and the debug switch");
+        Check(more && more->bots.at(2).stop == 1 && !more->bots.at(2).via && more->bots.at(2).fight == 0 && more->bots.at(2).turn == 0, "out-of-range values are ignored");
     }
     Check(ghost::IsHelperBot("AimMod Hidden Bot") && !ghost::IsHelperBot("AimMod Hidden") && !ghost::IsHelperBot("target") &&
               std::hypot(ghost::HelperParkX, ghost::HelperParkY) > 100000 && std::hypot(ghost::HelperParkX, ghost::HelperParkY) < 1048576,
