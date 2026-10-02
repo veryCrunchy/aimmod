@@ -817,7 +817,7 @@ static partial class MultiplayerChecks
         foreach (var bad in new[] { Swap("aimmod.mp", "other"), Swap("\"v\":1", "\"v\":2"), Swap("\"command\"", "\"teleport\""), Swap("\"seq\":7", "\"seq\":-1"), "[]", "{", Swap("\"body\":{", "\"body\":[{").Replace("}}}", "}}]}") })
             Check(Protocol.Decode(Encoding.UTF8.GetBytes(bad)) is null, "Rejected frame: " + bad[..Math.Min(40, bad.Length)]);
         Check(Protocol.Decode(new byte[Protocol.MaxBytes + 1]) is null, "Oversized frames are rejected");
-        Check(!Protocol.Reliable("score") && Protocol.Reliable("snapshot") && Protocol.Reliable("track") && Protocol.Reliable("hit") && Protocol.Reliable("combat") && Protocol.Reliable("cosmetic.look") && Protocol.Reliable("hit-ack") && !Protocol.Reliable("bots") && Protocol.Types.Length == 24, "Score frames and bot positions are unreliable; state and tracking samples are reliable");
+        Check(!Protocol.Reliable("score") && Protocol.Reliable("snapshot") && Protocol.Reliable("track") && Protocol.Reliable("hit") && Protocol.Reliable("combat") && Protocol.Reliable("cosmetic.look") && Protocol.Reliable("hit-ack") && !Protocol.Reliable("bots") && !Protocol.Reliable("fired") && !Protocol.Reliable("shots") && Protocol.Types.Length == 26, "Score frames and bot positions are unreliable; state and tracking samples are reliable");
         var sync = new ClockSync();
         sync.Add(0, 1050, 200); sync.Add(1000, 2010, 1020); sync.Add(2000, 3100, 2300);
         Check(sync.Rtt == 20 && sync.Offset == 1000, "Clock sync uses the minimum round-trip sample");

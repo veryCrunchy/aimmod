@@ -1346,6 +1346,7 @@ sealed partial class MultiplayerService : IDisposable
             StepScoreBots();
             StepGrenades();
             TrackLocalRun();
+            PushShots();
             Remember();
         }
     }
@@ -1506,6 +1507,9 @@ sealed partial class MultiplayerService : IDisposable
             case "hit":
                 if (HitClaim.Read(m.Body) is { } claim) { core!.Claim(peer, claim); ConfirmClaims(); PushCombat(); }
                 break;
+            case "fired":
+                ReceiveFired(peer, m.Body);
+                break;
             case "content.request":
                 if (server.Manifest(core!.Settings) is { } manifest) Send(peer, "content.manifest", new { key = manifest.Key, files = manifest.Files, workshop = manifest.Workshop });
                 else Send(peer, "content.error", new { hash = "", code = "none" });
@@ -1576,6 +1580,9 @@ sealed partial class MultiplayerService : IDisposable
                 break;
             case "bots":
                 ReceiveBots(m.Body);
+                break;
+            case "shots":
+                ReceiveShots(m.Body);
                 break;
             case "hit-ack":
                 ReceiveHitAck(m.Body);
@@ -1916,9 +1923,11 @@ sealed partial class MultiplayerService : IDisposable
             }
             ResendClaims();
             LogHitStats(match);
+            SendFired(match, shotFeed.Fresh, offset); // everyone else hears them (GunAudio.cs)
             if (match.Cs is not null) KnifeSounds(shotFeed.Fresh, (id, t) => tracker.SeenAt(id, t) ?? (tracker.LastSeen.TryGetValue(id, out var last) ? last : null), offset);
             shotFeed.Fresh.Clear(); // each shot sounds once
         }
+        if (match.Phase == MatchPhases.Live) GunfireSounds(match);
         var view = LiveCombat(match);
         if (view?.Players.FirstOrDefault(p => p.Member == SelfId) is { } self)
         {
@@ -1997,7 +2006,12 @@ sealed partial class MultiplayerService : IDisposable
     // For AimModSteam: how each other player's avatar should look (alive or down, friend
     // or foe, health, and in CS the weapon in their hands), so a death plays on the avatar and
     // team colours are right.
-    string? lastAvatarState; long avatarSequence;
+    string? lastAvatarState; long avatarSequence, avatarWrittenAt;
+    // AimModSteam treats a file older than 10 s as no match at all (everyone alive, enemies, unarmed):
+    // rewritten on change and every second, so a quiet stretch (freeze time: nobody is hurt or switches)
+    // never goes stale. That staleness was the weapons vanishing about 10 s into every round.
+    public const long AvatarStateRefreshMs = 1000;
+    internal static bool AvatarStateDue(string body, string? last, long writtenAt, long now) => body != last || now - writtenAt >= AvatarStateRefreshMs;
     void WriteAvatarState(MatchSnapshot match, CombatView view, CombatPlayerView self)
     {
         if (outputFolder is null) return;
@@ -2010,16 +2024,24 @@ sealed partial class MultiplayerService : IDisposable
                 + (match.Cs is { } cs ? "\t" + AvatarWeapon(cs, p.Member) : "");
         });
         var body = "match\t" + Uri.EscapeDataString(match.Id) + "\n" + string.Join("\n", rows) + "\n";
-        if (body == lastAvatarState) return;
-        lastAvatarState = body;
+        var now = clock();
+        if (!AvatarStateDue(body, lastAvatarState, avatarWrittenAt, now)) return;
+        lastAvatarState = body; avatarWrittenAt = now;
         try { AtomicFile.WriteText(Path.Combine(outputFolder, "avatar-state.tsv"), "AIMMOD_AVATARS_1\t" + ++avatarSequence + "\n" + body); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
     }
 
-    // CS: the third-person model of what a player holds (KovaaK's WeaponMeshViewModels name), "-" for
-    // nothing to show (the knife, the bomb, down).
-    internal static string AvatarWeapon(CsView cs, string member) =>
-        cs.Players.FirstOrDefault(x => x.Member == member) is { Alive: true } p && CsRules.FindAny(p.Holding) is { } w && w.Look.ThirdPerson != "-" ? w.Look.ThirdPerson : "-";
+    // CS: the third-person model of what a player holds (KovaaK's WeaponMeshViewModels name), "-" only
+    // while down. KovaaK's has no third-person knife, bomb or grenade, so with one of those in hand the
+    // body shows the gun they carry (primary, else pistol, else their side's default pistol): an alive
+    // body is never empty-handed.
+    internal static string AvatarWeapon(CsView cs, string member)
+    {
+        if (cs.Players.FirstOrDefault(x => x.Member == member) is not { Alive: true } p) return "-";
+        if (CsRules.FindAny(p.Holding) is { } w && w.Look.ThirdPerson != "-") return w.Look.ThirdPerson;
+        var gun = CsRules.Find(p.Primary) ?? CsRules.Find(p.Secondary) ?? CsRules.DefaultPistol(p.Side);
+        return gun.Look.ThirdPerson;
+    }
 
     bool PlayingCs() => Current?.Match is { Cs: not null } m && m.Players.Contains(SelfId);
 

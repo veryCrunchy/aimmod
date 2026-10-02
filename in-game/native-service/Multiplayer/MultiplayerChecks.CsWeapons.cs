@@ -117,8 +117,8 @@ static partial class MultiplayerChecks
         Check(view("a").Holding == "glock" && far.Hold("a", CsRules.KnifeSlot) is null && view("a").Holding == "knife" && far.Hold("a", CsRules.PrimarySlot) is null && view("a").Holding == "glock"
             && far.Hold("a", 9) == "invalid" && far.Hold("nobody", 0) == "not-playing", "Holding: the slot a player switched to, else their best weapon");
         far.Hold("a", CsRules.PistolSlot);
-        Check(MultiplayerService.AvatarWeapon(far.View(), "a") == "Pistol" && (far.Hold("a", CsRules.KnifeSlot) is null && MultiplayerService.AvatarWeapon(far.View(), "a") == "-")
-            && MultiplayerService.AvatarWeapon(far.View(), "nobody") == "-", "Avatars show the held weapon's third-person model; the knife shows none");
+        Check(MultiplayerService.AvatarWeapon(far.View(), "a") == "Pistol" && (far.Hold("a", CsRules.KnifeSlot) is null && MultiplayerService.AvatarWeapon(far.View(), "a") == "Pistol")
+            && MultiplayerService.AvatarWeapon(far.View(), "nobody") == "-", "Avatars show the held weapon's third-person model; with the knife (no third-person model) the gun they carry");
         // The held slot comes from AimModCore's self-pose weapon row.
         var frame = LivePoseFrame.Parse("AIMMOD_POSE_1\t5\npose\t1790871546958\t1\t2\t3\t0\t90\t0\t90\nweapon\t1790871546958\t2\n");
         Check(frame?.Weapon == 2 && LivePoseFrame.Parse("AIMMOD_POSE_1\t5\npose\t1\t1\t2\t3\t0\t90\t0\t90\nweapon\t1\t9\n") is null && LivePoseFrame.Parse("AIMMOD_POSE_1\t5\npose\t1\t1\t2\t3\t0\t90\t0\t90\n")?.Weapon is null,
@@ -128,6 +128,7 @@ static partial class MultiplayerChecks
         Check(MultiplayerPrefs.Apply(new(), J(new { roundVolume = 3 }))!.RoundVolume == 1 && MultiplayerPrefs.Apply(new(), J(new { roundVolume = -1 }))!.RoundVolume == 0 && new MultiplayerPrefs().RoundVolume == 0.7,
             "The bomb and round sounds volume is a preference (0-100 %, default 70 %)");
         RoundSounds();
+        GunfireChecks();
     }
 
     static void RoundSounds()

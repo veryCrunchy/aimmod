@@ -12,7 +12,8 @@ namespace AimMod.InGame.Multiplayer;
 //  - Plant start (keypad presses) and plant complete, defuse start and defuse complete, the
 //    defuse kit click, the explosion (positional), the "bomb planted" alert (2D, everyone),
 //    and small ticks when your team's bomb is dropped or picked up.
-// Played through Windows audio (winmm), mixed by AimMod, at the "Bomb and round sounds" volume.
+// Played through Windows audio (winmm), mixed by AimMod, at the "Bomb and round sounds" volume
+// (other players' gunfire and footsteps, GunAudio.cs, at the "Gunfire and footsteps" volume).
 // UE can't play a runtime-built sound from outside the engine without engine code AimMod
 // doesn't call (USoundWaveProcedural's audio queue isn't reflected), so these stay outside
 // the game's mixer: KovaaK's master volume doesn't apply, AimMod's own volume does.
@@ -205,7 +206,7 @@ static class BombSounds
         ["defuse-done"] = DefuseDone, ["kit"] = KitPickup, ["explosion"] = Explosion, ["planted-alert"] = PlantedAlert,
         ["dropped"] = () => Tick(1400), ["picked"] = () => Tick(2600),
         ["knife-swish"] = KnifeSwish, ["knife-stab-swish"] = StabSwish, ["knife-hit"] = KnifeHit, ["knife-stab"] = StabHit,
-    }.Concat(GrenadeSounds.All).ToDictionary(kv => kv.Key, kv => kv.Value);
+    }.Concat(GrenadeSounds.All).Concat(GunSounds.All).ToDictionary(kv => kv.Key, kv => kv.Value);
 
     // 16-bit mono PCM WAV.
     public static byte[] Wav(float[] samples)
@@ -285,11 +286,14 @@ sealed class BombAudio : IDisposable
     public static bool DeviceAllowed { get; set; }
     readonly Dictionary<string, float[]> sounds = new();
     readonly object gate = new();
-    sealed class Voice { public required float[] Samples; public int At; public int Delay; public float Left, Right; }
+    // StartAt: when it starts (local unix ms; 0 at once). Gun: other players' gunfire and footsteps
+    // (their own volume).
+    sealed class Voice { public required float[] Samples; public int At; public int Delay; public float Left, Right; public long StartAt; public bool Gun; }
+    public const int MaxVoices = 64;
     readonly List<Voice> voices = [];
     // Beep: when the bomb goes off (local unix ms), and its current gains from the listener.
     long? explodesAtLocal; float beepLeft, beepRight; long nextBeepAt; bool finalPlayed;
-    double volume = 0.7;
+    double volume = 0.7, gunVolume = 0.7;
     const double Headroom = 0.35;
     Thread? thread; volatile bool stopping; long failedAt = long.MinValue / 2;
     public int Played { get; private set; }
@@ -301,11 +305,12 @@ sealed class BombAudio : IDisposable
     }
 
     // Listener: the local camera (x, y, yaw), or null when unknown (sounds play centred).
-    public static (float Left, float Right) Gains(double[]? from, (double X, double Y, double Yaw)? listener, double gain)
+    // distanceScale: below 1 a sound carries farther (gunfire).
+    public static (float Left, float Right) Gains(double[]? from, (double X, double Y, double Yaw)? listener, double gain, double distanceScale = 1)
     {
         if (from is null || listener is not { } l) return ((float)(gain * Math.Sqrt(0.5) * 1.41), (float)(gain * Math.Sqrt(0.5) * 1.41));
         var dx = from[0] - l.X; var dy = from[1] - l.Y;
-        var near = BombSounds.Attenuation(Math.Sqrt(dx * dx + dy * dy));
+        var near = BombSounds.Attenuation(Math.Sqrt(dx * dx + dy * dy) * distanceScale);
         var (left, right) = BombSounds.Pan(dx, dy, l.Yaw);
         return ((float)(gain * near * left * 1.41), (float)(gain * near * right * 1.41));
     }
@@ -319,6 +324,24 @@ sealed class BombAudio : IDisposable
         lock (gate) { voices.Add(new Voice { Samples = Sound(cue.Sound), Left = l, Right = r }); Played++; }
         Start();
     }
+
+    // Other players' gunfire and footsteps (GunAudio.cs), at their own time and volume.
+    public void PlayAt(TimedCue timed, (double X, double Y, double Yaw)? listener)
+    {
+        if (gunVolume <= 0) return;
+        var cue = timed.Cue;
+        var (l, r) = Gains(cue.From, listener, cue.Gain, cue.Sound.StartsWith("gun-", StringComparison.Ordinal) ? GunSounds.ShotDistanceScale : 1);
+        lock (gate)
+        {
+            // A firefight never drowns the round sounds: past MaxVoices the oldest gunfire goes.
+            if (voices.Count >= MaxVoices && voices.FindIndex(v => v.Gun) is var oldest and >= 0) voices.RemoveAt(oldest);
+            voices.Add(new Voice { Samples = Sound(cue.Sound), Left = l, Right = r, StartAt = timed.At, Gun = true });
+            Played++;
+        }
+        Start();
+    }
+    public void SetGunVolume(double newVolume) { lock (gate) gunVolume = Math.Clamp(newVolume, 0, 1); }
+    public int Pending { get { lock (gate) return voices.Count(v => v.StartAt > 0); } }
 
     // Called every service tick: the volume, the planted bomb (local ms) and the listener.
     public void Update(double newVolume, (double[] At, long ExplodesAtLocal)? bomb, (double X, double Y, double Yaw)? listener)
@@ -377,16 +400,24 @@ sealed class BombAudio : IDisposable
             // Perceptual (the slider feels even), with headroom: these play outside KovaaK's mixer, at
             // Windows volume, so full scale would sit far above the game's own sounds.
             var gain = (float)(volume * volume * Headroom);
+            var gunGain = (float)(gunVolume * gunVolume * Headroom);
+            var bufferEnd = now + frames * 1000L / BombSounds.Rate;
             foreach (var v in voices)
             {
+                if (v.StartAt > 0)
+                {
+                    if (v.StartAt >= bufferEnd) continue; // not yet
+                    v.Delay = (int)Math.Clamp((v.StartAt - now) * BombSounds.Rate / 1000, 0, frames - 1); v.StartAt = 0;
+                }
                 var start = v.Delay; v.Delay = 0;
+                var g = v.Gun ? gunGain : gain;
                 for (var i = start; i < frames && v.At < v.Samples.Length; i++, v.At++)
                 {
-                    var x = v.Samples[v.At] * gain;
+                    var x = v.Samples[v.At] * g;
                     mix[i * 2] += x * v.Left; mix[i * 2 + 1] += x * v.Right;
                 }
             }
-            voices.RemoveAll(v => v.At >= v.Samples.Length);
+            voices.RemoveAll(v => v.StartAt == 0 && v.At >= v.Samples.Length);
         }
         for (var i = 0; i < frames * 2; i++)
         {
