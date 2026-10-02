@@ -148,7 +148,25 @@ static partial class MultiplayerChecks
         cs.Leave(carrier, t0 + CsRules.FreezeMs + 100);
         cs.Tick(t0 + CsRules.FreezeMs + 200);
         var spawn = cs.View().Spawns![carrier];
-        Check(cs.View().Bomb is { State: "dropped", Position: { } at } && at[0] == spawn[0] && Math.Abs(at[2] - (spawn[2] + CsRules.SpawnEyeAbove - 64)) < 0.01, "A carrier with no track drops the bomb at their spawn");
+        Check(cs.View().Bomb is { State: "dropped", Position: { } at } && at[0] == spawn[0] && Math.Abs(at[2] - spawn[2]) < 0.01, "A carrier with no track drops the bomb at their spawn point (a hull's centre)");
+        // With a track, the bomb lands at the carrier's capsule centre by its own hull (a CS body: the
+        // camera 167 cm above the centre), not a fixed 64 cm under the camera.
+        var cs2 = new CsMatch(["t1", "c1"], t0, 12, true, map, new Dictionary<string, int> { ["t1"] = 1, ["c1"] = 2 });
+        var live = t0 + CsRules.FreezeMs + 1;
+        cs2.Tick(live);
+        var carrier2 = cs2.View().Bomb.Carrier!;
+        cs2.Combat.Track(carrier2, new TrackBatch("m", 1, [new TrackSample(live + 50, 100, -3000, 312, 0, 0)], [], [167, 60, 145]));
+        cs2.Leave(carrier2, live + 60);
+        Check(cs2.View().Bomb is { State: "dropped", Position: { } drop } && Math.Abs(drop[2] - (312 - 167)) < 0.01, "A dropped bomb lies at the carrier's own hull centre");
+        // A bot remembers where it last saw an enemy as that enemy's track (whatever its hull).
+        var memory = new BotBrain(seed: 21);
+        memory.Reset("m#mem");
+        var seenAt = new BotPlayer("you", 1, 800, 0, 312, 2, true, 0);
+        BotWorld W(long now, bool visible) => new(now, LobbyModes.TeamDeathmatch, [("bot", BotSkills.Hard)], [new("bot", 0, 0, 0, 312, 1, true, 0), seenAt],
+            new Dictionary<string, BotSight> { ["bot"] = new(now, 0, 0, 145, 0, visible ? new HashSet<int> { 1 } : new HashSet<int>(), 0) }, null, null, []);
+        memory.Step(W(1000, true));
+        var chase = memory.Step(W(1100, false)).Orders.Single();
+        Check(chase.Mode == "goal" && chase.Goal is { } cg && cg[2] == 312, "A bot's last-seen memory keeps the enemy's track height, no fixed eye offset");
         // A bot's track follows a player's convention: floor plus a standing player's camera height.
         Check(Math.Abs(MultiplayerService.DefaultBotEyeHeight - (TrackingRound.DefaultHalfHeight + TrackingRound.DefaultEyeAboveCentre)) < 0.01, "A bot's camera height defaults to a standing body's");
         var sight = MultiplayerService.ParseBotSight("AIMMOD_BOTSIGHT_1\t1000\nbot\t1\t10\t20\t145\t90\t0\nbot\t2\t5\t5\t100\t0\n", 1000);

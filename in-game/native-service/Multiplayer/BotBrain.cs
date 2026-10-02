@@ -157,7 +157,8 @@ sealed class BotBrain(int seed = 0)
                 st.BurstShot = 0; st.NextShot = Math.Max(st.NextShot, st.ReactUntil);
             }
             if (pick.P is null) st.Target = null;
-            else { st.LastSeen = [pick.P.X, pick.P.Y, pick.P.Z - EyeAboveCentre]; st.LastSeenAt = w.Now; }
+            // Where it was: its track as is (a camera, whatever its hull); the walker goes by the floor under it.
+            else { st.LastSeen = [pick.P.X, pick.P.Y, pick.P.Z]; st.LastSeenAt = w.Now; }
 
             // The objective (CS) decides whether a bot keeps planting or defusing through a fight.
             var job = w.Cs is { } cs2 && csSelf is not null ? CsJob(w, cs2, csSelf, member, eye) : null;

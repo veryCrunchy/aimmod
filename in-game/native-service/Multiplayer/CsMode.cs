@@ -305,22 +305,26 @@ sealed class CsMatch
         if (defuser == victim) { defuser = null; defuseDoneAt = null; }
     }
 
-    // Where the bomb lands when its carrier drops it or goes down: the carrier's track (a player's
-    // camera; a bot's floor plus the same camera height), 64 below like the eye-to-centre AimModCore
-    // undoes (CsGear). Without a track now: where they were last seen this round, else their spawn.
+    // A player's capsule centre height from their track: a track is the camera, which stands the
+    // sender's own hull height above the centre (TrackBatch.Hull; a standing default until seen).
+    double Centre(string id, TrackSample at) => at.Z - (Combat.Body(id)?.EyeAbove ?? TrackingRound.DefaultEyeAboveCentre);
+
+    // Where the bomb lands when its carrier drops it or goes down: the carrier's capsule centre (AimModCore
+    // traces the floor below it, CsGear). Without a track now: where they were last seen this round,
+    // else their spawn point (which sits at a hull's centre).
     void DropBomb(string from)
     {
         carrier = null; bombState = "dropped";
-        if (Combat.Position(from) is { } at) bombAt = [at.X, at.Y, at.Z - 64];
-        else if (lastAt.TryGetValue(from, out var seen)) bombAt = [seen[0], seen[1], seen[2] - 64];
-        else if (roundSpawns.TryGetValue(from, out var s)) bombAt = [s[0], s[1], s[2] + CsRules.SpawnEyeAbove - 64];
+        if (Combat.Position(from) is { } at) bombAt = [at.X, at.Y, Centre(from, at)];
+        else if (lastAt.TryGetValue(from, out var seen)) bombAt = [seen[0], seen[1], seen[2]];
+        else if (roundSpawns.TryGetValue(from, out var s)) bombAt = [s[0], s[1], s[2]];
     }
-    readonly Dictionary<string, double[]> lastAt = new();
+    readonly Dictionary<string, double[]> lastAt = new(); // capsule centres
     // Remembered every tick while alive, for a drop with no track at that moment.
     void RememberPositions()
     {
         foreach (var p in players.Values)
-            if (Combat.Alive(p.Id) && Combat.Position(p.Id) is { } at) lastAt[p.Id] = [at.X, at.Y, at.Z];
+            if (Combat.Alive(p.Id) && Combat.Position(p.Id) is { } at) lastAt[p.Id] = [at.X, at.Y, Centre(p.Id, at)];
     }
 
     void StartRound(long now)
@@ -404,7 +408,7 @@ sealed class CsMatch
         if (Combat.Position(id) is not { } at) return "no-track";
         var yaw = at.Yaw * Math.PI / 180;
         carrier = null; bombState = "dropped";
-        bombAt = [Math.Round(at.X + Math.Cos(yaw) * DropAheadCm, 1), Math.Round(at.Y + Math.Sin(yaw) * DropAheadCm, 1), Math.Round(at.Z - 64, 1)];
+        bombAt = [Math.Round(at.X + Math.Cos(yaw) * DropAheadCm, 1), Math.Round(at.Y + Math.Sin(yaw) * DropAheadCm, 1), Math.Round(Centre(id, at), 1)];
         dropper = id; dropperBlockedUntil = now + DropBlockMs;
         if (planter == id) { planter = null; plantDoneAt = null; }
         Event("bomb-dropped", now, id, null);
@@ -436,7 +440,7 @@ sealed class CsMatch
         }
         if (side == CsRules.CT && Phase == "planted" && bombAt is { } bomb)
         {
-            if (Math.Sqrt((at.X - bomb[0]) * (at.X - bomb[0]) + (at.Y - bomb[1]) * (at.Y - bomb[1])) > CsRules.DefuseRadiusCm || Math.Abs(at.Z - 64 - bomb[2]) > 150) return "not-at-bomb";
+            if (Math.Sqrt((at.X - bomb[0]) * (at.X - bomb[0]) + (at.Y - bomb[1]) * (at.Y - bomb[1])) > CsRules.DefuseRadiusCm || Math.Abs(Centre(id, at) - bomb[2]) > 150) return "not-at-bomb";
             if (defuser is not null && defuser != id) return "busy";
             defuser = id; defuseDoneAt = now + (p.Kit ? CsRules.KitDefuseMs : CsRules.DefuseMs);
             Event("defusing", now, id, p.Kit ? "kit" : null);
@@ -454,7 +458,7 @@ sealed class CsMatch
         {
             if (t.Id == dropper && now < dropperBlockedUntil) continue;
             if (Combat.Alive(t.Id) && Combat.Position(t.Id) is { } at && Math.Sqrt((at.X - drop[0]) * (at.X - drop[0]) + (at.Y - drop[1]) * (at.Y - drop[1])) <= CsRules.BombPickupCm
-                && Math.Abs(at.Z - 64 - drop[2]) <= 120)
+                && Math.Abs(Centre(t.Id, at) - drop[2]) <= 120)
             { carrier = t.Id; bombState = "carried"; bombAt = null; dropper = null; Event("bomb-picked", now, t.Id, null); return; }
         }
     }
@@ -489,7 +493,7 @@ sealed class CsMatch
                 if (!Combat.Alive(pl) || at is null || plantFrom is not { } from || Math.Sqrt((at.X - from[0]) * (at.X - from[0]) + (at.Y - from[1]) * (at.Y - from[1])) > CsRules.PlantMoveCm) { planter = null; plantDoneAt = null; }
                 else if (now >= pd)
                 {
-                    Phase = "planted"; bombState = "planted"; carrier = null; bombAt = [at.X, at.Y, at.Z - 64]; explodesAt = now + CsRules.BombMs; PhaseEndsAt = explodesAt.Value; plantedThisRound = true;
+                    Phase = "planted"; bombState = "planted"; carrier = null; bombAt = [at.X, at.Y, Centre(pl, at)]; explodesAt = now + CsRules.BombMs; PhaseEndsAt = explodesAt.Value; plantedThisRound = true;
                     if (players.TryGetValue(pl, out var pp)) Pay(pp, CsRules.PlantReward, now, "plant");
                     Event("planted", now, pl, site);
                     planter = null; plantDoneAt = null;
