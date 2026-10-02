@@ -7,7 +7,8 @@
 // KovaaK's UI and applies overlay::Machine's plan every frame: visibility and
 // hit-testing, the toast or full-screen layout, and while the CS buy menu is
 // open UI-only input focused on our Gameface widget with the cursor on and
-// fire blocked, re-asserted while held. Game thread only.
+// fire blocked, re-asserted while held. The in-match chat input holds input the
+// same way and gets the typed characters relayed (CaptureText). Game thread only.
 #include "GameBindings.hpp"
 #include "Output.hpp"
 #include "World.hpp"
@@ -72,6 +73,21 @@ namespace aimmod
         std::vector<Click> m_clicks;
         long m_clickId{}, m_downX{}, m_downY{};
         void PublishPointer(bool on, long x, long y, bool down, long width, long height);
+        void RepublishPointer();
+        struct PointerLine { bool on; long x, y; bool down; long width, height; };
+        PointerLine m_pointerLine{};
+        // The chat input (Notice typing): the characters typed while it holds input, from a message
+        // hook on the game window's thread (WM_CHAR: layout, dead keys and IME results included),
+        // sent to the page as AimModKey(code, id, session) and listed in overlay-pointer.tsv.
+        void CaptureText(double now);
+        void StopText(const char* why);
+        struct Typed { long id; unsigned code; };
+        std::vector<Typed> m_typed;
+        bool m_capturing{};
+        void* m_textHook{};
+        long m_textSession{}, m_textId{};
+        int m_textSent{}, m_textFailed{};
+        double m_nextHookTry{};
         std::string m_url;
         overlay::Machine m_machine;
         overlay::Plan m_plan;

@@ -36,7 +36,7 @@ static partial class MultiplayerChecks
         input.Step(true, false, false, t += 100);
         Check(input.Open, "Open while typing");
         input.Step(true, false, true, t += 100);
-        Check(!input.Open && input.Closed == "enter", "Enter closes it (the game gets its keys back at once)");
+        Check(!input.Open && input.Closed == "enter" && input.Awaiting(t) && !input.Awaiting(t + ChatInput.SendGraceMs + 1), "Enter closes it (the game gets its keys back at once); the line may still come");
         Check(input.Accept(1, t + 1500) == MatchChat.Team && input.Closed == "sent" && input.Accept(1, t + 1600) is null,
             "The page's line for that input still goes out just after Enter, once");
         input.Begin(MatchChat.All, t += 100);

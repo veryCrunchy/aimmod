@@ -202,6 +202,49 @@ namespace overlay_checks
         CHECK(p.releaseMenuInput && !p.holdMenuInput, "after KovaaK's menu: game-only, never left in UI-only");
         p = m9.Next(c);
         CHECK(!p.releaseMenuInput, "once");
+        // The chat input: held like the buy menu (UI-only on our widget, fire blocked), with the typed
+        // characters relayed; Enter or Escape (typing off), alt-tab and KovaaK's menu always give the game its input back.
+        auto chat = ParseNotice(R"({"version":1,"active":false,"layout":"full","interactive":true,"cursor":false,"typing":true,"chat":{"open":"team","session":3,"lines":2}})");
+        CHECK(chat && chat->content && chat->typing && !chat->cursor && chat->interactive, "chat input notice");
+        auto feed = ParseNotice(R"({"version":1,"active":false,"layout":"full","chat":{"open":null,"session":3,"lines":2}})");
+        CHECK(feed && feed->content && !feed->typing && !feed->interactive, "a chat feed alone shows the layer, click-through");
+        aimmod::overlay::Machine mc;
+        aimmod::overlay::Frame k;
+        k.haveView = true;
+        k.notice = chat;
+        p = mc.Next(k);
+        CHECK(p.enterMenuInput && p.holdMenuInput && p.captureText && p.clickable && p.forwardPointer, "chat opens: input held, typed characters relayed");
+        p = mc.Next(k);
+        CHECK(p.holdMenuInput && p.captureText && !p.enterMenuInput, "held while typing");
+        k.notice = feed;
+        p = mc.Next(k);
+        CHECK(p.releaseMenuInput && !p.holdMenuInput && !p.captureText && !p.clickable, "Enter or Escape: input back to the game, no more characters");
+        k.notice = chat;
+        mc.Next(k);
+        k.focused = false;
+        p = mc.Next(k);
+        CHECK(p.forgetMenuInput && !p.captureText && !p.holdMenuInput, "alt-tab while typing: let go at once");
+        k.notice = feed; // the service closes the input when the window loses focus
+        k.focused = true;
+        p = mc.Next(k);
+        CHECK(p.releaseMenuInput && !p.captureText, "back in front: the game has its input");
+        k.notice = chat;
+        mc.Next(k);
+        k.pauseMenuVisible = true;
+        k.escapeRecent = true;
+        p = mc.Next(k);
+        k.escapeRecent = false;
+        CHECK(p.hidePauseMenu && p.captureText, "Escape's pause menu over the chat input closes again");
+        k.pauseMenuVisible = false;
+        aimmod::overlay::Notice closedChat = *chat;
+        closedChat.typing = false;
+        closedChat.interactive = false;
+        closedChat.swallowMenu = true;
+        k.notice = closedChat;
+        p = mc.Next(k);
+        CHECK(p.releaseMenuInput && !p.captureText, "the input closed by Escape: the game gets its input back");
+        CHECK(Describe(aimmod::overlay::Plan{}, [&] { aimmod::overlay::Machine md; aimmod::overlay::Frame d; d.haveView = true; d.notice = chat; return md.Next(d); }()).find("chat input") != std::string::npos,
+              "chat input changes are logged");
         // One log line per change.
         aimmod::overlay::Machine m6;
         aimmod::overlay::Plan before{}, after = m6.Next(f);

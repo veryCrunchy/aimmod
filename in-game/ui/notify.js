@@ -1,6 +1,7 @@
 // Always-on, non-interactive multiplayer notice shown by AimModNativeUI
 // (Notify.lua) outside the AimMod panel: invites, "host is starting" and
-// countdowns. It only reads the service's notice; keys are handled by the service.
+// countdowns. It only reads the service's notice; keys are handled by the service, except the
+// chat line typed while the chat input is open (chat.js, from AimModCore's relayed characters).
 (function(root){
   'use strict';
   var box=root.document.getElementById('notice'),timer=null,misses=0;
@@ -30,18 +31,23 @@
     if(strips)return;clear(box);
     strips=node('div','strips');card=node('div','toast-slot');box.appendChild(strips);box.appendChild(card);
   }
+  // In-match chat (chat.js): the feed, the input while it's open and the radio menu.
+  var chatRoot=root.document.getElementById('chat-hud');
+  function chat(n){if(root.AimModChat&&chatRoot)root.AimModChat.render(chatRoot,n&&n.chat||null,post);}
+  function chatHolds(n){return !!(n&&n.chat&&(n.chat.open||n.chat.radio));}
   function render(n){
-    boards(n);cs(n);parts();showDebug(!!(n&&n.cs&&n.cs.buyOpen));
+    boards(n);cs(n);chat(n);parts();showDebug(!!(n&&n.cs&&n.cs.buyOpen),chatHolds(n));
     var body=root.document.body,page=root.document.documentElement;
     function input(on){if(body)body.className=on?'input':'';if(page)page.className=on?'input':'';}
-    if(!n||(!n.active&&!n.badge&&!n.duel&&!n.combat&&!n.cs)){box.className='';input(false);clear(strips);clear(card);stripKey=toastKey='';return;}
+    if(!n||(!n.active&&!n.badge&&!n.duel&&!n.combat&&!n.cs)){box.className='';input(chatHolds(n)&&!!n.interactive);clear(strips);clear(card);stripKey=toastKey='';return;}
     // CS draws its own strip at the top, so notices move below it.
     var extra=n.cs&&root.AimModCsHud?' cs-on'+(n.cs.buyOpen?' cs-buying':''):n.duel||n.combat||n.cs?' duel-on':'';
     box.className=(n.active?'show '+(n.kind||'info'):'show')+extra;
     // The toast-sized layer takes clicks as a whole while it asks for them (see notify.css).
     // The full-screen layer takes every click while the CS buy menu is open (it holds the cursor then;
     // clicks elsewhere must not reach the game). Otherwise only the toast layout takes clicks as a whole.
-    input(!!n.interactive&&(n.layout!=='full'||!!(n.cs&&n.cs.buyOpen)));
+    // So does the chat input or a radio menu (both hold input like the buy menu).
+    input(!!n.interactive&&(n.layout!=='full'||!!(n.cs&&n.cs.buyOpen)||chatHolds(n)));
     var sk=JSON.stringify([n.duel,n.combat,root.AimModCsHud?null:n.cs,n.badge]);
     if(sk!==stripKey){
       stripKey=sk;clear(strips);
@@ -161,6 +167,13 @@
     x.onreadystatechange=function(){if(x.readyState===4){toastKey='';poll();}};
     x.send(JSON.stringify({action:action,id:id}));
   }
+  // A request with its own fields (the chat's line, its session, a radio pick).
+  function post(body){
+    var x=new root.XMLHttpRequest();x.open('POST',base()+'/multiplayer',true);x.timeout=5000;
+    x.setRequestHeader('X-AimMod-UI','1');x.setRequestHeader('Content-Type','application/json');
+    x.onreadystatechange=function(){if(x.readyState===4)poll();};
+    x.send(JSON.stringify(body));
+  }
   // A missed poll keeps what is on screen, so a button doesn't vanish under the cursor; eight in a row (2 s) clear it.
   function miss(){misses++;if(misses>=8)render(null);}
   // Pointer fallback: while the buy menu holds input AimModCore sends the cursor (game window
@@ -173,7 +186,7 @@
   function dropClass(el,c){el.className=(' '+el.className+' ').replace(' '+c+' ',' ').replace(/^\s+|\s+$/g,'');}
   function buttons(el,out){if(!el||!el.children)return out;for(var i=0;i<el.children.length;i++){var c=el.children[i];if(String(c.tagName).toUpperCase()==='BUTTON')out.push(c);buttons(c,out);}return out;}
   function buttonAt(x,y){
-    var list=buttons(box,buttons(csRoot,[]));
+    var list=buttons(box,buttons(csRoot,chatRoot?buttons(chatRoot,[]):[]));
     for(var i=list.length-1;i>=0;i--){var r=list[i].getBoundingClientRect&&list[i].getBoundingClientRect();if(r&&x>=r.left&&x<r.right&&y>=r.top&&y<r.bottom)return list[i];}
     return null;
   }
@@ -194,11 +207,14 @@
   // The same pointer through the service (AimModCore's overlay-pointer.tsv), polled every 50 ms while
   // buying, for when the direct event doesn't reach the page: the cursor for hover, and each new
   // click by where it went down and up (a click between two polls isn't lost).
-  var pointerTimer=null,clickSeen=null;
+  // The same file carries what is typed in the chat input (key lines, by id), for chat.js.
+  var pointerTimer=null,clickSeen=null,holding=false;
   function keyOf(el){return el?el.className.replace(' hover','')+'|'+el.textContent:null;}
   function filePointer(text){
     var lines=String(text||'').split('\n'),head=lines[0].split('\t');
-    if(head[0]!=='AIMMOD_POINTER_1'||head[1]!=='on'||counts.amMove>0)return;
+    if(head[0]!=='AIMMOD_POINTER_1')return;
+    if(root.AimModChat){var typed=[],typedIn=0;for(var k=1;k<lines.length;k++){var kc=lines[k].split('\t');if(kc[0]==='keys')typedIn=+kc[1];else if(kc[0]==='key'&&kc.length>=3)typed.push({id:+kc[1],code:+kc[2]});}if(typed.length)root.AimModChat.fileKeys(typed,typedIn);}
+    if(head[1]!=='on'||counts.amMove>0)return;
     var w=+head[5]||1,h=+head[6]||1,sx=(root.innerWidth||w)/w,sy=(root.innerHeight||h)/h;
     counts.fileMove++;
     var el=buttonAt(+head[2]*sx,+head[3]*sy);
@@ -214,9 +230,9 @@
     clickSeen=newest===null?0:newest;debug();
   }
   function pointerPoll(){
-    pointerTimer=null;if(!buying||!root.setTimeout)return;
+    pointerTimer=null;if(!(buying||holding)||!root.setTimeout)return;
     var x=new root.XMLHttpRequest();x.open('GET',base()+'/multiplayer-pointer',true);x.timeout=1000;
-    x.onreadystatechange=function(){if(x.readyState!==4)return;if(x.status===200)filePointer(x.responseText);if(buying&&!pointerTimer)pointerTimer=root.setTimeout(pointerPoll,50);};
+    x.onreadystatechange=function(){if(x.readyState!==4)return;if(x.status===200)filePointer(x.responseText);if((buying||holding)&&!pointerTimer)pointerTimer=root.setTimeout(pointerPoll,50);};
     x.send(null);
   }
   function debug(){
@@ -226,10 +242,12 @@
     if(buying&&line!==reported&&Date.now()-reportedAt>3000){reported=line;reportedAt=Date.now();
       var x=new root.XMLHttpRequest();x.open('POST',base()+'/multiplayer',true);x.setRequestHeader('X-AimMod-UI','1');x.setRequestHeader('Content-Type','application/json');x.send(JSON.stringify({action:'pointer-debug',counts:line}));}
   }
-  function showDebug(on){
-    buying=on;var body=root.document.body;
+  // on: the buy menu is open (counts on screen and in the log); hold: the chat input or a radio menu
+  // holds input (the pointer file is polled for their clicks and typed keys, no counts).
+  function showDebug(on,hold){
+    buying=on;holding=!!hold;var body=root.document.body;
     if(on&&!debugNode&&body){debugNode=node('div','pointer-debug');body.appendChild(debugNode);debug();}
-    if(on&&!pointerTimer&&root.setTimeout){clickSeen=null;pointerTimer=root.setTimeout(pointerPoll,50);}
+    if((on||holding)&&!pointerTimer&&root.setTimeout){clickSeen=null;pointerTimer=root.setTimeout(pointerPoll,50);}
     if(!on&&debugNode){if(debugNode.parentNode)debugNode.parentNode.removeChild(debugNode);debugNode=null;}
   }
   // AimModCore's events reach the page through Gameface's engine (cohtml.js, loaded first by notify.html).

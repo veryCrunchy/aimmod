@@ -13,6 +13,7 @@
 
 #include <chrono>
 #include <cstring>
+#include <mutex>
 
 namespace aimmod
 {
@@ -37,6 +38,25 @@ namespace aimmod
         // The same clock as Observer's `now`.
         double Seconds() { return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
         std::wstring Wide(const std::string& ascii) { return std::wstring(ascii.begin(), ascii.end()); }
+
+        // The chat input's characters: WM_CHAR as the game window's thread takes it from its queue
+        // (only while the chat input holds input). UTF-16 units; the page joins surrogate pairs.
+        constexpr std::size_t MaxTypedQueue = 256, MaxTypedListed = 48;
+        std::mutex g_typedLock;
+        std::vector<unsigned> g_typedQueue;
+        LRESULT CALLBACK TypedHook(int code, WPARAM removed, LPARAM message)
+        {
+            if (code == HC_ACTION && removed == PM_REMOVE && message)
+            {
+                const MSG* msg = reinterpret_cast<const MSG*>(message);
+                if (msg->message == WM_CHAR)
+                {
+                    std::lock_guard<std::mutex> lock(g_typedLock);
+                    if (g_typedQueue.size() < MaxTypedQueue) g_typedQueue.push_back(static_cast<unsigned>(msg->wParam & 0xFFFF));
+                }
+            }
+            return CallNextHookEx(nullptr, code, removed, message);
+        }
     } // namespace
 
     std::string OverlayHost::Name(UObject* object) const
@@ -251,6 +271,7 @@ namespace aimmod
 
     void OverlayHost::Remove(const char* why)
     {
+        StopText(why);
         UObject* player = m_player.Get();
         if (m_machine.holding() || m_blocking)
         {
@@ -363,6 +384,8 @@ namespace aimmod
         if (plan.releaseMenuInput) ReleaseMenuInput(player);
         if (plan.forgetMenuInput) BlockFire(player, false);
         if (plan.holdMenuInput) Reassert(player, now);
+        if (plan.captureText) CaptureText(now);
+        else if (m_capturing) StopText(plan.holdMenuInput ? "the chat input closed" : "input went back (the chat closed, alt-tab, or KovaaK's menu took over)");
         if (plan.forwardPointer) ForwardPointer(now);
         else if (m_plan.forwardPointer)
         {
@@ -541,15 +564,104 @@ namespace aimmod
     }
 
     // overlay-pointer.tsv (the service serves it at /multiplayer-pointer; the page polls it while
-    // the buy menu is open): the cursor, the button and the last clicks with their down and up points.
+    // the buy menu or the chat input is open): the cursor, the button and the last clicks with their
+    // down and up points, and while the chat input holds input the characters typed in it (its
+    // session, then the last 48 UTF-16 units by id).
     //   AIMMOD_POINTER_1\ton|off\t<x>\t<y>\t<0|1>\t<width>\t<height>\n  then  click\t<id>\t<dx>\t<dy>\t<ux>\t<uy>\n
+    //   keys\t<session>\n  then  key\t<id>\t<code>\n
     void OverlayHost::PublishPointer(bool on, long x, long y, bool down, long width, long height)
     {
-        std::string body = "AIMMOD_POINTER_1\t" + std::string(on ? "on" : "off") + "\t" + std::to_string(x) + "\t" + std::to_string(y) + "\t" + (down ? "1" : "0") + "\t" +
-                           std::to_string(width) + "\t" + std::to_string(height) + "\n";
+        m_pointerLine = {on, x, y, down, width, height};
+        RepublishPointer();
+    }
+
+    void OverlayHost::RepublishPointer()
+    {
+        const PointerLine& p = m_pointerLine;
+        std::string body = "AIMMOD_POINTER_1\t" + std::string(p.on ? "on" : "off") + "\t" + std::to_string(p.x) + "\t" + std::to_string(p.y) + "\t" + (p.down ? "1" : "0") + "\t" +
+                           std::to_string(p.width) + "\t" + std::to_string(p.height) + "\n";
         for (const Click& c : m_clicks)
             body += "click\t" + std::to_string(c.id) + "\t" + std::to_string(c.dx) + "\t" + std::to_string(c.dy) + "\t" + std::to_string(c.ux) + "\t" + std::to_string(c.uy) + "\n";
+        if (m_capturing)
+        {
+            body += "keys\t" + std::to_string(m_textSession) + "\n";
+            for (const Typed& t : m_typed) body += "key\t" + std::to_string(t.id) + "\t" + std::to_string(t.code) + "\n";
+        }
         m_output.PublishPointer(std::move(body));
+    }
+
+    // While the chat input holds input: a WH_GETMESSAGE hook on the game window's thread collects the
+    // WM_CHAR it takes from its queue (so keyboard layouts, dead keys, Shift and IME results arrive as
+    // the characters Windows made of them); each goes to the page as AimModKey(code, id, session) at
+    // once and into overlay-pointer.tsv for the page's polled fallback. Enter (13), Escape (27) and
+    // Backspace (8) come the same way. The hook exists only while the input is open.
+    void OverlayHost::CaptureText(double now)
+    {
+        if (!m_capturing)
+        {
+            m_capturing = true;
+            ++m_textSession;
+            m_typed.clear();
+            m_textSent = m_textFailed = 0;
+            m_nextHookTry = 0.0;
+            std::lock_guard<std::mutex> lock(g_typedLock);
+            g_typedQueue.clear();
+        }
+        if (!m_textHook && now >= m_nextHookTry)
+        {
+            m_nextHookTry = now + 1.0;
+            HWND window = GetForegroundWindow();
+            DWORD owner = 0;
+            const DWORD thread = window ? GetWindowThreadProcessId(window, &owner) : 0;
+            if (thread && owner == GetCurrentProcessId())
+            {
+                m_textHook = SetWindowsHookExW(WH_GETMESSAGE, TypedHook, nullptr, thread);
+                Log(std::string("overlay: chat input: ") + (m_textHook ? "relaying typed characters (message hook on the game window's thread " + std::to_string(thread) + ")"
+                                                                       : "the message hook FAILED (error " + std::to_string(GetLastError()) + "); the page types from Gameface's own keys"));
+            }
+            RepublishPointer();
+        }
+        std::vector<unsigned> typed;
+        {
+            std::lock_guard<std::mutex> lock(g_typedLock);
+            typed.swap(g_typedQueue);
+        }
+        if (typed.empty()) return;
+        UObject* widget = m_widget.Get();
+        for (unsigned code : typed)
+        {
+            m_typed.push_back({++m_textId, code});
+            UObject* event = nullptr;
+            bool sent = false;
+            if (widget && Call(widget, STR("/Script/CohtmlPlugin.CohtmlWidget:CreateJSEvent"), {}, &event) && Alive(event))
+            {
+                for (float number : {static_cast<float>(code), static_cast<float>(m_textId), static_cast<float>(m_textSession)})
+                    Call(event, STR("/Script/CohtmlPlugin.CohtmlJSEvent:AddFloat"), [number](const std::wstring&, FProperty*, std::uint8_t* v) { std::memcpy(v, &number, sizeof number); });
+                sent = Call(widget, STR("/Script/CohtmlPlugin.CohtmlWidget:TriggerJSEvent"), [event](const std::wstring& n, FProperty*, std::uint8_t* v) {
+                    if (n == STR("Name")) WriteFString(v, L"AimModKey");
+                    else if (n == STR("EventData")) WriteObject(v, event);
+                });
+            }
+            ++(sent ? m_textSent : m_textFailed);
+        }
+        if (m_typed.size() > MaxTypedListed) m_typed.erase(m_typed.begin(), m_typed.end() - static_cast<std::ptrdiff_t>(MaxTypedListed));
+        RepublishPointer();
+    }
+
+    void OverlayHost::StopText(const char* why)
+    {
+        if (!m_capturing) return;
+        if (m_textHook) UnhookWindowsHookEx(static_cast<HHOOK>(m_textHook));
+        Log(std::string("overlay: chat input: stopped relaying (") + why + "); " + std::to_string(m_textSent) + " characters sent as AimModKey" +
+            (m_textFailed ? ", " + std::to_string(m_textFailed) + " FAILED" : std::string()));
+        m_textHook = nullptr;
+        m_capturing = false;
+        m_typed.clear();
+        {
+            std::lock_guard<std::mutex> lock(g_typedLock);
+            g_typedQueue.clear();
+        }
+        RepublishPointer();
     }
 
     void OverlayHost::HidePauseMenu(UObject* player, UObject* menu)

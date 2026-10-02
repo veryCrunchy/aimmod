@@ -18,7 +18,8 @@ namespace aimmod::overlay
         bool content{};     // a notice, badge, mode HUD or standings: the layer shows
         bool full{};        // layout "full" (HUDs at the screen edges) or the top-centre toast
         bool interactive{}; // something on it takes clicks (buttons, the buy menu)
-        bool cursor{};      // the CS buy menu is open: it needs the mouse in game
+        bool cursor{};      // the CS buy menu (or a radio menu) is open: it needs the mouse in game
+        bool typing{};      // the in-match chat input is open: it needs the keyboard (held like the buy menu, text relayed)
         bool swallowMenu{}; // Escape just closed the buy menu: KovaaK's pause menu it opened closes again
         bool boardHeld{};   // the full scoreboard (its key is held)
     };
@@ -90,6 +91,7 @@ namespace aimmod::overlay
         bool hidePauseMenu{};   // KovaaK's pause menu opened by the Escape that closed (or was over) the buy menu
         bool focusViewport{};   // scoreboard held in game: keyboard focus back to the game viewport
         bool forwardPointer{};  // the buy menu holds input: AimModCore forwards the mouse to the page too
+        bool captureText{};     // the chat input holds input: AimModCore relays the typed characters to the page
         bool focused{true};
         Visibility viewVisibility{Visibility::Collapsed};
         Visibility widgetVisibility{Visibility::HitTestInvisible};

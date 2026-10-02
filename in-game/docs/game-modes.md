@@ -2133,6 +2133,110 @@ fixed loadouts), gun game (a weapon ladder; `grant` next weapon per kill),
 and King of the hill (a zone from metadata, score per second while alone in
 it).
 
+### 6.11 In-match chat, radio and bot callouts (built)
+
+Every mode has CS-style chat during a match (countdown, play and between
+rounds), for the match's players. Code: `MatchChat.cs` (routing, locations,
+limits, the input state machine), `MultiplayerService.Chat.cs` (keys, HUD view,
+`BotSay`), `ui/chat.js` (feed, input, radio menu), AimModCore's
+`overlay::Machine` and `OverlayHost::CaptureText`.
+
+#### 6.11.1 What players see and press
+
+- **Y** opens all chat, **U** team chat (modes with teams: CS and team
+  deathmatch; elsewhere U is all chat too). **Z / X / C** open the radio menus
+  in team modes (Commands: Going A, Going B, Rotate, Hold this position,
+  Regroup, Follow me, Fall back; Reports: Enemy spotted, Need backup, Taking
+  fire, Bomb spotted, Sector clear, In position; Responses: Affirmative,
+  Negative, Thanks, Sorry, Nice shot, Enemy down). A number key or a click
+  picks a callout; Escape, the same key again or 8 s untouched close it.
+- The keys are read like the CS keys (only with KovaaK's in front, no modifier
+  held). KovaaK's binds on Y, U, Z, X or C never block anything: the lobby's
+  Keybinds row, the load screen and the one in-game keybind notice name the
+  clash ("Radio responses and Crouch are both on C"), and the chat input shows
+  "KovaaK's also uses Y (all chat)." while it is open and for 15 s after the
+  match starts.
+- The feed sits bottom left, above the money in CS: the last 8 lines of this
+  match (and lobby lines said during it), `*DEAD* [team] Name @ A Site: text`
+  with the name in its team's colour (T amber, CT blue). Lines fade 10 s after
+  they arrive and all come back while the input is open.
+- While the input is open, the B, E, G, number, grenade and spectate keys and
+  the scoreboard key do nothing; opening chat or a radio menu closes the buy
+  menu.
+
+#### 6.11.2 Routing (host)
+
+A line is the lobby's `chat` command with `scope` (`all` or `team`) and
+optionally `radio: true`. The host stamps it (`ChatLine.Scope`, `Team`, `Dead`,
+`Place`, `Radio`, `Match`) and sends each member only the lines they may see
+(`MatchChat.For`, per peer in `snapshot` and `welcome`, and for the host's own
+view):
+
+- team lines reach the sender's match team only (CS teams, or team
+  deathmatch's), never the other team, spectators or lobby members outside the
+  match; they stay team-only after the match;
+- CS dead chat: a line said while down reaches only other dead players and
+  spectators until the match ends (lobby setting `deadTalk`, off by default,
+  lets it reach everyone);
+- team lines in CS carry where the sender stands (`MatchChat.Location`): the
+  map's callout zone (`cs.callouts` in the map spec, e.g. "Long A"), else the
+  bomb site they are in or within 6 m of ("A Site"), else a side's spawn within
+  10 m ("T Spawn", "CT Spawn"), else nothing; never while dead;
+- the lobby's own limits hold: 200 characters, control characters removed,
+  five lines in five seconds per member.
+
+#### 6.11.3 The bot chat contract
+
+`MultiplayerService.BotSay` is an `Action<string, bool, string>`: **(member,
+teamOnly, text)**. The service sets it; the bot AI calls it on the host with a
+bot's lobby member id:
+
+```csharp
+service.BotSay?.Invoke(bot.Id, true, "Smoking A main");   // [team] BOT Ace @ A Site: Smoking A main
+service.BotSay?.Invoke(bot.Id, false, "gg");              // [all] BOT Ace: gg
+```
+
+- It posts that bot's line exactly like a player's: team chat (when the mode
+  has teams; else all chat) with the bot's location prefix, or all chat. The
+  text is the callout only ("Smoking A main", "2 enemies B site", "Planting A",
+  "Rotating B", "Bomb down at mid"); the name and location are added.
+- Limits, applied silently (a dropped line is not an error): at most one line
+  per bot every 3 s (`MatchChat.BotGapMs`), and a callout anyone on that team
+  (person or bot) said in the last 5 s (`BotRepeatMs`, case and spacing
+  ignored) is not said again; then the lobby's own limit.
+- Only on the host, only for bots of the lobby that play the running match, and
+  only in countdown, play or between rounds. A dead CS bot's lines follow the
+  dead chat rule. Safe to call every tick: the 3 s check comes first.
+
+#### 6.11.4 Typing and input
+
+- The service owns the input's state (`ChatInput`): open on Y/U, closed on
+  Enter, Escape, the game window out of focus for 0.5 s, 2 minutes untouched or
+  the match ending. Each opening has a session number. While open the notice
+  says `typing: true` and `interactive: true` (the radio menu, like the buy
+  menu, says `cursor: true`); `chat` carries the feed for the page (`open`,
+  `session`, `closed`, `lines`, `radio`, `clashes`), and in
+  `multiplayer-notify.json` only its state (`open`, `session`, `lines` as a
+  count, `radio`).
+- AimModCore holds input for the chat input exactly as for the buy menu
+  (`overlay::Machine`: UI-only focused on the layer's Gameface widget, cursor
+  on, fire blocked, re-asserted while held; let go at once on alt-tab and given
+  back on return; KovaaK's pause menu that the Escape opened is closed again via
+  `swallowMenu`). While it holds input it also installs a `WH_GETMESSAGE` hook
+  on the game window's thread and relays each `WM_CHAR` it takes from the queue
+  (Windows' own characters: layout, Shift, dead keys and IME results, as UTF-16
+  units) to the page as `AimModKey(code, id, session)`, and lists the last 48 in
+  `overlay-pointer.tsv` (`keys\t<session>`, `key\t<id>\t<code>`) for the page's
+  50 ms poll. The hook exists only while the input is open.
+- The page (`chat.js`) types from those characters, each id once whichever path
+  brought it; when AimModCore relays nothing it types from Gameface's own key
+  events (one source per input). Enter posts `chat-send {session, text}`,
+  Escape `chat-close {session}`, Backspace deletes (a surrogate pair at once).
+  The service may see Enter first and close the input: the line is still taken
+  for 2 s after (`chat.closed: "enter"`).
+- With the Lua notice layer (ui-host.tsv `notice lua`) the input is held the
+  same way but only Gameface's own key events type.
+
 ## 7. Feasibility matrix
 
 Legend: **N** native profile or engine feature, **A** AimMod logic using

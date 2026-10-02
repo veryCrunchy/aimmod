@@ -1,0 +1,32 @@
+/* In-match chat (chat.js): bottom left, above the money in CS. Gameface-safe: solid colours, no blur. */
+#chat-hud{display:none;position:absolute;left:20px;bottom:120px;width:560px;pointer-events:none}
+#chat-hud.show{display:block}
+#chat-hud.cs{bottom:236px}
+.chat-feed{display:flex;flex-direction:column;align-items:flex-start}
+.chat-line{max-width:560px;margin-top:3px;padding:3px 8px;border-radius:4px;background:rgba(8,13,12,.72);font-size:14px;line-height:19px;color:#eef5f1;word-wrap:break-word}
+.chat-line span{margin-right:5px}
+.chat-line.system{color:#9fb4aa;font-style:italic}
+.chat-line.radio .chat-text{color:#cfe7dc}
+.chat-dead{color:#ff6b6b;font-weight:700}
+.chat-scope{color:#9fb4aa;font-weight:600}
+.chat-scope.team{color:#27e4a1}
+.chat-name{font-weight:700;color:#eef5f1}
+.chat-name.team1{color:#f0b45a}
+.chat-name.team2{color:#66ccff}
+.chat-place{color:#b9c9c1}
+.chat-colon{margin-left:-5px}
+.chat-input{display:flex;flex-direction:row;align-items:center;margin-top:6px;padding:5px 10px;border:1px solid #2c4a3d;border-radius:6px;background:rgba(11,17,16,.94);font-size:15px;line-height:20px}
+.chat-input.team{border-color:#27e4a1}
+.chat-input-label{color:#9fb4aa;font-weight:700;margin-right:8px;flex-shrink:0}
+.chat-input.team .chat-input-label{color:#27e4a1}
+.chat-draft{color:#eef5f1;white-space:pre;overflow:hidden}
+.chat-caret{color:#27e4a1;margin-left:1px}
+.chat-hint{margin-top:3px;font-size:11px;color:#9fb4aa}
+.chat-clash{margin-top:3px;font-size:12px;color:#f6c46a}
+.chat-radio{width:300px;margin-bottom:6px;padding:8px 10px;border:1px solid #2c4a3d;border-top:3px solid #27e4a1;border-radius:8px;background:rgba(11,17,16,.95);pointer-events:auto}
+.chat-radio-head{font-size:12px;font-weight:700;letter-spacing:.6px;color:#27e4a1;margin-bottom:6px}
+.chat-radio-item{display:flex;flex-direction:row;align-items:center;width:100%;height:28px;margin-top:2px;padding:0 8px;border:1px solid #22302a;border-radius:5px;background:#16211d;color:#eef5f1;font-family:Roboto,Arial,sans-serif;font-size:13px;text-align:left;cursor:pointer}
+.chat-radio-item.hover{background:#1f3a30;border-color:#27e4a1}
+.chat-radio-key{display:block;width:18px;margin-right:8px;color:#f0b45a;font-weight:700}
+.chat-radio-foot{margin-top:6px;font-size:11px;color:#9fb4aa}
+@media(min-height:1300px){#chat-hud{transform:scale(1.33);transform-origin:0 100%}#chat-hud.cs{bottom:300px}}

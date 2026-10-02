@@ -226,13 +226,14 @@ function M.update(panelOpen,replayActive,menuVisible,native)
         lastId=nil;lastCount=nil
         return
     end
-    wantCursor=text~=nil and text:find('"cursor":true',1,true)~=nil
+    -- The chat input holds input the same way (the page types from Gameface's own keys here).
+    wantCursor=text~=nil and (text:find('"cursor":true',1,true)~=nil or text:find('"typing":true',1,true)~=nil)
     swallow=text~=nil and text:find('"swallowMenu":true',1,true)~=nil
     boardHeld=text~=nil and text:find('"boardFull":{',1,true)~=nil
     cursorFor(wantCursor,panelOpen or replayActive or menuVisible==true)
     -- A notice, only the watcher badge ("2 watching: ..."), a mode HUD (tracking duel, combat),
-    -- or the match standings (corner panel, or the scoreboard while its key is held).
-    local active=text~=nil and #text<=16384 and (text:find('"active":true',1,true)~=nil or text:find('"badge":"',1,true)~=nil or text:find('"duel":{',1,true)~=nil or text:find('"combat":{',1,true)~=nil or text:find('"cs":{',1,true)~=nil or text:find('"board":{',1,true)~=nil or text:find('"boardFull":{',1,true)~=nil)
+    -- the match standings (corner panel, or the scoreboard while its key is held), or the match chat.
+    local active=text~=nil and #text<=16384 and (text:find('"active":true',1,true)~=nil or text:find('"badge":"',1,true)~=nil or text:find('"duel":{',1,true)~=nil or text:find('"combat":{',1,true)~=nil or text:find('"cs":{',1,true)~=nil or text:find('"board":{',1,true)~=nil or text:find('"boardFull":{',1,true)~=nil or text:find('"chat":{',1,true)~=nil)
     if not active or panelOpen or replayActive then M.hide();lastId=nil;lastCount=nil;return end
     local id=text:match('"id":"([^"]+)"')
     local sound=text:match('"sound":"(%a+)"')

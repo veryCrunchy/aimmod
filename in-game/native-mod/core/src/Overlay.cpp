@@ -61,11 +61,12 @@ namespace aimmod::overlay
         Notice n;
         const json::Value* badge = root->find("badge");
         n.content = True(*root, "active") || (badge && badge->isString()) || IsObject(*root, "duel") || IsObject(*root, "combat") ||
-                    IsObject(*root, "cs") || IsObject(*root, "board") || IsObject(*root, "boardFull");
+                    IsObject(*root, "cs") || IsObject(*root, "board") || IsObject(*root, "boardFull") || IsObject(*root, "chat");
         const json::Value* layout = root->find("layout");
         n.full = layout && layout->isString() && layout->string == "full";
         n.interactive = True(*root, "interactive");
         n.cursor = True(*root, "cursor");
+        n.typing = True(*root, "typing");
         n.swallowMenu = True(*root, "swallowMenu");
         n.boardHeld = IsObject(*root, "boardFull");
         return n;
@@ -180,10 +181,12 @@ namespace aimmod::overlay
             pause = false;
         }
         m_pauseWasVisible = pause;
-        // The buy menu holds input only while KovaaK's is in front: alt-tab lets go at once.
-        const bool menu = p.visible && n.cursor && !pause && f.focused;
+        // The buy menu (and the chat input, the same way) holds input only while KovaaK's is in front:
+        // alt-tab lets go at once.
+        const bool menu = p.visible && (n.cursor || n.typing) && !pause && f.focused;
         p.holdMenuInput = menu;
         p.forwardPointer = menu && f.haveView;
+        p.captureText = menu && n.typing && f.haveView;
         if (menu && !m_holding)
         {
             p.enterMenuInput = true;
@@ -249,6 +252,7 @@ namespace aimmod::overlay
         if (b.forgetMenuInput) add("buy menu input handed to KovaaK's menu or the AimMod panel (input left as they set it)");
         if (b.hidePauseMenu) add("closed KovaaK's pause menu opened by Escape over the buy menu");
         if (a.focused != b.focused) add(b.focused ? "KovaaK's window is in front again" : "KovaaK's window lost focus (alt-tab): held input let go");
+        if (a.captureText != b.captureText) add(b.captureText ? "chat input: relaying typed characters to the page" : "chat input closed: no more typed characters");
         if (a.focusViewport != b.focusViewport) add(b.focusViewport ? "scoreboard held: keeping keyboard focus on the game viewport" : "scoreboard released");
         return out;
     }

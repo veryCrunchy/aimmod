@@ -60,6 +60,8 @@ static class MultiplayerHosting
         routes.MapGet(prefix + "/cshud.css", () => Results.Stream(typeof(MultiplayerHosting).Assembly.GetManifestResourceStream("AimMod.CsHudStyle")!, "text/css"));
         routes.MapGet(prefix + "/worldtags.js", () => Results.Stream(typeof(MultiplayerHosting).Assembly.GetManifestResourceStream("AimMod.WorldTagsScript")!, "application/javascript"));
         routes.MapGet(prefix + "/worldtags.css", () => Results.Stream(typeof(MultiplayerHosting).Assembly.GetManifestResourceStream("AimMod.WorldTagsStyle")!, "text/css"));
+        routes.MapGet(prefix + "/chat.js", () => Results.Stream(typeof(MultiplayerHosting).Assembly.GetManifestResourceStream("AimMod.ChatScript")!, "application/javascript"));
+        routes.MapGet(prefix + "/chat.css", () => Results.Stream(typeof(MultiplayerHosting).Assembly.GetManifestResourceStream("AimMod.ChatStyle")!, "text/css"));
         routes.MapGet(prefix + "/standings.js", () => Results.Stream(typeof(MultiplayerHosting).Assembly.GetManifestResourceStream("AimMod.StandingsScript")!, "application/javascript"));
         routes.MapGet(prefix + "/standings.css", () => Results.Stream(typeof(MultiplayerHosting).Assembly.GetManifestResourceStream("AimMod.StandingsStyle")!, "text/css"));
         // The always-on notice layer AimModNativeUI shows outside the AimMod panel.

@@ -121,6 +121,8 @@ sealed class ChatInput
     public bool Open => Scope is not null;
     // Why it last closed: "enter", "escape", "focus", "sent", "cancel", "idle" or "match".
     public string? Closed { get; private set; }
+    // Enter just closed it and the page's line may still come (SendGraceMs).
+    public bool Awaiting(long now) => !Open && Closed == "enter" && now - closedAt <= SendGraceMs;
     long closedAt = long.MinValue / 2, openedAt; long? awaySince; string? closedScope; long closedSession;
 
     public bool Begin(string scope, long now)

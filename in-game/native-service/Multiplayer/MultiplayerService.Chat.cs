@@ -143,7 +143,7 @@ sealed partial class MultiplayerService
     internal sealed record ChatLineView(long Id, string Scope, string Name, int Team, bool Dead, string? Place, string Text, bool Radio, bool You, int Age);
     internal sealed record ChatRadioView(int Group, string Key, string Title, IReadOnlyList<string> Items);
     internal sealed record ChatHudView(string? Open, long Session, bool Teams, string AllKey, string TeamKey, IReadOnlyList<string> RadioKeys, bool Cs,
-        IReadOnlyList<ChatLineView> Lines, ChatRadioView? Radio, IReadOnlyList<string> Clashes);
+        IReadOnlyList<ChatLineView> Lines, ChatRadioView? Radio, IReadOnlyList<string> Clashes, string? Closed = null);
     internal ChatHudView? ChatHud()
     {
         var whole = Current;
@@ -157,8 +157,9 @@ sealed partial class MultiplayerService
         var teams = MatchChat.Teams(m);
         var radio = radioGroup is { } g ? new ChatRadioView(g, RadioKeys[g], MatchChat.Radio[g].Title, MatchChat.Radio[g].Items) : null;
         var clashes = chatInput.Open || hostNow - since < 15_000 ? ChatKeyClashes(KeyBinds.GameKeys(library.Root), teams) : [];
-        if (lines.Length == 0 && !chatInput.Open && radio is null && clashes.Count == 0) return null;
-        return new ChatHudView(chatInput.Scope, chatInput.Session, teams, ChatAllKey, ChatTeamKey, teams ? RadioKeys : [], m.Cs is not null, lines, radio, clashes);
+        if (lines.Length == 0 && !chatInput.Open && !chatInput.Awaiting(clock()) && radio is null && clashes.Count == 0) return null;
+        // closed: why the last input closed ("enter": the page still sends what it typed, if it hasn't).
+        return new ChatHudView(chatInput.Scope, chatInput.Session, teams, ChatAllKey, ChatTeamKey, teams ? RadioKeys : [], m.Cs is not null, lines, radio, clashes, chatInput.Closed);
     }
 
     // KovaaK's own binds (Input.ini) on the chat keys. The keys still open chat; this only says so.
