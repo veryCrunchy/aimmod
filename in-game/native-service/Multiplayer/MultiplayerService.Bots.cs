@@ -96,7 +96,8 @@ sealed partial class MultiplayerService
             var eye = DefaultBotEyeHeight;
             var samples = Enumerable.Range(0, 5).Select(i => new TrackSample(t - 200 + i * 50, pose.Pose[0], pose.Pose[1] - 600, eye, 0, 90)).ToArray();
             Send(hostPeer, "track", new TrackBatch(match.Id, match.Round, samples, []).Body());
-            Send(hostPeer, "hit", new HitClaim(match.Id, match.Round, 1, t, pose.Pose[0], pose.Pose[1] - 600, eye, 0, 90, false, null, null, null, null, null).Body());
+            // Through the same outbox as every claim (resent until the host's hit-ack), decided by the host.
+            SendClaim(new HitClaim(match.Id, match.Round, 1, t, pose.Pose[0], pose.Pose[1] - 600, eye, 0, 90, false, null, null, null, null, null));
             return true;
         }
     }
