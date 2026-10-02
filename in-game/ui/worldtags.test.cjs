@@ -25,3 +25,15 @@ test('AimModCore tags draw teammates in team colours and only an aimed enemy, re
   s.fire('not json');
   assert.equal(mate.style.display,'none','bad data clears the layer');
 });
+test('CS teammates show their gear under the name: bomb, weapon, armour, kit and health; enemies never do',()=>{
+  const s=setup();
+  s.fire(JSON.stringify({tags:[{n:'Nova',t:'CT',f:1,a:1,c:0,x:0.5,y:0.5,d:8,g:'w=M4A1-S;hp=24;ar=1;hm=1;kit=1'},{n:'Ash',t:'T',f:0,a:1,c:1,x:0.4,y:0.5,d:20}]}));
+  const [mate,foe]=s.body.children[0].children;
+  assert.match(mate.className,/geared/);assert.equal(mate.weaponNode.textContent,'M4A1-S');
+  assert.equal(mate.kitNode.style.display,'');assert.equal(mate.bombNode.style.display,'none');assert.equal(mate.armorNode.textContent,'A+H');
+  assert.equal(mate.hpFill.style.width,'24%');assert.match(mate.hpFill.className,/low/);
+  assert.doesNotMatch(foe.className,/geared/);assert.equal(foe.weaponNode.textContent,'');assert.equal(foe.hpBar.style.display,'none');
+  s.fire(JSON.stringify({tags:[{n:'Nova',t:'T',f:1,a:1,c:0,x:0.5,y:0.5,d:8,g:'w=Glock-18;hp=100;c4=1'}]}));
+  assert.equal(mate.bombNode.style.display,'','the bomb carrier is marked');assert.equal(mate.kitNode.style.display,'none');assert.equal(mate.armorNode.style.display,'none');
+  assert.deepEqual(Object.assign({},s.api.gearOf('w=AK-47;hp=5')),{w:'AK-47',hp:'5'});
+});

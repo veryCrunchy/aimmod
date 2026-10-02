@@ -93,3 +93,19 @@ test('down in a round: the HUD names who the camera follows and how to switch',(
   s.hud.render(s.root,Object.assign({},base,{buyOpen:false,phase:'live'}),()=>{});
   assert.ok(!s.walk(s.root).some(e=>e.className==='cs-watch'),'alive: no spectator line');
 });
+test('the buy menu stays hidden until it has a size, then is centred again on resize (never shown at the top left)',()=>{
+  class El{constructor(tag){this.tag=tag;this.style={};this.children=[];this.attrs={};this.className='';this.offsetWidth=0;this.offsetHeight=0;}
+    appendChild(c){c.parentNode=this;this.children.push(c);return c;}removeChild(c){this.children.splice(this.children.indexOf(c),1);}get firstChild(){return this.children[0];}
+    setAttribute(k,v){this.attrs[k]=String(v);}getAttribute(k){return this.attrs[k];}getContext(){return null;}}
+  const timers=[],listeners={};
+  const window={document:{createElement:t=>new El(t)},innerWidth:1920,innerHeight:1080,setTimeout:f=>timers.push(f),addEventListener:(n,f)=>{listeners[n]=f;}};
+  vm.runInContext(fs.readFileSync(path.join(__dirname,'cshud.js'),'utf8'),vm.createContext({window}));
+  const root=new El('section');window.AimModCsHud.render(root,base,()=>{});
+  const walk=e=>[e,...e.children.flatMap(walk)];
+  const menu=walk(root).find(e=>/cs-buy\b/.test(e.className)&&e.attrs.role==='dialog');
+  assert.ok(menu&&!/placed/.test(menu.className),'hidden while Gameface has not laid it out');
+  menu.offsetWidth=640;menu.offsetHeight=520;timers.shift()();
+  assert.match(menu.className,/placed/);assert.equal(menu.style.left,'640px');assert.equal(menu.style.top,'280px','centred vertically');
+  window.innerWidth=2560;window.innerHeight=1440;listeners.resize();
+  assert.equal(menu.style.left,String(Math.round((2560-640*1.33)/2))+'px','re-centred when the view resizes');
+});

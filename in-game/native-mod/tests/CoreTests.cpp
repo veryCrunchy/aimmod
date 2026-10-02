@@ -757,7 +757,58 @@ static void MatchPlayChecks()
           "malformed round states are rejected whole");
 
     ShotRecord shot{1790000000123, 4, {1, 2, 3}, {1, 0, 0}, 1, 9, true, false};
-    CHECK(FormatShot(shot) == "shot\t1790000000123\t4\t1\t2\t3\t1\t0\t0\t1\t9\t1\t0\n", "shot row layout");
+    CHECK(FormatShot(shot) == "shot\t1790000000123\t4\t1\t2\t3\t1\t0\t0\t1\t9\t1\t0\t0\t0\t0\t0\t0\t-1\t0\n", "shot row layout (no drawn capsule)");
+    ShotRecord drawn = shot;
+    drawn.gameHit = true;
+    drawn.targetCenter[0] = 500, drawn.targetCenter[1] = -20.5, drawn.targetCenter[2] = 100;
+    drawn.targetRadius = 34, drawn.targetHalfHeight = 96, drawn.gameDamage = 144, drawn.source = SourceNear;
+    CHECK(FormatShot(drawn) == "shot\t1790000000123\t4\t1\t2\t3\t1\t0\t0\t1\t9\t1\t1\t500\t-20.5\t100\t34\t96\t144\t2\n",
+          "shot row carries the drawn capsule, the game's damage per hit and the target source");
+
+    // Target pick: what the ray meets first; with no exact hit, the nearest pass within reach.
+    const std::vector<Capsule> drawnTargets = {{7, {1000, 0, 100}, 34, 96}, {8, {600, 0, 100}, 34, 96}, {9, {800, 200, 100}, 34, 96}};
+    const double eye[3] = {0, 0, 164}, ahead[3] = {1, 0, 0};
+    auto first = PickTarget(eye, ahead, drawnTargets, 0);
+    CHECK(first && first->index == 1 && first->gap == 0 && first->head && std::fabs(first->along - 566) < 1, "the nearest capsule the ray meets wins (eye height is the head zone)");
+    const double chest[3] = {0, 0, 120};
+    auto body2 = PickTarget(chest, ahead, drawnTargets, 0);
+    CHECK(body2 && body2->index == 1 && !body2->head, "a chest-high ray is a body hit");
+    // A ray 10 cm over the head of target 8 (top at z = 196): no exact hit, but within the game-hit reach.
+    const double over[3] = {0, 0, 206}, level[3] = {1, 0, 0};
+    CHECK(!PickTarget(over, level, {drawnTargets[1]}, 0), "a ray over the capsule meets nothing");
+    auto nearPass = PickTarget(over, level, {drawnTargets[1]}, GameHitToleranceCm);
+    CHECK(nearPass && nearPass->index == 0 && std::fabs(nearPass->gap - 10) < 0.01 && nearPass->head, "a game hit just over the capsule is the head of the nearest target");
+    CHECK(!PickTarget(over, level, {drawnTargets[1]}, 5), "but not beyond the reach");
+    const auto pass = RayCapsulePass(chest, ahead, drawnTargets[2].center, 34, 96);
+    CHECK(std::fabs(pass.gap - 166) < 0.01 && std::fabs(pass.along - 800) < 0.01 && pass.z == 120, "the pass gap is the distance outside the surface");
+
+    // The shot log: kept until acknowledged, never silently lost in a burst.
+    ShotLog log;
+    for (std::uint64_t i = 1; i <= 40; ++i)
+    {
+        ShotRecord r;
+        r.unixMs = 1000 + static_cast<std::int64_t>(i);
+        r.sequence = i;
+        log.Add(r);
+    }
+    log.Prune(1100);
+    CHECK(log.shots().size() == 40 && !log.ackSeen(), "a burst of 40 shots stays whole before any acknowledgement");
+    log.Ack(25);
+    CHECK(log.shots().size() == 15 && log.shots().front().sequence == 26 && log.acked() == 25, "acknowledged shots leave the log");
+    for (std::uint64_t i = 41; i <= 41 + ShotLog::MaxKept; ++i)
+    {
+        ShotRecord r;
+        r.unixMs = 2000;
+        r.sequence = i;
+        log.Add(r);
+    }
+    log.Prune(2000);
+    CHECK(log.shots().size() == ShotLog::MaxKept && log.lost() == 16, "past the bound the oldest unacknowledged shots are counted as lost");
+    log.Prune(2000 + ShotLog::MaxAgeMs + 1);
+    CHECK(log.shots().empty() && log.lost() == 16 + ShotLog::MaxKept, "and so are shots older than the age bound");
+    auto ack = ParseShotRequest("1790000000000\t812\t1789999990000\r\n");
+    CHECK(ack && ack->sequence == 812 && ack->session == 1789999990000, "the request carries the acknowledged shot and the session");
+    CHECK(!ParseShotRequest("1790000000000") && !ParseShotRequest("1\tx\t2") && !ParseShotRequest(""), "a bare or malformed request acknowledges nothing");
 }
 
 // Cosmetics page preview frames: a synthetic capture pair. The "character" is

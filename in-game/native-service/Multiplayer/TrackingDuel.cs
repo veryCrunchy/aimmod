@@ -125,6 +125,56 @@ static class TrackGeometry
         return px * px + py * py + pz * pz <= radius * radius;
     }
 
+    // Where the ray (unit direction) first enters the capsule: the distance along it, null for a miss
+    // (AimModCore's RayCapsule).
+    public static double? Entry(double ox, double oy, double oz, double dx, double dy, double dz, double cx, double cy, double cz, double radius, double halfHeight)
+    {
+        var seg = Math.Max(0, halfHeight - radius);
+        double best = -1;
+        double wx = ox - cx, wy = oy - cy;
+        var a = dx * dx + dy * dy;
+        if (a > 1e-12)
+        {
+            var b = 2 * (wx * dx + wy * dy);
+            var cc = wx * wx + wy * wy - radius * radius;
+            var disc = b * b - 4 * a * cc;
+            if (disc >= 0)
+            {
+                var t = (-b - Math.Sqrt(disc)) / (2 * a);
+                var z = oz + t * dz - cz;
+                if (t >= 0 && Math.Abs(z) <= seg) best = t;
+            }
+        }
+        foreach (var end in new[] { -1.0, 1.0 })
+        {
+            double sx = ox - cx, sy = oy - cy, sz = oz - (cz + end * seg);
+            var b = sx * dx + sy * dy + sz * dz;
+            var cc = sx * sx + sy * sy + sz * sz - radius * radius;
+            var disc = b * b - cc;
+            if (disc < 0) continue;
+            var t = -b - Math.Sqrt(disc);
+            if (t >= 0 && (best < 0 || t < best)) best = t;
+        }
+        return best < 0 ? null : best;
+    }
+
+    // How the ray passes the capsule: the gap outside its surface (0 when it enters), the distance
+    // along the ray there and that point's height (AimModCore's RayCapsulePass).
+    public static (double Gap, double Along, double Z) Pass(double ox, double oy, double oz, double dx, double dy, double dz, double cx, double cy, double cz, double radius, double halfHeight)
+    {
+        if (Entry(ox, oy, oz, dx, dy, dz, cx, cy, cz, radius, halfHeight) is { } hit) return (0, hit, oz + dz * hit);
+        var seg = Math.Max(0, halfHeight - radius);
+        double wx = ox - cx, wy = oy - cy, wz = oz - cz;
+        var b = dz; var d = dx * wx + dy * wy + dz * wz; var denom = 1 - b * b;
+        double s = 0, t = wz;
+        if (denom >= 1e-9) { s = (b * wz - d) / denom; t = (wz - b * d) / denom; }
+        s = Math.Max(0, s); t = Math.Clamp(t, -seg, seg);
+        s = Math.Max(0, -(dx * wx + dy * wy + dz * (wz - t)));
+        t = Math.Clamp(wz + s * dz, -seg, seg);
+        double px = wx + s * dx, py = wy + s * dy, pz = wz + s * dz - t;
+        return (Math.Max(0, Math.Sqrt(px * px + py * py + pz * pz) - radius), s, oz + dz * s);
+    }
+
     public static (double X, double Y, double Z) Direction(double pitch, double yaw)
     {
         var p = pitch * Math.PI / 180; var y = yaw * Math.PI / 180;
@@ -369,19 +419,25 @@ sealed class SelfPoseTracker(string outputFolder)
         // AimModCore's tag rows name each avatar's stream; map streams back to members.
         var byStream = (members ?? []).ToDictionary(StreamIds.For, m => m);
         foreach (var (stream, member) in aliases) byStream[stream] = member;
-        // Target rows are the latest drawn positions, so they belong to the newest pose.
-        var at = frame.Poses[^1].UnixMs + offsetMs;
-        lastSeen.Clear();
-        foreach (var t in frame.Targets)
+        // Earlier publications' drawn targets (seen rows) first, so a poll slower than AimModCore's
+        // 30 Hz still gets every drawn position; then the target rows, the latest drawn positions,
+        // which belong to the newest pose. A row already taken (as the latest, last time) is skipped.
+        void Add(long at, double[] t, bool latest)
         {
             var id = (int)t[0];
             var member = frame.Tags.TryGetValue(id, out var stream) && byStream.TryGetValue(stream, out var m) ? m : null;
-            var row = new TrackSeen(at, id, t[1], t[2], t[3], t[4], t[5], member); seenRows.Add(row); lastSeen[row.Id] = row;
+            var row = new TrackSeen(at, id, t[1], t[2], t[3], t[4], t[5], member);
+            if (latest) lastSeen[row.Id] = row;
             if (!seenHistory.TryGetValue(id, out var history)) seenHistory[id] = history = [];
-            if (history.Count == 0 || history[^1].T < at) history.Add(row);
+            if (history.Count > 0 && history[^1].T >= at) return;
+            history.Add(row); seenRows.Add(row);
             var cut = history.FindIndex(r => r.T >= at - SeenHistoryMs);
             if (cut > 0) history.RemoveRange(0, cut);
         }
+        foreach (var (ms, t) in frame.Seen) Add(ms + offsetMs, t, false);
+        var at = frame.Poses[^1].UnixMs + offsetMs;
+        lastSeen.Clear();
+        foreach (var t in frame.Targets) Add(at, t, true);
         if (samples.Count > 4 * TrackBatch.MaxSamples) samples.RemoveRange(0, samples.Count - 4 * TrackBatch.MaxSamples);
         if (seenRows.Count > 4 * TrackBatch.MaxSeen) seenRows.RemoveRange(0, seenRows.Count - 4 * TrackBatch.MaxSeen);
     }

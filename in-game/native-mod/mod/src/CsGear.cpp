@@ -5,10 +5,12 @@
 #include "World.hpp"
 
 #include <Unreal/AActor.hpp>
+#include <Unreal/Core/HAL/UnrealMemory.hpp>
 #include <Unreal/CoreUObject/UObject/Class.hpp>
 #include <Unreal/FProperty.hpp>
 #include <Unreal/GameplayStatics.hpp>
 #include <Unreal/NameTypes.hpp>
+#include <Unreal/Property/FBoolProperty.hpp>
 #include <Unreal/Property/FStructProperty.hpp>
 #include <Unreal/Rotator.hpp>
 #include <Unreal/Transform.hpp>
@@ -307,6 +309,71 @@ namespace aimmod
         if (UObject* b = m_handBomb.Get(); b && Alive(b)) SetVisible(b, show == cs::BombSlot, true);
     }
 
+    // The highest floor between `top` and `bottom` at (x, y): a line trace for the map's static and
+    // dynamic geometry (not pawns, so nobody standing on it gets in the way). Nullopt without a hit.
+    std::optional<double> CsGear::FloorBelow(UObject* context, double x, double y, double top, double bottom)
+    {
+        UObject* kismet = Default(STR("/Script/Engine.Default__KismetSystemLibrary"));
+        if (!context || !kismet) return std::nullopt;
+        struct RawBytes { std::uint8_t* data; std::int32_t num, max; };
+        bool hit = false, inside = false;
+        double z = 0;
+        std::uint8_t* types = nullptr;
+        std::uint8_t* ignore = nullptr;
+        const bool ran = Call(kismet, STR("/Script/Engine.KismetSystemLibrary:LineTraceSingleForObjects"), [&](const std::wstring& n, FProperty* p, std::uint8_t* v) {
+            if (n == STR("WorldContextObject")) WriteObject(v, context);
+            else if (n == STR("Start")) WriteFloats(v, p, {static_cast<float>(x), static_cast<float>(y), static_cast<float>(top)});
+            else if (n == STR("End")) WriteFloats(v, p, {static_cast<float>(x), static_cast<float>(y), static_cast<float>(bottom)});
+            else if (n == STR("ObjectTypes"))
+            {
+                // WorldStatic and WorldDynamic.
+                auto* data = static_cast<std::uint8_t*>(RC::Unreal::FMemory::Malloc(2));
+                if (!data) return;
+                data[0] = 0;
+                data[1] = 1;
+                const RawBytes raw{data, 2, 2};
+                std::memcpy(v, &raw, sizeof raw);
+                types = v;
+            }
+            else if (n == STR("ActorsToIgnore")) WriteObjectArray(v, context), ignore = v;
+            else if (n == STR("bIgnoreSelf")) WriteBoolParam(v, p, true);
+        }, nullptr, [&](const std::wstring& n, FProperty* p, const std::uint8_t* v) {
+            if (n == STR("ReturnValue")) hit = *v != 0;
+            else if (n == STR("OutHit"))
+                if (auto* s = RC::Unreal::CastField<RC::Unreal::FStructProperty>(p))
+                    for (FProperty* member : s->GetStruct()->ForEachProperty())
+                    {
+                        if (member->GetName() == STR("ImpactPoint"))
+                        {
+                            float f[3];
+                            std::memcpy(f, v + member->GetOffset_Internal(), sizeof f);
+                            z = f[2];
+                        }
+                        else if (member->GetName() == STR("bStartPenetrating"))
+                            if (auto* b = RC::Unreal::CastField<RC::Unreal::FBoolProperty>(member)) inside = b->GetPropertyValue(const_cast<std::uint8_t*>(v) + member->GetOffset_Internal());
+                    }
+            if (n == STR("ObjectTypes") || n == STR("ActorsToIgnore"))
+            {
+                RawBytes raw;
+                std::memcpy(&raw, v, sizeof raw);
+                if (raw.data) RC::Unreal::FMemory::Free(raw.data);
+                if (n == STR("ObjectTypes")) types = nullptr;
+                else ignore = nullptr;
+            }
+        });
+        // The call did not run: free what was written.
+        if (!ran)
+            for (std::uint8_t* left : {types, ignore})
+                if (left)
+                {
+                    RawBytes raw;
+                    std::memcpy(&raw, left, sizeof raw);
+                    if (raw.data) RC::Unreal::FMemory::Free(raw.data);
+                }
+        if (!ran || !hit || inside || !std::isfinite(z)) return std::nullopt;
+        return z;
+    }
+
     void CsGear::WorldBomb(double now, UObject* player, UObject* character, const std::optional<RoundState::Bomb>& bomb)
     {
         UObject* actor = m_bombActor.Get();
@@ -364,6 +431,13 @@ namespace aimmod
             {
                 const double eyeHeight = eye[2] - (body[2] - *half);
                 if (eyeHeight > 20 && eyeHeight < 400) floor = bomb->z + 64 - eyeHeight;
+            }
+            // Better: the floor itself, traced straight down from above that guess. Whoever dropped
+            // it (a player, a bot, a body that sat a little high or low), it lies on the ground.
+            if (const auto ground = FloorBelow(character, bomb->x, bomb->y, std::max(floor, bomb->z) + 120, floor - 400))
+            {
+                if (std::fabs(*ground - floor) > 8) Log("cs gear: the bomb's floor traced at z=" + std::to_string(std::lround(*ground)) + " (estimate z=" + std::to_string(std::lround(floor)) + ")");
+                floor = *ground;
             }
             // A steady, slightly turned rest, the same on every machine.
             const double yaw = std::fmod(std::fabs(bomb->x * 0.37 + bomb->y * 0.11), 360.0);

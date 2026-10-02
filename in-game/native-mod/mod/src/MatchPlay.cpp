@@ -37,9 +37,8 @@ namespace aimmod
 
     namespace
     {
-        constexpr std::size_t ShotWindow = 32;      // shots kept in self-shots.tsv
-        constexpr std::int64_t ShotWindowMs = 3000; // and at most this old
         constexpr int MaxShotsPerFrame = 8;
+        constexpr double HookHitSeconds = 0.25; // a Send_ShotHit target waits this long for its shot
 
         std::int64_t UnixMs()
         {
@@ -265,21 +264,98 @@ namespace aimmod
 
     // ---------------------------------------------------------------- shots
 
-    void MatchPlay::TickShots(double, const PoseId& poseId, const std::unordered_map<std::uint32_t, std::string>& poseNames)
+    namespace
     {
+        // The shot's target: a drawn capsule, the point where the ray meets (or passes nearest) it.
+        void Aim(ShotRecord& r, const Capsule& c, double along, double z, int source)
+        {
+            r.target = c.id;
+            std::copy(c.center, c.center + 3, r.targetCenter);
+            r.targetRadius = c.radius;
+            r.targetHalfHeight = c.halfHeight;
+            const double point[3] = {r.origin[0] + r.direction[0] * along, r.origin[1] + r.direction[1] * along, z};
+            r.headshot = IsHeadHit(point, c.center, c.halfHeight);
+            r.source = source;
+        }
+    } // namespace
+
+    void MatchPlay::OnShotHit(UObject*, UObject* target, double damage)
+    {
+        ++m_shotStats.hookCalls;
+        if (!m_shotsWanted || !target) return;
+        UObject* player = m_scene.Player();
+        UObject* character = player ? m_b.myCharacter.Object(player) : nullptr;
+        if (!character || target == character) return; // the local player being hit is the host's business
+        if (m_hookHits.size() >= 16) m_hookHits.erase(m_hookHits.begin());
+        m_hookHits.push_back({RC::Unreal::FWeakObjectPtr(target), damage, m_lastShotsTick});
+    }
+
+    void MatchPlay::DrawnTargets(UObject* character, const PoseId& poseId, std::vector<Capsule>& capsules, std::vector<UObject*>& actors)
+    {
+        capsules.clear();
+        actors.clear();
+        std::vector<UObject*> all;
+        UObject* state = m_scene.GameState();
+        if (!state || !m_b.characters.Objects(state, all, 33)) return;
+        for (UObject* actor : all)
+        {
+            if (!actor || actor == character) continue;
+            if (auto hidden = m_b.hidden.Bool(actor); hidden && *hidden) continue;
+            UObject* capsule = m_b.capsule.Object(actor);
+            auto radius = capsule ? m_b.capsuleRadius.Number(capsule) : std::nullopt;
+            auto half = capsule ? m_b.capsuleHalfHeight.Number(capsule) : std::nullopt;
+            Capsule c;
+            if (!radius || !half || *radius <= 0 || *half < *radius || !m_b.actorLocation.Vector(actor, c.center)) continue;
+            c.radius = *radius;
+            c.halfHeight = *half;
+            c.id = poseId(actor);
+            capsules.push_back(c);
+            actors.push_back(actor);
+        }
+    }
+
+    void MatchPlay::LogShotStats(const char* why)
+    {
+        const ShotStats& s = m_shotStats;
+        Log("match play: shots (" + std::string(why) + "): " + std::to_string(s.shots) + " fired, " + std::to_string(s.gameHits) + " game hits (" +
+            std::to_string(s.onCapsule) + " on the drawn capsule, " + std::to_string(s.nearCapsule) + " just beside it, " + std::to_string(s.named) +
+            " named by the game, " + std::to_string(s.gameHitNoTarget) + " without a target), " + std::to_string(s.rayOnly) +
+            " ray hits the game counted as misses, Send_ShotHit calls " + std::to_string(s.hookCalls) + "; last shot #" + std::to_string(m_shotSequence) +
+            ", acknowledged #" + std::to_string(m_shots.acked()) + (m_shots.ackSeen() ? "" : " (no acknowledgement yet)") + ", lost " +
+            std::to_string(m_shots.lost()));
+        m_shotStatsLogged = s;
+    }
+
+    void MatchPlay::TickShots(double now, const PoseId& poseId, const std::unordered_map<std::uint32_t, std::string>& poseNames)
+    {
+        // Shots counted together in one frame are spread over it (see below).
+        const double frameSeconds = m_lastShotsTick < 0 ? 0 : std::clamp(now - m_lastShotsTick, 0.0, 0.25);
+        m_lastShotsTick = now;
         if (!m_output.shotsRequested())
         {
-            if (m_shotsWanted) Log("match play: shot stream stopped (no request)");
+            if (m_shotsWanted) LogShotStats("stream stopped, no request");
             m_shotsWanted = false;
             m_weapons.clear();
-            m_shots.clear();
+            m_shots.Clear();
+            m_hookHits.clear();
             return;
         }
         if (!m_shotsWanted)
         {
             m_shotsWanted = true;
             m_session = UnixMs();
-            Log("match play: shot stream requested");
+            m_shots.Clear();
+            m_shotStats = m_shotStatsLogged = {};
+            m_nextShotLog = now + 10;
+            Log("match play: shot stream requested (session " + std::to_string(m_session) + ")");
+        }
+        // The service's acknowledgement (self-shots.request): what it took leaves the log.
+        if (const auto ack = m_output.shotsAck(); ack && ack->session == m_session) m_shots.Ack(ack->sequence);
+        std::erase_if(m_hookHits, [&](const HookHit& h) { return h.at < now - HookHitSeconds || !h.target.Get(); });
+        if (now >= m_nextShotLog)
+        {
+            m_nextShotLog = now + 10;
+            if (m_shotStats.shots != m_shotStatsLogged.shots) LogShotStats("so far");
         }
         UObject* player = m_scene.Player();
         UObject* character = player ? m_b.myCharacter.Object(player) : nullptr;
@@ -292,7 +368,8 @@ namespace aimmod
                 r.unixMs = UnixMs();
                 r.sequence = ++m_shotSequence;
                 r.slot = cs::StabSlot;
-                m_shots.push_back(r);
+                m_shots.Add(r);
+                ++m_shotStats.shots;
                 PublishShots(poseNames);
             }
         }
@@ -310,12 +387,16 @@ namespace aimmod
         {
             m_shotsCharacter = character;
             m_weapons.clear();
-            for (const WeaponCount& c : counts) m_weapons.push_back({c.weapon, c.shots, c.hits});
+            for (const WeaponCount& c : counts) m_weapons.push_back({c.weapon, c.shots, c.hits, c.damage});
             return;
         }
         int fired = 0;
-        for (std::size_t i = 0; i < counts.size(); ++i) fired += static_cast<int>(std::min(counts[i].shots - m_weapons[i].shots, 64.0));
-        if (fired == 0) return;
+        for (std::size_t i = 0; i < counts.size(); ++i) fired += static_cast<int>(std::min(counts[i].shots - m_weapons[i].shots, static_cast<double>(MaxShotsPerFrame)));
+        if (fired == 0)
+        {
+            for (std::size_t i = 0; i < counts.size(); ++i) m_weapons[i].damage = counts[i].damage;
+            return;
+        }
 
         UObject* camera = m_b.cameraManager.Object(player);
         double origin[3], rotation[3];
@@ -324,49 +405,84 @@ namespace aimmod
         {
             const double pitch = rotation[0] * DegToRad, yaw = rotation[1] * DegToRad;
             const double direction[3] = {std::cos(pitch) * std::cos(yaw), std::cos(pitch) * std::sin(yaw), std::sin(pitch)};
-            // The nearest target capsule the ray meets (no world occlusion test).
-            std::uint32_t target = 0;
-            bool head = false;
-            double best = 0;
+            // What the shooter sees: every drawn character capsule (no world occlusion test; the game's
+            // own hit counter says whether the shot landed).
+            std::vector<Capsule> capsules;
             std::vector<UObject*> actors;
-            if (UObject* state = m_scene.GameState(); state && m_b.characters.Objects(state, actors, 33))
-                for (UObject* actor : actors)
-                {
-                    if (actor == character) continue;
-                    if (auto hidden = m_b.hidden.Bool(actor); hidden && *hidden) continue;
-                    UObject* capsule = m_b.capsule.Object(actor);
-                    auto radius = capsule ? m_b.capsuleRadius.Number(capsule) : std::nullopt;
-                    auto half = capsule ? m_b.capsuleHalfHeight.Number(capsule) : std::nullopt;
-                    double center[3];
-                    if (!radius || !half || *radius <= 0 || *half < *radius || !m_b.actorLocation.Vector(actor, center)) continue;
-                    auto t = RayCapsule(origin, direction, center, *radius, *half);
-                    if (!t || (target && *t >= best)) continue;
-                    best = *t;
-                    target = poseId(actor);
-                    const double point[3] = {origin[0] + direction[0] * *t, origin[1] + direction[1] * *t, origin[2] + direction[2] * *t};
-                    head = IsHeadHit(point, center, *half);
-                }
+            DrawnTargets(character, poseId, capsules, actors);
+            const auto onRay = PickTarget(origin, direction, capsules, 0);
+            const auto nearRay = onRay ? onRay : PickTarget(origin, direction, capsules, GameHitToleranceCm);
             const std::int64_t ms = UnixMs();
+            int index = 0;
             for (std::size_t i = 0; i < counts.size(); ++i)
             {
                 const int shots = static_cast<int>(std::min(counts[i].shots - m_weapons[i].shots, static_cast<double>(MaxShotsPerFrame)));
                 int hits = static_cast<int>(std::min(counts[i].hits - m_weapons[i].hits, static_cast<double>(shots)));
-                for (int k = 0; k < shots; ++k)
+                // The game's damage per hit this frame (its headshot multiplier shows in it).
+                const double perHit = hits > 0 && counts[i].damage >= 0 && m_weapons[i].damage >= 0 && counts[i].damage >= m_weapons[i].damage
+                                          ? (counts[i].damage - m_weapons[i].damage) / hits
+                                          : -1;
+                for (int k = 0; k < shots; ++k, ++index)
                 {
                     ShotRecord r;
-                    r.unixMs = ms;
+                    // Several shots counted in one frame (a hitch, or a weapon faster than the frame
+                    // rate) are spread back over that frame, so the host sees them apart.
+                    r.unixMs = ms - static_cast<std::int64_t>(std::llround(frameSeconds * 1000.0 * (fired - 1 - index) / fired));
                     r.sequence = ++m_shotSequence;
                     std::copy(origin, origin + 3, r.origin);
                     std::copy(direction, direction + 3, r.direction);
                     r.slot = counts[i].slot;
-                    r.target = target;
-                    r.headshot = target != 0 && head;
                     r.gameHit = hits-- > 0;
-                    m_shots.push_back(r);
+                    r.gameDamage = r.gameHit ? perHit : -1;
+                    ++m_shotStats.shots;
+                    if (r.gameHit) ++m_shotStats.gameHits;
+                    // The target: the actor the game's hit named, else the capsule the ray meets, else
+                    // (a game hit only) the capsule it passes nearest.
+                    bool aimed = false;
+                    if (r.gameHit && !m_hookHits.empty())
+                    {
+                        UObject* named = m_hookHits.front().target.Get();
+                        m_hookHits.erase(m_hookHits.begin());
+                        for (std::size_t j = 0; j < actors.size(); ++j)
+                        {
+                            if (actors[j] != named) continue;
+                            const auto pass = RayCapsulePass(origin, direction, capsules[j].center, capsules[j].radius, capsules[j].halfHeight);
+                            Aim(r, capsules[j], pass.along, pass.z, SourceGame);
+                            aimed = true;
+                            ++m_shotStats.named;
+                            break;
+                        }
+                    }
+                    if (!aimed && onRay)
+                    {
+                        const Capsule& c = capsules[onRay->index];
+                        Aim(r, c, onRay->along, origin[2] + direction[2] * onRay->along, SourceRay);
+                        ++(r.gameHit ? m_shotStats.onCapsule : m_shotStats.rayOnly);
+                    }
+                    else if (!aimed && r.gameHit && nearRay)
+                    {
+                        const Capsule& c = capsules[nearRay->index];
+                        const auto pass = RayCapsulePass(origin, direction, c.center, c.radius, c.halfHeight);
+                        Aim(r, c, pass.along, pass.z, SourceNear);
+                        ++m_shotStats.nearCapsule;
+                    }
+                    else if (!aimed && r.gameHit)
+                    {
+                        ++m_shotStats.gameHitNoTarget;
+                        if (now >= m_nextNoTargetLog)
+                        {
+                            m_nextNoTargetLog = now + 1;
+                            const auto nearest = PickTarget(origin, direction, capsules, 1e9);
+                            Log("match play: shot #" + std::to_string(r.sequence) + " (slot " + std::to_string(r.slot) + ") is a game hit but no drawn target is near the ray (" +
+                                (nearest ? "nearest capsule " + std::to_string(static_cast<int>(nearest->gap)) + " cm off" : std::to_string(capsules.size()) + " drawn") +
+                                "); not claimed");
+                        }
+                    }
+                    m_shots.Add(r);
                 }
             }
         }
-        for (std::size_t i = 0; i < counts.size(); ++i) m_weapons[i] = {counts[i].weapon, counts[i].shots, counts[i].hits};
+        for (std::size_t i = 0; i < counts.size(); ++i) m_weapons[i] = {counts[i].weapon, counts[i].shots, counts[i].hits, counts[i].damage};
         if (!view) return;
         PublishShots(poseNames);
     }
@@ -378,39 +494,22 @@ namespace aimmod
         if (!camera || !m_b.cameraLocation.Vector(camera, r.origin) || !m_b.cameraRotation.Vector(camera, rotation)) return false;
         const double pitch = rotation[0] * DegToRad, yaw = rotation[1] * DegToRad;
         r.direction[0] = std::cos(pitch) * std::cos(yaw), r.direction[1] = std::cos(pitch) * std::sin(yaw), r.direction[2] = std::sin(pitch);
-        double best = 0;
+        std::vector<Capsule> capsules;
         std::vector<UObject*> actors;
-        if (UObject* state = m_scene.GameState(); state && m_b.characters.Objects(state, actors, 33))
-            for (UObject* actor : actors)
-            {
-                if (actor == character) continue;
-                if (auto hidden = m_b.hidden.Bool(actor); hidden && *hidden) continue;
-                UObject* capsule = m_b.capsule.Object(actor);
-                auto radius = capsule ? m_b.capsuleRadius.Number(capsule) : std::nullopt;
-                auto half = capsule ? m_b.capsuleHalfHeight.Number(capsule) : std::nullopt;
-                double center[3];
-                if (!radius || !half || *radius <= 0 || *half < *radius || !m_b.actorLocation.Vector(actor, center)) continue;
-                auto t = RayCapsule(r.origin, r.direction, center, *radius, *half);
-                if (!t || (r.target && *t >= best)) continue;
-                best = *t;
-                r.target = poseId(actor);
-                const double point[3] = {r.origin[0] + r.direction[0] * *t, r.origin[1] + r.direction[1] * *t, r.origin[2] + r.direction[2] * *t};
-                r.headshot = IsHeadHit(point, center, *half);
-            }
-        r.headshot = r.target != 0 && r.headshot;
+        DrawnTargets(character, poseId, capsules, actors);
+        if (const auto pick = PickTarget(r.origin, r.direction, capsules, 0))
+            Aim(r, capsules[pick->index], pick->along, r.origin[2] + r.direction[2] * pick->along, SourceRay);
         return true;
     }
 
     void MatchPlay::PublishShots(const std::unordered_map<std::uint32_t, std::string>& poseNames)
     {
-        const std::int64_t cutoff = UnixMs() - ShotWindowMs;
-        while (!m_shots.empty() && (m_shots.size() > ShotWindow || m_shots.front().unixMs < cutoff)) m_shots.pop_front();
-
+        m_shots.Prune(UnixMs());
         std::string body = "AIMMOD_SHOTS_1\t" + std::to_string(++m_shotsPublish) + "\t" + std::to_string(m_session) + "\n";
         std::string tags;
         const auto avatars = m_output.avatars();
         std::vector<std::uint32_t> tagged;
-        for (const ShotRecord& r : m_shots)
+        for (const ShotRecord& r : m_shots.shots())
         {
             body += FormatShot(r);
             if (!r.target || avatars->empty() || std::find(tagged.begin(), tagged.end(), r.target) != tagged.end()) continue;

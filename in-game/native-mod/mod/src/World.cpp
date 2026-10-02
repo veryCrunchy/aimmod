@@ -35,6 +35,7 @@ namespace aimmod::game
         info.weapons.BindName(cls, STR("GetWeapons"), Shape::ObjectArray);
         info.shotsFired.Bind(cls, STR("ShotsFiredThisSession"));
         info.shotsHit.Bind(cls, STR("ShotsHitThisSession"));
+        info.weaponDamage.Bind(cls, STR("DamageDoneThisSession"));
         return info;
     }
 
@@ -99,7 +100,8 @@ namespace aimmod::game
                 out.clear();
                 return false;
             }
-            out.push_back({weapon, static_cast<int>(i), *fired, *hit});
+            const auto damage = w.weaponDamage.ok() ? w.weaponDamage.Number(weapon) : std::nullopt;
+            out.push_back({weapon, static_cast<int>(i), *fired, *hit, damage && *damage >= 0 ? *damage : -1});
         }
         return !out.empty();
     }

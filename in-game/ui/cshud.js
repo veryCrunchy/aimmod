@@ -112,7 +112,19 @@
     if(c.buyWindow&&!c.buyOpen)me.appendChild(node('div','cs-key-hint','Press '+c.buyKey+' to buy'));
     (c.keyClashes||[]).forEach(function(k){me.appendChild(node('div','cs-clash',k));});
     target.appendChild(me);
-    place(layers.menu.firstChild,top,root);
+    settle(layers,top,root);
+  }
+  // The menu stays hidden until it is placed: Gameface may not have laid it out yet when it is
+  // built (no size, so it would sit at the top left), and the view can still be resizing. It is
+  // placed again over the next half second and whenever the view resizes, so it is always centred.
+  function settle(layers,strip,win){
+    var menu=layers.menu.firstChild;layers.strip=strip;layers.win=win;
+    function show(m){if(m&&place(m,layers.strip,layers.win)&&m.className.indexOf(' placed')<0)m.className+=' placed';}
+    if(!menu)return;
+    show(menu);
+    var tries=0,later=win.setTimeout||(typeof setTimeout==='function'?setTimeout:null);
+    if(later)(function again(){if(tries++>=10)return;later(function(){if(layers.menu.firstChild!==menu)return;show(menu);again();},50);})();
+    if(!layers.onResize&&win.addEventListener){layers.onResize=function(){show(layers.menu.firstChild);};win.addEventListener('resize',layers.onResize);}
   }
   // The buy menu: centred on both axes of the view, never under the score strip (12 px below
   // it at least), larger at 1440p and up, and scaled down to fit when the view is too short.
@@ -121,7 +133,7 @@
     if(!menu||!menu.offsetHeight||!menu.offsetWidth)return null;
     var W=win.innerWidth||1920,H=win.innerHeight||1080,w=menu.offsetWidth,h=menu.offsetHeight,big=H>=1300?1.33:1;
     var r=strip&&strip.getBoundingClientRect?strip.getBoundingClientRect():null;
-    var stripBottom=r&&r.bottom>0?r.bottom:strip?(strip.offsetTop+strip.offsetHeight)*big:0;
+    var stripBottom=r&&r.bottom>0?r.bottom:strip?((strip.offsetTop||0)+(strip.offsetHeight||0))*big:0;
     var minTop=stripBottom+12,s=Math.max(0.5,Math.min(big,(H-minTop-12)/h,(W-24)/w));
     var top=Math.max(minTop,(H-h*s)/2),left=Math.max(12,(W-w*s)/2);
     menu.style.left=Math.round(left)+'px';menu.style.top=Math.round(top)+'px';

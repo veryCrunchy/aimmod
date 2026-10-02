@@ -199,6 +199,12 @@ namespace aimmod
         m_wake.notify_one();
     }
 
+    std::optional<ShotAck> Output::shotsAck() const
+    {
+        std::lock_guard lock(const_cast<std::mutex&>(m_mutex));
+        return m_shotsAck;
+    }
+
     void Output::PublishSelfShots(std::string body)
     {
         {
@@ -816,6 +822,13 @@ namespace aimmod
                 shots = !error && std::chrono::system_clock::now() - written < std::chrono::seconds(5);
             }
             if (m_shotsRequested.exchange(shots) && !shots) DeleteFileW((m_root / L"self-shots.tsv").c_str());
+            {
+                std::string ackText;
+                std::optional<ShotAck> ack;
+                if (shots && ReadSmall(shotsRequest, ackText, 257)) ack = ParseShotRequest(ackText);
+                std::lock_guard lock(m_mutex);
+                m_shotsAck = ack;
+            }
             // AIMMOD_AVATARS_1 / <actor name>\t<stream id>: which drawn hull is which player.
             std::string text;
             if ((requested || shots) && ReadSmall(m_root / L"avatars.tsv", text, 16384) && text != m_avatarText)

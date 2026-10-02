@@ -92,11 +92,18 @@ namespace aimmod::worldtags
                 if (c.size() != 2 || c[0] != "AIMMOD_TAGS_1") return std::nullopt;
                 continue;
             }
-            if (c[0] != "tag" || c.size() != 6 || !StreamId(c[1]) || (c[2] != "friend" && c[2] != "enemy") || (c[4] != "0" && c[4] != "1")) return std::nullopt;
+            if (c[0] != "tag" || (c.size() != 6 && c.size() != 7) || !StreamId(c[1]) || (c[2] != "friend" && c[2] != "enemy") || (c[4] != "0" && c[4] != "1")) return std::nullopt;
             if (c[3] != "T" && c[3] != "CT" && c[3] != "0" && c[3] != "1" && c[3] != "2") return std::nullopt;
             auto name = Unescape(c[5]);
             if (!name || name->size() > 64 || roster.size() >= MaxTags) return std::nullopt;
-            roster[std::string(c[1])] = Who{c[2] == "friend", std::string(c[3]), c[4] == "1", *name};
+            std::string gear;
+            if (c.size() == 7)
+            {
+                auto g = Unescape(c[6]);
+                if (!g || g->size() > MaxGear) return std::nullopt;
+                gear = std::move(*g);
+            }
+            roster[std::string(c[1])] = Who{c[2] == "friend", std::string(c[3]), c[4] == "1", *name, std::move(gear)};
         }
         if (first) return std::nullopt;
         return roster;
@@ -117,7 +124,13 @@ namespace aimmod::worldtags
             out += ",\"t\":";
             JsonString(out, t.team);
             out += ",\"f\":" + std::string(t.friendly ? "1" : "0") + ",\"a\":" + (t.alive ? "1" : "0") + ",\"c\":" + (t.aimed ? "1" : "0") +
-                   ",\"x\":" + Num(t.x, 4) + ",\"y\":" + Num(t.y, 4) + ",\"d\":" + Num(t.metres, 0) + "}";
+                   ",\"x\":" + Num(t.x, 4) + ",\"y\":" + Num(t.y, 4) + ",\"d\":" + Num(t.metres, 0);
+            if (!t.gear.empty())
+            {
+                out += ",\"g\":";
+                JsonString(out, t.gear);
+            }
+            out += '}';
         }
         out += "]}";
         return out;

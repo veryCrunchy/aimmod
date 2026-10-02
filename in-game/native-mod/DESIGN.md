@@ -528,7 +528,7 @@ last 5 s; deleted when the request lapses; atomic replace on every new shot):
 
 ```
 AIMMOD_SHOTS_1	<publish seq>	<session>
-shot	<unix ms>	<shot seq>	<ox>	<oy>	<oz>	<dx>	<dy>	<dz>	<slot>	<target>	<headshot 0/1>	<gameHit 0/1>
+shot	<unix ms>	<shot seq>	<ox>	<oy>	<oz>	<dx>	<dy>	<dz>	<slot>	<target>	<headshot 0/1>	<gameHit 0/1>	<cx>	<cy>	<cz>	<radius>	<half height>	<game damage>	<source>
 tag	<target id>	<stream id>
 ```
 
@@ -536,17 +536,34 @@ tag	<target id>	<stream id>
   frame (up to 8 per weapon per frame); `slot` is the weapon's index in
   `WeaponHandler:GetWeapons`. A new character or weapon set only resets the
   baseline. `gameHit` is set for as many shots as `ShotsHitThisSession`
-  advanced in the same frame (the game's own verdict, for cross-checks).
+  advanced in the same frame (the game's own hit: the hitmarker), and `game
+  damage` is that frame's `DamageDoneThisSession` per hit (-1 unknown). Shots
+  counted in one frame are timed back over that frame.
 - The ray is the camera at the frame the counter advanced (origin in cm,
-  unit direction from pitch/yaw). `target` is the nearest visible
-  character capsule the ray meets, by self-pose target id (the same ids as
-  `self-pose.tsv`), 0 for none; `headshot` = the hit point is in the top
-  fifth of the capsule. No world occlusion test: the host checks line of
-  sight if the mode needs it. `tag` rows map hit avatars to stream ids
-  (`avatars.tsv`).
-- The window holds the last 32 shots, at most 3 s old. `shot seq` is
+  unit direction from pitch/yaw). `target` (self-pose target id, 0 for none)
+  is, for a game hit, the actor `WeaponParentActor:Send_ShotHit` named when
+  the game calls it through reflection (`source` 3); else the nearest
+  visible character capsule the ray meets (`source` 1); else, for a game hit
+  only, the capsule the ray passes nearest within 15 cm (`source` 2: the
+  visible mesh and the head stick out of the capsule). `cx`..`half height`
+  are that capsule as drawn in that frame (zeros without a target).
+  `headshot` = the hit point (or nearest point) is at least 60% of the half
+  height above the centre, the same head zone the host uses. No world
+  occlusion test. `tag` rows map hit avatars to stream ids (`avatars.tsv`).
+- Shots stay in the file until the service acknowledges them: it writes
+  `<unix ms>\t<last shot seq taken>\t<session>` into `self-shots.request`.
+  At most 256 unacknowledged shots, 15 s old (dropped ones are counted as
+  lost); before the first acknowledgement, the last 64, 5 s. `shot seq` is
   monotonic within `session` (a new session restarts it); readers dedupe by
   it.
+- Logged every 10 s while shots flow (`match play: shots (...)`): shots, game
+  hits by how their target was found, game hits without a target, ray hits
+  the game counted as misses, `Send_ShotHit` calls, acknowledged and lost
+  shots. A game hit without any drawn target near the ray is logged (once a
+  second at most).
+- `self-pose.tsv` carries the last 16 camera samples, and `seen\t<unix
+  ms>\t<target row>` rows: the drawn targets of the five previous
+  publications, so a reader polling slower than 30 Hz misses none.
 
 `play-state.tsv` (written by the service, atomic replace; AimModCore polls it
 every 15 ms while in use and treats a file not rewritten for 5 s as gone, so

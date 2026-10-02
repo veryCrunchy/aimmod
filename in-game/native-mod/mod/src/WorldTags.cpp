@@ -151,7 +151,7 @@ namespace aimmod
                 });
             if (!onScreen) continue;
             const double dx = head[0] - eye[0], dy = head[1] - eye[1], dz = head[2] - eye[2];
-            tags.push_back({who.name, who.team, who.friendly, who.alive, aimed, screen[0] / width, screen[1] / height, std::sqrt(dx * dx + dy * dy + dz * dz) / 100.0});
+            tags.push_back({who.name, who.team, who.friendly, who.alive, aimed, screen[0] / width, screen[1] / height, std::sqrt(dx * dx + dy * dy + dz * dz) / 100.0, who.gear});
         }
         std::string json = worldtags::Json(tags);
         if (json == m_lastJson && tags.empty()) return;

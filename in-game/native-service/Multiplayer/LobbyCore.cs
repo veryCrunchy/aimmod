@@ -631,6 +631,13 @@ sealed class LobbyCore
         {
             if (!cm.Players.Contains(from)) return LobbyResult.Fail("not-playing", "Not playing this match.");
             combat.Track(from, batch);
+            // Claims that waited for this player's camera samples are decided now.
+            if (cm.Phase == MatchPhases.Live && combat.PendingClaims > 0)
+            {
+                combat.ProcessPending(clock());
+                UpdateCombat(cm, combat);
+                if (cm.Cs is null && combat.Leader is not null) CloseRound();
+            }
             return LobbyResult.Success;
         }
         if (match is not { Phase: MatchPhases.Live or MatchPhases.Countdown, Tracking: { } tracking } m || batch.MatchId != m.Id || batch.Round != m.Round) return LobbyResult.Fail("stale", "Not the current round.");
@@ -639,15 +646,40 @@ sealed class LobbyCore
         return LobbyResult.Success;
     }
 
-    // A hit the shooter's game registered. The host validates it and applies the damage.
+    // A hit the shooter's game registered. The host validates it and applies the damage; a claim
+    // whose shooter track hasn't arrived yet waits for it (Code "pending"). Every decision is in
+    // TakeClaimVerdicts, for the shooter's confirmation.
     public LobbyResult Claim(string from, HitClaim claim)
     {
-        if (match is not { Phase: MatchPhases.Live, Combat: { } combat } m || claim.MatchId != m.Id || claim.Round != m.Round) return LobbyResult.Fail("stale", "Not the current match.");
-        if (m.Cs is { Phase: not ("live" or "planted") }) return LobbyResult.Fail("round-phase", "No shooting between rounds.");
+        LobbyResult Refuse(string code, string message)
+        {
+            refusedClaims.Add(new ClaimVerdict(from, claim.Seq, claim.Shot, claim.T, code, message));
+            if (refusedClaims.Count > 256) refusedClaims.RemoveAt(0);
+            return LobbyResult.Fail(code, message);
+        }
+        if (match is not { Phase: MatchPhases.Live, Combat: { } combat } m || claim.MatchId != m.Id || claim.Round != m.Round) return Refuse("stale", "Not the current match.");
+        if (m.Cs is { Phase: not ("live" or "planted") } csm) return Refuse("round-phase", "No shooting between rounds (" + csm.Phase + ").");
         var refused = combat.Claim(from, claim, clock(), Find(from)?.Ping);
         UpdateCombat(m, combat);
         if (m.Cs is null && combat.Leader is not null) CloseRound();
-        return refused is null ? LobbyResult.Success : LobbyResult.Fail(refused, "Hit not accepted (" + refused + ").");
+        return refused is null ? LobbyResult.Success : refused == "pending" ? new LobbyResult(true, "pending", null) : LobbyResult.Fail(refused, "Hit not accepted (" + refused + ").");
+    }
+
+    // The host's decisions on hit claims since the last call (for hit-ack and the logs).
+    public IReadOnlyList<ClaimVerdict> TakeClaimVerdicts()
+    {
+        var list = refusedClaims.Concat(match?.Combat?.TakeVerdicts() ?? []).ToArray();
+        refusedClaims.Clear();
+        return list;
+    }
+    readonly List<ClaimVerdict> refusedClaims = [];
+    // Per shooter of the running match: claims, accepted, waiting, repeats and refusals by reason.
+    public IReadOnlyDictionary<string, (int Claims, int Accepted, int Pending, int Duplicates, IReadOnlyDictionary<string, int> Reasons)> ClaimStats()
+    {
+        var list = new Dictionary<string, (int, int, int, int, IReadOnlyDictionary<string, int>)>();
+        if (match?.Combat is not { } combat) return list;
+        foreach (var id in match.Players) if (combat.ClaimStats(id) is { Claims: > 0 } s) list[id] = s;
+        return list;
     }
 
     void UpdateCombat(Match m, CombatMatch combat)
@@ -812,6 +844,7 @@ sealed class LobbyCore
         if (match.Phase == MatchPhases.Live && match.Cs is { } cs)
         {
             cs.Tick(now);
+            cs.Combat.ProcessPending(now);
             UpdateCombat(match, cs.Combat);
             var csKey = cs.Round + "|" + cs.Phase + "|" + cs.View().Events.LastOrDefault()?.Id;
             if (csKey != match.CsKey) { match.CsKey = csKey; Changed(); }
