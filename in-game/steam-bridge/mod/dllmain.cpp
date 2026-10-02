@@ -5,6 +5,7 @@
 // See in-game/docs/multiplayer.md.
 #include "Bridge.hpp"
 #include "Ghosts.hpp"
+#include "Grenades.hpp"
 
 #include <DynamicOutput/DynamicOutput.hpp>
 #include <Mod/CppUserModBase.hpp>
@@ -111,6 +112,7 @@ public:
         }
         m_jobDone.notify_all();
         m_ghosts.reset();
+        m_grenades.reset();
         m_ready = nullptr;
         if (m_starter.joinable()) m_starter.join();
         if (m_bridge) m_bridge->Stop(); // leaves the lobby
@@ -152,6 +154,9 @@ public:
                 if (!m_ghosts)
                     if (auto* b = m_ready.load()) m_ghosts = std::make_unique<aimmod::GhostDemo>(*b, Log, m_ghostOptions);
                 if (m_ghosts) m_ghosts->Tick();
+                // CS grenades: paths and line-of-sight traces for the host's service.
+                if (!m_grenades) m_grenades = std::make_unique<aimmod::GrenadeSim>(Log, m_ghostOptions.stateDir);
+                m_grenades->Tick();
             },
             tick);
         if (m_tickId == ERROR_ID) m_tickId = 0;
@@ -245,6 +250,7 @@ private:
     std::unique_ptr<bridge::Bridge> m_bridge;
     std::atomic<bridge::Bridge*> m_ready{nullptr};
     std::unique_ptr<aimmod::GhostDemo> m_ghosts;
+    std::unique_ptr<aimmod::GrenadeSim> m_grenades;
     bool m_ghostDemo = false;
     bool m_hideScenario = false;
     bool m_lobbyAvatars = true;

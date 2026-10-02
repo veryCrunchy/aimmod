@@ -8,13 +8,13 @@ namespace aimmod::cs
     Loadout FromRound(const RoundState::Loadout& line)
     {
         Loadout l;
-        l.names = {line.primary, line.pistol, line.knife, line.bomb};
+        l.names = {line.primary, line.pistol, line.knife, line.grenade, line.bomb};
         return l;
     }
 
     int Best(const Loadout& l)
     {
-        for (int slot : {PrimarySlot, PistolSlot, KnifeSlot, BombSlot})
+        for (int slot : {PrimarySlot, PistolSlot, KnifeSlot, GrenadeSlot, BombSlot})
             if (l.Has(slot)) return slot;
         return -1;
     }
@@ -42,7 +42,7 @@ namespace aimmod::cs
     int Switcher::Previous(const Loadout& l) const
     {
         if (m_last >= 0 && m_last != m_current && l.Has(m_last)) return m_last;
-        for (int slot : {PrimarySlot, PistolSlot, KnifeSlot, BombSlot})
+        for (int slot : {PrimarySlot, PistolSlot, KnifeSlot, GrenadeSlot, BombSlot})
             if (slot != m_current && l.Has(slot)) return slot;
         return -1;
     }
@@ -119,8 +119,9 @@ namespace aimmod::cs
 
     Hold InHand(int slot)
     {
-        // Low on the right, pointing ahead (knife) or held out flat in front (bomb).
+        // Low on the right, pointing ahead (knife), held out flat in front (bomb), or a grenade in the palm.
         if (slot == BombSlot) return {{34, 9, -22}, {-25, 8, 0}};
+        if (slot == GrenadeSlot) return {{30, 13, -15}, {10, -15, 0}};
         return {{30, 15, -14}, {12, -12, -20}};
     }
     double KnifeMoveSeconds(KnifeMove move) { return move == KnifeMove::Stab ? 0.38 : move == KnifeMove::None ? 0.0 : 0.25; }

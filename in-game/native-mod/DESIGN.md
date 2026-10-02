@@ -642,7 +642,8 @@ bomb	<dropped|planted|defused>	<x>	<y>	<z>	<explodes at, local unix ms, 0>	<defu
   current weapon)`). Nothing is saved; outside matches the setting applies
   as before.
 - **CS gear** (`CsGear`, `core` `CsGear.hpp`; only with a CS loadout):
-  - Switching: KovaaK's own `Weapon1`..`Weapon4` keys switch the slots. The
+  - Switching: KovaaK's own `Weapon1`..`Weapon5` keys switch the slots (CS:
+    1 primary, 2 pistol, 3 knife, 4 grenades, 5 bomb). The
     mouse wheel (`MouseScrollDown` next, `MouseScrollUp` previous slot with a
     weapon, wrapping) and `Q` (the weapon before, `cs::Switcher`) are read
     with `PlayerController:WasInputKeyJustPressed` and press the same
@@ -656,7 +657,16 @@ bomb	<dropped|planted|defused>	<x>	<y>	<z>	<explodes at, local unix ms, 0>	<defu
     `/Engine/BasicShapes` cubes, a cylinder and a sphere on a scene
     component, tinted through `BasicShapeMaterial`'s `Color`) are attached to
     the character's `FirstPersonCamera` (`cs::InHand`) and shown while slot 2
-    or 3 is in hand. Built once per character, hidden, never destroyed.
+    or 4 is in hand. Built once per character, hidden, never destroyed.
+  - Grenades (`CsGrenades`, `core` `CsGrenades.hpp`; game-modes.md 6.6.5):
+    from the service's `grenades.tsv` (dropped after 5 s without a rewrite):
+    the selected grenade's model on the `FirstPersonCamera` while slot 3 is
+    in hand (`cs::GrenadeInHand`, drawn back with the pin pulled), and AimMod
+    `StaticMeshActor`s without collision for grenades in flight (moved every
+    frame along the host's path, `cs::GrenadeAt`), smoke clouds
+    (`cs::SmokePuffs`, scaled as they grow and thin), fires (`cs::FireFlames`,
+    a flickering scale), decoys and blasts (`cs::BlastSize`). Removed when
+    they leave the file and when the round state is released.
   - Knife: a slash when the knife's own shot counter moves, a stab on
     `RightMouseButton` (at most once a second, `cs::StabInterval`); the knife
     model plays `cs::KnifePose` (alternating slashes, a forward stab). A stab

@@ -144,20 +144,22 @@ namespace aimmod
                 p.name = std::string(c[1]);
                 r.phase = p;
             }
-            else if (c[0] == "loadout" && (c.size() == 6 || c.size() == 8) && !r.loadout)
+            else if (c[0] == "loadout" && (c.size() == 6 || c.size() == 8 || c.size() == 9) && !r.loadout)
             {
                 RoundState::Loadout l;
                 if (!profile(c[1]) || !profile(c[2]) || !Num(c[3], l.armour) || l.armour < 0 || l.armour > 1000 || !Flag(c[4], l.helmet) ||
                     !Flag(c[5], l.kit))
                     return std::nullopt;
-                if (c.size() == 8 && (!profile(c[6]) || !profile(c[7]))) return std::nullopt;
+                if (c.size() >= 8 && (!profile(c[6]) || !profile(c[7]))) return std::nullopt;
+                if (c.size() == 9 && !profile(c[8])) return std::nullopt;
                 l.primary = std::string(c[1]);
                 l.pistol = std::string(c[2]);
-                if (c.size() == 8)
+                if (c.size() >= 8)
                 {
                     l.knife = std::string(c[6]);
                     l.bomb = std::string(c[7]);
                 }
+                if (c.size() == 9) l.grenade = std::string(c[8]);
                 r.loadout = l;
             }
             else if (c[0] == "bomb" && c.size() == 7 && !r.bomb)

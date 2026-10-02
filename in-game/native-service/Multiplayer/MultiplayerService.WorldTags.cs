@@ -6,7 +6,9 @@ namespace AimMod.InGame.Multiplayer;
 // crosshair in line of sight. Rewritten on change and every second (stale after 5 s).
 //   AIMMOD_TAGS_1\t<seq>
 //   tag\t<stream id>\t<friend|enemy>\t<T|CT|1|2|0>\t<alive 0/1>\t<name, percent-escaped>[\t<gear, percent-escaped>]
-//   gear, CS teammates only: w=<weapon in hand>;hp=<health>;ar=1 armour;hm=1 helmet;kit=1;c4=1 has the bomb.
+//   gear, CS teammates only: w=<weapon in hand>;hp=<health>;ar=1 armour;hm=1 helmet;kit=1;c4=1 has the bomb;
+//     g=<grenades carried, comma-separated ids: he,flash,flash,smoke>.
+// An enemy behind a smoke (from this camera) has no row: no name through the cloud.
 sealed partial class MultiplayerService
 {
     string? lastWorldTags; long worldTagsAt, worldTagsSequence;
@@ -29,6 +31,7 @@ sealed partial class MultiplayerService
         if (p.Helmet) parts.Add("hm=1");
         if (p.Kit) parts.Add("kit=1");
         if (cs.Bomb is { State: "carried" } bomb && bomb.Carrier == member) parts.Add("c4=1");
+        if (p.Grenades is { Count: > 0 } grenades) parts.Add("g=" + string.Join(',', GrenadeRules.Sorted(grenades)));
         return string.Join(';', parts);
     }
 
@@ -38,7 +41,11 @@ sealed partial class MultiplayerService
         string Name(string id) => LobbyRules.CleanName(lobby.Members.FirstOrDefault(m => m.Id == id)?.Name, "Player");
         var cs = match.Cs;
         string TeamOf(CombatPlayerView p) => cs?.Players.FirstOrDefault(x => x.Member == p.Member)?.Side ?? (p.Team is 1 or 2 ? p.Team.ToString(System.Globalization.CultureInfo.InvariantCulture) : "0");
-        var body = WorldTagsBody(view.Players.Where(p => p.Member != SelfId).Select(p =>
+        var hostNow = clock() + HostOffset();
+        var eye = ownRecent.Count > 0 ? new[] { ownRecent[^1].X, ownRecent[^1].Y, ownRecent[^1].Z } : null;
+        bool Smoked(CombatPlayerView p) => cs?.Grenades is { Count: > 0 } && eye is not null && poseTracker?.LastSeen.Values.FirstOrDefault(s => s.Member == p.Member) is { } seen
+            && GrenadeRules.SmokeBlocks(cs.Grenades, eye, [seen.X, seen.Y, seen.Z], hostNow);
+        var body = WorldTagsBody(view.Players.Where(p => p.Member != SelfId && ((self.Team != 0 && p.Team == self.Team) || !Smoked(p))).Select(p =>
         {
             var friend = self.Team != 0 && p.Team == self.Team;
             return (StreamIds.For(AvatarPeer(p.Member)), friend, TeamOf(p), p.Alive, Name(p.Member), CsGear(cs, p.Member, friend));

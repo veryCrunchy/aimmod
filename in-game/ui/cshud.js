@@ -17,7 +17,7 @@
     else{x.fillRect(3,6,12,9);x.fillStyle=on?'#0f1714':'#16211d';x.fillRect(6,9,6,3);x.fillStyle=on?'#f0b45a':'#3a4a44';x.fillRect(7,3,4,3);}
     return c;
   }
-  var CATS=[['pistol','Pistols'],['smg','SMGs'],['rifle','Rifles'],['heavy','Heavy'],['gear','Gear']];
+  var CATS=[['pistol','Pistols'],['smg','SMGs'],['rifle','Rifles'],['heavy','Heavy'],['gear','Gear'],['grenade','Grenades']];
   // The menu is built once per change of what it offers and kept in place while the clock or the
   // rest of the HUD redraws, so a click is never lost to a redraw between press and release.
   function buyMenu(c,act){
@@ -43,7 +43,7 @@
         b.onclick=function(){if(!b.disabled&&!i.owned)act('cs-buy',i.id);};
         group.appendChild(b);
       });
-      (cat[0]==='rifle'||cat[0]==='gear'?right:left).appendChild(group);
+      (cat[0]==='rifle'||cat[0]==='gear'||cat[0]==='grenade'?right:left).appendChild(group);
     });
     return box;
   }
@@ -106,12 +106,18 @@
     else vit.appendChild(node('span','cs-hp down','Down'));
     me.appendChild(vit);
     var gun=[c.primary,c.secondary].filter(function(x){return !!x;}).join(' · ');if(gun)me.appendChild(node('div','cs-guns',gun));
+    // Grenades you carry (slot 4: the key cycles them), the one in hand marked.
+    if(c.grenades&&c.grenades.length){var nades=node('div','cs-nades');nades.appendChild(node('span','cs-nade-key',c.grenadeKey||'4'));
+      c.grenades.forEach(function(g){nades.appendChild(node('span','cs-nade'+(g.inHand?' hand':'')+' '+g.id,g.label+(g.count>1?' ×'+g.count:'')));});me.appendChild(nades);}
     // The bomb: yours (with the drop key), or which teammate has it.
     if(c.hasBomb){var bomb=node('div','cs-bomb');bomb.appendChild(node('span','cs-bomb-icon','C4'));bomb.appendChild(node('span','','You have the bomb · '+(c.dropKey||'G')+' drops it'));me.appendChild(bomb);}
     else if(c.bombCarrier)me.appendChild(node('div','cs-bomb mate','Bomb: '+c.bombCarrier));
     if(c.buyWindow&&!c.buyOpen)me.appendChild(node('div','cs-key-hint','Press '+c.buyKey+' to buy'));
     (c.keyClashes||[]).forEach(function(k){me.appendChild(node('div','cs-clash',k));});
     target.appendChild(me);
+    // Inside a smoke the view greys over; a flash whites out everything, the HUD too.
+    if(typeof c.smoke==='number'&&c.smoke>0){var fog=node('div','cs-smoke');fog.style.opacity=String(Math.min(0.92,c.smoke*0.92));target.appendChild(fog);}
+    if(typeof c.flash==='number'&&c.flash>0){var white=node('div','cs-flash');white.style.opacity=String(Math.min(1,c.flash));target.appendChild(white);}
     settle(layers,top,root);
   }
   // The menu stays hidden until it is placed: Gameface may not have laid it out yet when it is

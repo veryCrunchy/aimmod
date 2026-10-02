@@ -62,8 +62,9 @@ sealed partial class MultiplayerService
 
     // round-state.tsv lines for CS (contract in game-modes.md 6.6.1 and 6.6.2):
     //   phase\t<phase>\t<frozen 0/1>\t<buy open 0/1>\t<phase ends, local unix ms>
-    //   loadout\t<primary or ->\t<pistol or ->\t<armour>\t<helmet 0/1>\t<kit 0/1>\t<knife or ->\t<bomb or ->
-    //     (weapon profile names for slots 0-3; the bomb only for its carrier)
+    //   loadout\t<primary or ->\t<pistol or ->\t<armour>\t<helmet 0/1>\t<kit 0/1>\t<knife or ->\t<bomb or ->\t<grenade or ->
+    //     (weapon profile names for slots 0, 1, 2, 4 and 3; the bomb only for its carrier, the grenade
+    //     slot while any grenade is carried)
     //   bomb\t<dropped|planted|defused>\t<x>\t<y>\t<z>\t<explodes at, local unix ms, 0>\t<defusing 0/1>
     //     (only while the bomb lies in the world: where AimModCore draws it)
     IEnumerable<string> CsPlayLines(MatchSnapshot match)
@@ -80,7 +81,8 @@ sealed partial class MultiplayerService
     {
         string Profile(string? id) => CsRules.Find(id)?.Combat.Name ?? "-";
         return "loadout\t" + Profile(me.Primary) + "\t" + Profile(me.Secondary) + "\t" + Math.Round(me.Armor).ToString(CultureInfo.InvariantCulture) + "\t" + (me.Helmet ? 1 : 0) + "\t" + (me.Kit ? 1 : 0)
-            + "\t" + (me.Alive ? CsRules.Knife.Combat.Name : "-") + "\t" + (carrier && me.Alive ? CsRules.Bomb.Combat.Name : "-");
+            + "\t" + (me.Alive ? CsRules.Knife.Combat.Name : "-") + "\t" + (carrier && me.Alive ? CsRules.Bomb.Combat.Name : "-")
+            + "\t" + (me.Alive && me.Grenades is { Count: > 0 } ? CsRules.Grenade.Combat.Name : "-");
     }
 
     internal static string? CsBombLine(CsBombView b, long hostToLocal)
@@ -98,6 +100,7 @@ sealed partial class MultiplayerService
         list.Add(("kevlar", "Kevlar", CsRules.KevlarPrice));
         list.Add(("kevlar-helmet", "Kevlar + helmet", me.Armor >= CsRules.MaxArmor && !me.Helmet ? CsRules.HelmetUpgradePrice : CsRules.KevlarHelmetPrice));
         if (side == CsRules.CT) list.Add(("defuse-kit", "Defuse kit", CsRules.KitPrice));
+        list.AddRange(GrenadeRules.All.Where(g => g.Side == "any" || g.Side == side).Select(g => (g.Id, g.Label, g.Price)));
         return list.Take(9).ToList();
     }
 
@@ -118,6 +121,7 @@ sealed partial class MultiplayerService
         if (!buyWindow || me.InBuyZone == false || !me.Alive) buyOpen = false;
         var foreground = csKeys.Foreground();
         DeadSpectate(match, cs, me, foreground);
+        CsGrenades(match, cs, me, foreground);
         if (!foreground) { if (useHeld) { useHeld = false; Command("use", JsonSerializer.SerializeToElement(new { held = false })); } return; }
         if (csKeys.Pressed('B') && buyWindow && me.Alive && me.InBuyZone != false) buyOpen = !buyOpen;
         // Escape closes the buy menu. KovaaK's also opens its pause menu on Escape; AimModNativeUI
@@ -195,13 +199,16 @@ sealed partial class MultiplayerService
         string? Primary, string? Secondary, string BuyKey, string UseKey, IReadOnlyList<string> KeyClashes,
         string? InSite = null, string? Callout = null, IReadOnlyList<CsMarker>? Sites = null,
         bool HasBomb = false, string? BombCarrier = null, string? Refused = null, string DropKey = CsDropKey, int TAlive = 0, int CtAlive = 0,
-        IReadOnlyList<CsHurt>? Hurt = null, string? HitMarker = null, string? Watching = null, string? WatchHint = null);
+        IReadOnlyList<CsHurt>? Hurt = null, string? HitMarker = null, string? Watching = null, string? WatchHint = null,
+        IReadOnlyList<CsHudGrenade>? Grenades = null, double Flash = 0, double Smoke = 0, string GrenadeKey = CsGrenadeKey);
+    // A grenade you carry for the HUD: its id, short label, how many, and whether it's the one in hand.
+    internal sealed record CsHudGrenade(string Id, string Label, int Count, bool InHand);
     // Where damage came from, around the crosshair: bearing in degrees from where you look (negative
     // left), the damage, and how old the hit is (ms) so the marker fades.
     internal sealed record CsHurt(long Id, int Bearing, int Damage, int Age);
     // A bomb site on the HUD compass: its bearing from where you look (degrees, negative left) and distance.
     internal sealed record CsMarker(string Name, int Bearing, int Meters);
-    static readonly string[] BuyCategories = ["pistol", "smg", "rifle", "heavy", "gear"];
+    static readonly string[] BuyCategories = ["pistol", "smg", "rifle", "heavy", "gear", "grenade"];
     internal CsHudView? CsHud()
     {
         if (Current is not { Match: { Phase: MatchPhases.Countdown or MatchPhases.Live, Cs: { } cs } m } lobby || cs.Players.FirstOrDefault(p => p.Member == SelfId) is not { } me) return null;
@@ -237,6 +244,16 @@ sealed partial class MultiplayerService
             list.Add(new(keys.GetValueOrDefault("kevlar"), "kevlar", "Kevlar", "gear", CsRules.KevlarPrice, me.Armor >= CsRules.MaxArmor, CsRules.KevlarPrice <= me.Money, Why("any", CsRules.KevlarPrice, me.Armor >= CsRules.MaxArmor), null));
             list.Add(new(keys.GetValueOrDefault("kevlar-helmet"), "kevlar-helmet", "Kevlar + helmet", "gear", helmetPrice, me.Helmet && me.Armor >= CsRules.MaxArmor, helmetPrice <= me.Money, Why("any", helmetPrice, me.Helmet && me.Armor >= CsRules.MaxArmor), null));
             list.Add(new(keys.GetValueOrDefault("defuse-kit"), "defuse-kit", "Defuse kit", "gear", CsRules.KitPrice, me.Kit, CsRules.KitPrice <= me.Money, Why(CsRules.CT, CsRules.KitPrice, me.Kit), null));
+            // Grenades: your side's, with the carry limits (four in all, two flashbangs, one of the rest).
+            var carried = me.Grenades ?? [];
+            foreach (var g in GrenadeRules.All.Where(g => g.Side == "any" || g.Side == me.Side))
+            {
+                var problem = GrenadeRules.CarryProblem(carried, g.Id);
+                var full = problem == "owned" && carried.Count(k => k == g.Id) >= g.Max;
+                var why = full ? null : problem == "carry-limit" ? "You carry 4 grenades" : problem == "owned" ? "One fire grenade at a time" : Why(g.Side, g.Price, false);
+                list.Add(new(keys.TryGetValue(g.Id, out var gk) ? gk : null, g.Id, g.Label + (g.Max > 1 ? " (" + carried.Count(k => k == g.Id) + "/" + g.Max + ")" : ""), "grenade", g.Price, full, g.Price <= me.Money,
+                    full ? "Already yours" : why, null));
+            }
             menu = list.Select(x => x.Key == 0 ? x with { Key = null } : x).OrderBy(x => Array.IndexOf(BuyCategories, x.Category)).ToArray();
         }
         // Money from the last round's result (win reward or loss bonus), shown until the next round goes live.
@@ -276,7 +293,16 @@ sealed partial class MultiplayerService
             cs.Players.Count(p => p.Side == CsRules.T && p.Alive), cs.Players.Count(p => p.Side == CsRules.CT && p.Alive),
             HurtMarkers(m, hostNow), HitMarker(m, hostNow),
             !me.Alive && deadWatch is { } watched ? Name(watched) : null,
-            !me.Alive && deadWatch is not null ? (DeadWatchCandidates(cs, m.Players, SelfId).Count > 1 ? "Click or Space: next player · Right click: previous" : "The only player left") : null);
+            !me.Alive && deadWatch is not null ? (DeadWatchCandidates(cs, m.Players, SelfId).Count > 1 ? "Click or Space: next player · Right click: previous" : "The only player left") : null,
+            HudGrenades(me), GrenadeVeil(cs, me, hostNow).Flash, GrenadeVeil(cs, me, hostNow).Smoke);
+    }
+
+    // The grenades you carry, in slot order, with the one key 4 has in hand.
+    IReadOnlyList<CsHudGrenade>? HudGrenades(CsPlayerView me)
+    {
+        if (!me.Alive || me.Grenades is not { Count: > 0 } carried) return null;
+        var hand = grenadeHand is { } h && carried.Contains(h) ? h : GrenadeRules.Sorted(carried).FirstOrDefault();
+        return carried.Distinct().OrderBy(GrenadeRules.Order).Select(id => new CsHudGrenade(id, GrenadeRules.Find(id)!.Short, carried.Count(k => k == id), id == hand)).ToArray();
     }
 
     // The last hits you took (1.5 s), as bearings from where you look: the hit came from the
@@ -328,7 +354,7 @@ sealed partial class MultiplayerService
         // Same round key as the B key, so the next input pass doesn't treat this as a new round and close it.
         csRoundKey = m.Id + "#" + cs.Round;
         if (action == "cs-buy-menu") { buyOpen = !buyOpen && buyWindow && me.Alive && me.InBuyZone != false; return LobbyResult.Success; }
-        if (item is null || (CsRules.Find(item) is null && !CsRules.Equipment.Contains(item))) return LobbyResult.Fail("invalid", "Unknown item.");
+        if (item is null || (CsRules.Find(item) is null && !CsRules.Equipment.Contains(item) && GrenadeRules.Find(item) is null)) return LobbyResult.Fail("invalid", "Unknown item.");
         return Command("buy", JsonSerializer.SerializeToElement(new { item }));
     }
 
@@ -363,6 +389,13 @@ sealed class CsKeyReader
         catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception or ArgumentException or OverflowException) { return false; }
     }
     public bool Down(char key) => OperatingSystem.IsWindows() && (GetAsyncKeyState(char.ToUpperInvariant(key)) & 0x8000) != 0;
+    // Down now, and whether it went down since the last read (a click shorter than a service tick).
+    public (bool Down, bool Tapped) State(char key)
+    {
+        if (!OperatingSystem.IsWindows()) return (false, false);
+        var s = GetAsyncKeyState(char.ToUpperInvariant(key));
+        return ((s & 0x8000) != 0, (s & 1) != 0);
+    }
     public bool Pressed(char key)
     {
         var down = Down(key);

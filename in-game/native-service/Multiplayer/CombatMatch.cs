@@ -552,6 +552,30 @@ sealed class CombatMatch
         return null;
     }
 
+    // Area damage the host computed itself (CS grenades: an HE blast, fire): `damage` before armour
+    // (DamageModel) and team share. The thrower can hurt themselves; a kill of your own or a
+    // teammate's takes a frag away. Not a shot: fire rate and spawn protection don't apply.
+    public string? AreaHit(string from, string target, double damage, CombatWeapon weapon, long now, double[]? dir)
+    {
+        if (!players.TryGetValue(from, out var shooter) || !players.TryGetValue(target, out var victim)) return "not-playing";
+        if (!victim.Alive) return "dead";
+        if (damage <= 0 || !double.IsFinite(damage)) return "none";
+        var own = shooter == victim;
+        var teamHit = !own && shooter.Team != 0 && victim.Team == shooter.Team;
+        if (teamHit && TeamDamage <= 0) return "teammate";
+        var dealt = Math.Min(victim.Health, (DamageModel is null ? damage : DamageModel(victim.Id, damage, false, weapon)) * (teamHit ? TeamDamage : 1));
+        victim.Health -= dealt;
+        Emit("damage", now, victim.Id, shooter.Id, dealt, false, victim.Health, null, null, dir is { Length: 3 } ? dir.Select(v => Math.Round(v, 4)).ToArray() : null);
+        if (victim.Health <= 0.0001)
+        {
+            victim.Health = 0; victim.Alive = false; victim.Deaths++; victim.DiedAt = now; victim.RespawnAt = Respawns ? now + CombatRules.RespawnMs(Mode) : null;
+            if (own || teamHit) shooter.Frags = Math.Max(0, shooter.Frags - 1); else shooter.Frags++;
+            OnKill?.Invoke(victim.Id, shooter.Id, weapon, false);
+            Emit("death", now, victim.Id, shooter.Id, dealt, false, 0, shooter.Health);
+        }
+        return null;
+    }
+
     void Hit(Player shooter, Player victim, CombatWeapon weapon, bool head, bool teamHit, long t, long now, double[]? dir, bool followUp = false)
     {
         var raw = (followUp ? weapon.FollowUpDamage : weapon.Damage) * (head ? weapon.HeadMultiplier : 1);

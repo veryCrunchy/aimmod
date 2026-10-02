@@ -60,17 +60,17 @@ static class BombSounds
     }
 
     // ---- synthesis ---------------------------------------------------------------------------
-    static int N(double seconds) => (int)Math.Round(seconds * Rate);
-    static float[] Buffer(double seconds) => new float[N(seconds)];
+    internal static int N(double seconds) => (int)Math.Round(seconds * Rate);
+    internal static float[] Buffer(double seconds) => new float[N(seconds)];
     // Attack, hold and exponential release (seconds).
-    static double Env(double t, double attack, double length, double release)
+    internal static double Env(double t, double attack, double length, double release)
     {
         if (t < 0 || t > length) return 0;
         if (t < attack) return t / attack;
         var tail = length - release;
         return t <= tail ? 1 : Math.Exp(-5 * (t - tail) / release);
     }
-    static void Tone(float[] s, double start, double length, double freq, double gain, double attack = 0.003, double release = 0.03, double harmonic = 0.25)
+    internal static void Tone(float[] s, double start, double length, double freq, double gain, double attack = 0.003, double release = 0.03, double harmonic = 0.25)
     {
         var from = N(start); var count = N(length);
         for (var i = 0; i < count && from + i < s.Length; i++)
@@ -81,12 +81,12 @@ static class BombSounds
         }
     }
     // Deterministic noise, so every machine builds the same sounds.
-    sealed class Noise(uint seed)
+    internal sealed class Noise(uint seed)
     {
         uint state = seed;
         public double Next() { state = state * 1664525 + 1013904223; return (state >> 8) / (double)(1 << 24) * 2 - 1; }
     }
-    static void Burst(float[] s, double start, double length, double gain, double cutoffHz, uint seed, double decay = 30)
+    internal static void Burst(float[] s, double start, double length, double gain, double cutoffHz, uint seed, double decay = 30)
     {
         var noise = new Noise(seed); var from = N(start); var count = N(length);
         var a = 1 - Math.Exp(-2 * Math.PI * cutoffHz / Rate); double low = 0;
@@ -97,7 +97,7 @@ static class BombSounds
             s[from + i] += (float)(gain * low * Math.Exp(-decay * t) * Math.Min(1, t / 0.002));
         }
     }
-    static float[] Normalize(float[] s, double peak)
+    internal static float[] Normalize(float[] s, double peak)
     {
         var max = s.Length == 0 ? 0 : s.Max(Math.Abs);
         if (max > 0) for (var i = 0; i < s.Length; i++) s[i] = (float)(s[i] / max * peak);
@@ -167,7 +167,7 @@ static class BombSounds
     }
     // The knife: a swish of air (noise swept through a resonant band) for a slash or stab that meets
     // nothing, and a short dull thud with a scrape when it lands.
-    static float[] Swish(double seconds, double from, double to, uint seed, double peak)
+    internal static float[] Swish(double seconds, double from, double to, uint seed, double peak)
     {
         var s = Buffer(seconds); var noise = new Noise(seed); double low = 0, band = 0;
         for (var i = 0; i < s.Length; i++)
@@ -205,7 +205,7 @@ static class BombSounds
         ["defuse-done"] = DefuseDone, ["kit"] = KitPickup, ["explosion"] = Explosion, ["planted-alert"] = PlantedAlert,
         ["dropped"] = () => Tick(1400), ["picked"] = () => Tick(2600),
         ["knife-swish"] = KnifeSwish, ["knife-stab-swish"] = StabSwish, ["knife-hit"] = KnifeHit, ["knife-stab"] = StabHit,
-    };
+    }.Concat(GrenadeSounds.All).ToDictionary(kv => kv.Key, kv => kv.Value);
 
     // 16-bit mono PCM WAV.
     public static byte[] Wav(float[] samples)

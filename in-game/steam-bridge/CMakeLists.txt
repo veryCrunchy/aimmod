@@ -55,7 +55,7 @@ add_executable(aimmod_steam_bridge_harness tools/BridgeHarness.cpp)
 target_link_libraries(aimmod_steam_bridge_harness PRIVATE aimmod_steam_bridge)
 
 if(AIMMOD_STEAM_BUILD_MOD)
-    add_library(AimModSteam SHARED mod/dllmain.cpp mod/GameBindings.cpp mod/Ghosts.cpp)
+    add_library(AimModSteam SHARED mod/dllmain.cpp mod/GameBindings.cpp mod/Ghosts.cpp mod/Grenades.cpp)
     target_include_directories(AimModSteam PRIVATE mod)
     target_link_libraries(AimModSteam PRIVATE aimmod_steam_bridge)
     target_link_libraries(AimModSteam PUBLIC UE4SS)

@@ -57,9 +57,10 @@ namespace aimmod
             std::string primary, pistol; // weapon profile names; "-" = empty slot
             double armour{};
             bool helmet{}, kit{};
-            // CS slots 2 and 3 (game-modes.md 6.6.2): the knife, and the bomb for its carrier.
-            // Empty when the line has no such columns (the slot is left as the scenario has it).
-            std::string knife, bomb;
+            // CS slots 2, 4 and 3 (game-modes.md 6.6.2, 6.6.5): the knife, the bomb for its carrier,
+            // and the grenade slot while grenades are carried. Empty when the line has no such
+            // columns (the slot is left as the scenario has it).
+            std::string knife, bomb, grenade;
         };
         std::optional<Loadout> loadout;
         // CS: the bomb while it lies in the world (dropped, planted or defused), where AimModCore draws it.

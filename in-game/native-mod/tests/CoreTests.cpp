@@ -1055,6 +1055,7 @@ static void WaterChecks()
 #include "OverlayTests.inl"
 #include "WorldTagsTests.inl"
 #include "CsGearTests.inl"
+#include "CsGrenadesTests.inl"
 
 int main(int argc, char** argv)
 {
@@ -1091,6 +1092,7 @@ int main(int argc, char** argv)
     PreviewChecks();
     WaterChecks();
     csgear_checks::Run();
+    csgrenades_checks::Run();
     std::printf("%d AimModCore checks, %d failed.\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }

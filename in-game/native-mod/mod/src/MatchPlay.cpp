@@ -730,7 +730,7 @@ namespace aimmod
     {
         UObject* handler = Describe(character).weaponHandler.Object(character);
         if (!handler) return;
-        const std::string key = l.primary + "\t" + l.pistol + "\t" + l.knife + "\t" + l.bomb;
+        const std::string key = l.primary + "\t" + l.pistol + "\t" + l.knife + "\t" + l.grenade + "\t" + l.bomb;
         // A new handler (respawn) starts from the scenario loadout again.
         if (handler == m_loadoutHandler && key == m_loadoutKey) return;
         if (handler != m_loadoutHandler)
@@ -743,8 +743,8 @@ namespace aimmod
         m_loadoutChanged = true;
         std::vector<const std::uint8_t*> slots;
         const bool canEmpty = m_selectable.ok() && m_selectable.Elements(handler, slots, 8);
-        // Slots 0-3: primary, pistol, and in CS the knife and the bomb (an empty name leaves the slot as it is).
-        const std::string names[cs::Slots] = {l.primary, l.pistol, l.knife, l.bomb};
+        // Slots 0-4: primary, pistol, and in CS the knife, grenades and the bomb (an empty name leaves the slot as it is).
+        const std::string names[cs::Slots] = {l.primary, l.pistol, l.knife, l.grenade, l.bomb};
         std::string result;
         for (int slot = 0; slot < cs::Slots; ++slot)
         {
@@ -760,6 +760,13 @@ namespace aimmod
             if (empty)
             {
                 result += " slot" + std::to_string(slot) + (canEmpty ? "=empty" : "=empty-unsupported");
+                continue;
+            }
+            // CS: a slot whose profile didn't change keeps its weapon (and its magazine) when another
+            // slot changes (the bomb picked up or dropped, the last grenade thrown).
+            if (m_csLoadout && m_csLoadout->names[static_cast<std::size_t>(slot)] == names[slot])
+            {
+                result += " slot" + std::to_string(slot) + "=kept";
                 continue;
             }
             std::int32_t code = -1;
@@ -815,7 +822,7 @@ namespace aimmod
             if (!weapon || !reflect::Alive(weapon)) continue;
             // CS: the knife and the bomb make no gunshot (the service plays the knife's own sounds). The
             // user's shot sounds live in the weapon settings, so their names are emptied in memory.
-            const bool quiet = m_csLoadout && (slot == cs::KnifeSlot || slot == cs::BombSlot);
+            const bool quiet = m_csLoadout && (slot == cs::KnifeSlot || slot == cs::GrenadeSlot || slot == cs::BombSlot);
             for (const wchar_t* field : {STR("WeaponSettingsNative"), STR("ADSWeaponSettingsNative")})
             {
                 auto* settings = quiet ? RC::Unreal::CastField<RC::Unreal::FStructProperty>(reflect::PropertyOf(weapon->GetClassPrivate(), field)) : nullptr;
@@ -881,6 +888,7 @@ namespace aimmod
             }
         }
         m_gear.Release(player, why);
+        m_grenades.Release(why);
         m_csLoadout.reset();
         Log(std::string("match play: round state released (") + why + ")" + (m_frozen ? "; movement restored" : "") +
             (m_loadoutChanged ? "; scenario loadout restored" : ""));
@@ -996,6 +1004,10 @@ namespace aimmod
         if (r->loadout) ApplyLoadout(character, *r->loadout);
         ShowWeapons(now, character);
         // CS: switching (wheel, Q, purchases), the knife and bomb in the hand, the bomb in the world.
-        if (r->loadout && !r->loadout->knife.empty()) m_gear.Tick(now, player, character, Describe(character).weaponHandler.Object(character), *r);
+        if (r->loadout && !r->loadout->knife.empty())
+        {
+            m_gear.Tick(now, player, character, Describe(character).weaponHandler.Object(character), *r);
+            m_grenades.Tick(character, m_gear.hand(), m_output.root(), scenario);
+        }
     }
 } // namespace aimmod

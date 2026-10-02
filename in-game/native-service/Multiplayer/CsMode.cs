@@ -21,17 +21,18 @@ namespace AimMod.InGame.Multiplayer;
 //    a spread bullet would hit where the crosshair isn't.
 sealed record CsLook(string Model, string ThirdPerson, int Magazine, double Reload, double KickUp, double KickSide, bool Scope = false);
 
-// A CS item that goes in a weapon slot: 0 primary, 1 secondary (pistol), 2 knife, 3 bomb.
+// A CS item that goes in a weapon slot: 0 primary, 1 secondary (pistol), 2 knife, 3 grenades, 4 bomb.
 // ArmorPenetration: the share of damage that reaches health through armour (CS2
 // "armor penetration").
 sealed record CsWeapon(string Id, string Label, int Price, string Side, int Slot, string Class, int KillReward, double ArmorPenetration, CombatWeapon Combat, CsLook Look);
 
 static class CsRules
 {
-    // Weapon slots, as KovaaK's Weapon1..Weapon8 keys number them from 0 (key 1 = slot 0).
-    public const int PrimarySlot = 0, PistolSlot = 1, KnifeSlot = 2, BombSlot = 3;
-    // The knife's right-mouse stab: no weapon slot of its own, AimModCore claims it as slot 4.
-    public const int StabSlot = 4;
+    // Weapon slots, as KovaaK's Weapon1..Weapon8 keys number them from 0 (key 1 = slot 0): CS's
+    // 1 primary, 2 pistol, 3 knife, 4 grenades, 5 bomb.
+    public const int PrimarySlot = 0, PistolSlot = 1, KnifeSlot = 2, GrenadeSlot = 3, BombSlot = 4;
+    // The knife's right-mouse stab: no weapon slot of its own, AimModCore claims it as slot 5.
+    public const int StabSlot = 5;
     // KovaaK's viewmodel with no weapon mesh (AimModCore draws the knife and the bomb).
     public const string BlankModel = "Blank";
     // CS2 knife reach (slash 48, stab 32 Source units) at the CS ports' 4.4 cm per unit.
@@ -76,15 +77,20 @@ static class CsRules
     public static readonly CombatWeapon Stab = new("AimMod CS Knife Stab", 65, 1, 1.0, false, 0, StabRangeCm);
     public static readonly CsWeapon Bomb = new("c4", "C4", 0, T, BombSlot, "bomb", 0, 0,
         new CombatWeapon("AimMod CS C4", 0, 1, 1, false, 0, 1), new(BlankModel, "-", 0, 0, 0, 0));
+    // The grenade slot (key 4) while you carry any (CsGrenades.cs): one profile that never hits; which
+    // grenade is in the hand is the service's (key 4 cycles them), and AimModCore draws its model.
+    public static readonly CsWeapon Grenade = new("grenade", "Grenade", 0, "any", GrenadeSlot, "grenade", 0, 0,
+        new CombatWeapon("AimMod CS Grenade", 0, 1, 0.5, false, 0, 1), new(BlankModel, "-", 0, 0, 0, 0));
     // Every profile the CS arena carries.
-    public static IEnumerable<CsWeapon> Profiles => Weapons.Append(Knife).Append(Bomb);
+    public static IEnumerable<CsWeapon> Profiles => Weapons.Append(Knife).Append(Grenade).Append(Bomb);
     public static CsWeapon? Find(string? id) => Weapons.FirstOrDefault(w => w.Id == id);
-    public static CsWeapon? FindAny(string? id) => Profiles.FirstOrDefault(w => w.Id == id);
-    public static CsWeapon? ByProfile(string name) => name == Stab.Name ? Knife : Profiles.FirstOrDefault(w => w.Combat.Name == name);
-    // The item a slot holds for a player: what they bought, the knife, or the bomb if they carry it.
-    public static CsWeapon? InSlot(int slot, string? primary, string? secondary, bool carrier) => slot switch
+    // Any known item, the grenades included (kill feed, armour).
+    public static CsWeapon? FindAny(string? id) => Profiles.Concat(GrenadeRules.Weapons).FirstOrDefault(w => w.Id == id);
+    public static CsWeapon? ByProfile(string name) => name == Stab.Name ? Knife : Profiles.Concat(GrenadeRules.Weapons).FirstOrDefault(w => w.Combat.Name == name);
+    // The item a slot holds for a player: what they bought, the knife, grenades if any, or the bomb if they carry it.
+    public static CsWeapon? InSlot(int slot, string? primary, string? secondary, bool carrier, bool grenades = false) => slot switch
     {
-        PrimarySlot => Find(primary), PistolSlot => Find(secondary), KnifeSlot => Knife, BombSlot => carrier ? Bomb : null, _ => null,
+        PrimarySlot => Find(primary), PistolSlot => Find(secondary), KnifeSlot => Knife, GrenadeSlot => grenades ? Grenade : null, BombSlot => carrier ? Bomb : null, _ => null,
     };
     public static CsWeapon DefaultPistol(string side) => side == T ? Weapons[0] : Weapons[1];
     public static readonly string[] Equipment = ["kevlar", "kevlar-helmet", "defuse-kit"];
@@ -206,15 +212,16 @@ sealed record MapObjectives(IReadOnlyList<ObjectiveZone> Zones, IReadOnlyList<Ob
 
 // What clients mirror and the HUD shows.
 // InBuyZone: inside one of the side's buy zones now (null when the map has none, so buying works anywhere).
+// Grenades: what they carry (GrenadeRules ids, in slot order); Flash: the last flash that hit them.
 sealed record CsPlayerView(string Member, int Team, string Side, int Money, bool Alive, double Health, double Armor, bool Helmet, bool Kit, string? Primary, string? Secondary, int Kills, int Deaths,
-    bool? InBuyZone = null, string? Site = null, string? Callout = null, string? Holding = null);
+    bool? InBuyZone = null, string? Site = null, string? Callout = null, string? Holding = null, IReadOnlyList<string>? Grenades = null, CsFlashView? Flash = null);
 // A bomb site's centre (world units), for the HUD's site markers.
 sealed record CsSiteView(string Name, double X, double Y, double Z);
 sealed record CsBombView(string State, string? Carrier, string? Site, double[]? Position, long? ExplodesAt, string? Planter, long? PlantDoneAt, string? Defuser, long? DefuseDoneAt);
 sealed record CsEvent(long Id, string Kind, long T, string? Member, string? Text, int Amount = 0);
 sealed record CsView(int Round, string Phase, long PhaseEndsAt, long? LiveAt, int[] Score, string Team1Side, int HalfRounds, bool Overtime, IReadOnlyList<CsPlayerView> Players,
     CsBombView Bomb, int? LastWinner, string? LastReason, int? WinnerTeam, IReadOnlyList<CsEvent> Events, IReadOnlyDictionary<string, double[]>? Spawns,
-    IReadOnlyList<CsSiteView>? Sites = null);
+    IReadOnlyList<CsSiteView>? Sites = null, IReadOnlyList<CsGrenadeView>? Grenades = null);
 
 sealed class CsMatch
 {
@@ -223,6 +230,7 @@ sealed class CsMatch
         public required string Id; public int Team; public int Money = CsRules.StartMoney;
         public CsWeapon? Primary, Secondary; public double Armor; public bool Helmet, Kit; public int Kills, Deaths;
         public int Held = -1; // the weapon slot the player says they hold (-1: not told yet)
+        public readonly List<string> Grenades = []; public CsFlashView? Flash;
     }
     readonly Dictionary<string, P> players = new();
     readonly MapObjectives? map;
@@ -232,6 +240,8 @@ sealed class CsMatch
     readonly int[] lossStreak = [0, 0];
     bool swapped; int roundsPlayed;
     public CombatMatch Combat { get; }
+    // Thrown grenades, their paths and what they do (CsGrenades.cs).
+    public CsGrenadeField Grenades { get; }
     public int HalfRounds { get; }
     public bool Overtime { get; }
     public int Round { get; private set; }
@@ -261,10 +271,16 @@ sealed class CsMatch
         {
             Respawns = false,
             // The bomb slot never hits: it plants.
-            WeaponFor = (id, slot) => !players.TryGetValue(id, out var p) || slot == CsRules.BombSlot ? null
+            WeaponFor = (id, slot) => !players.TryGetValue(id, out var p) || slot is CsRules.BombSlot or CsRules.GrenadeSlot ? null
                 : slot == CsRules.StabSlot ? CsRules.Stab : CsRules.InSlot(slot, p.Primary?.Id, p.Secondary?.Id, false)?.Combat,
             DamageModel = Damage,
             OnKill = Killed,
+        };
+        Grenades = new CsGrenadeField
+        {
+            Players = () => players.Values.Select(p => (p.Id, p.Team, Combat.Position(p.Id), Combat.Alive(p.Id))),
+            Damage = (from, victim, damage, grenade, now, dir) => Combat.AreaHit(from, victim, damage, grenade.Combat, now, dir),
+            Flashed = (victim, flash) => { if (players.TryGetValue(victim, out var p)) p.Flash = flash; },
         };
         Round = 0;
         StartRound(start);
@@ -292,11 +308,13 @@ sealed class CsMatch
         {
             k.Kills++;
             var cs = CsRules.ByProfile(weapon.Name);
-            if (players.TryGetValue(victim, out var v0) && v0.Team != k.Team) Pay(k, cs?.KillReward ?? 300, now, "kill");
+            // Your own grenade: a kill taken away, as in CS.
+            if (victim == killer) k.Kills = Math.Max(0, k.Kills - 2);
+            else if (players.TryGetValue(victim, out var v0) && v0.Team != k.Team) Pay(k, cs?.KillReward ?? 300, now, "kill");
             // CS2: a team kill costs $300 and isn't a kill.
-            else if (v0 is not null && v0.Team == k.Team && victim != killer) { k.Kills = Math.Max(0, k.Kills - 1); k.Money = Math.Max(0, k.Money - CsRules.TeamKillPenalty); Event("money", now, killer, "team-kill", -CsRules.TeamKillPenalty); }
+            else if (v0 is not null && v0.Team == k.Team) { k.Kills = Math.Max(0, k.Kills - 1); k.Money = Math.Max(0, k.Money - CsRules.TeamKillPenalty); Event("money", now, killer, "team-kill", -CsRules.TeamKillPenalty); }
         }
-        if (players.TryGetValue(victim, out var v)) { v.Deaths++; v.Primary = null; v.Secondary = null; v.Armor = 0; v.Helmet = false; v.Kit = false; }
+        if (players.TryGetValue(victim, out var v)) { v.Deaths++; v.Primary = null; v.Secondary = null; v.Armor = 0; v.Helmet = false; v.Kit = false; v.Grenades.Clear(); }
         // Text: killer, the weapon's id and whether it was a headshot (tab-separated).
         var teamKill = players.TryGetValue(victim, out var vt) && players.TryGetValue(killer, out var kt) && vt.Team == kt.Team && victim != killer;
         Event("kill", now, victim, killer + "\t" + (CsRules.ByProfile(weapon.Name)?.Id ?? "") + "\t" + (head ? "1" : "0") + (teamKill ? "\tTK" : ""));
@@ -332,11 +350,13 @@ sealed class CsMatch
         Round++;
         Phase = "freeze"; PhaseEndsAt = now + CsRules.FreezeMs; LiveAt = null;
         roundSpawns.Clear(); lastAt.Clear();
+        Grenades.Clear();
         var index = new Dictionary<string, int>();
         foreach (var p in players.Values)
         {
             Combat.Revive(p.Id, now, CsRules.MaxHealth);
             Combat.SetTeam(p.Id, p.Team);
+            p.Flash = null;
             var side = SideOf(p.Team);
             p.Secondary ??= CsRules.DefaultPistol(side);
             // Spawn: the side's spawns from the map metadata, one per player in turn.
@@ -374,6 +394,14 @@ sealed class CsMatch
             if ((w.Slot == 0 ? p.Primary : p.Secondary)?.Id == w.Id) return "owned";
             price = w.Price;
             grant = () => { if (w.Slot == 0) p.Primary = w; else p.Secondary = w; };
+        }
+        else if (GrenadeRules.Find(item) is { } g)
+        {
+            // Grenades: four in all, one of each but two flashbangs (GrenadeRules.CarryProblem).
+            if (g.Side != "any" && g.Side != side) return "side";
+            if (GrenadeRules.CarryProblem(p.Grenades, g.Id) is { } problem) return problem;
+            price = g.Price;
+            grant = () => { p.Grenades.Add(g.Id); var sorted = GrenadeRules.Sorted(p.Grenades); p.Grenades.Clear(); p.Grenades.AddRange(sorted); };
         }
         else if (item == "kevlar")
         {
@@ -474,7 +502,39 @@ sealed class CsMatch
     }
     // What a player holds: the slot they said, if it has an item for them, else their best weapon.
     CsWeapon Holding(P p) =>
-        (p.Held >= 0 ? CsRules.InSlot(p.Held, p.Primary?.Id, p.Secondary?.Id, carrier == p.Id) : null) ?? p.Primary ?? p.Secondary ?? CsRules.Knife;
+        (p.Held >= 0 ? CsRules.InSlot(p.Held, p.Primary?.Id, p.Secondary?.Id, carrier == p.Id, p.Grenades.Count > 0) : null) ?? p.Primary ?? p.Secondary ?? CsRules.Knife;
+
+    // Throwing (CS: fire throws, right mouse underhand, both in between): a grenade the player carries,
+    // from where their own camera track has them (within 1.5 m), while the round is on.
+    public const double ThrowOriginToleranceCm = 150;
+    public string? Throw(string id, string kind, double strength, double[] origin, double pitch, double yaw, long now)
+    {
+        if (!players.TryGetValue(id, out var p) || !Combat.Alive(id)) return "dead";
+        if (Phase is not ("live" or "planted")) return Phase == "freeze" ? "freeze" : "not-now";
+        if (!p.Grenades.Contains(kind)) return "no-grenade";
+        if (origin is not { Length: 3 } || origin.Any(v => !double.IsFinite(v) || Math.Abs(v) > 1e7) || !double.IsFinite(pitch) || !double.IsFinite(yaw) || Math.Abs(pitch) > 90.5 || !double.IsFinite(strength)) return "invalid";
+        if (Combat.Position(id) is not { } at) return "no-track";
+        if (Math.Sqrt((at.X - origin[0]) * (at.X - origin[0]) + (at.Y - origin[1]) * (at.Y - origin[1]) + (at.Z - origin[2]) * (at.Z - origin[2])) > ThrowOriginToleranceCm) return "origin";
+        return Release(p, kind, origin, GrenadePhysics.ThrowVelocity(pitch, yaw, strength), now);
+    }
+    // A host-run bot's throw (BotGrenades): the velocity it aimed, at most a full throw.
+    public string? BotThrow(string id, string kind, double[] origin, double[] velocity, long now)
+    {
+        if (!players.TryGetValue(id, out var p) || !Combat.Alive(id)) return "dead";
+        if (Phase is not ("live" or "planted")) return "not-now";
+        if (!p.Grenades.Contains(kind)) return "no-grenade";
+        if (origin is not { Length: 3 } || velocity is not { Length: 3 } || origin.Concat(velocity).Any(v => !double.IsFinite(v) || Math.Abs(v) > 1e7)) return "invalid";
+        var speed = Math.Sqrt(velocity.Sum(v => v * v));
+        return Release(p, kind, origin, speed > GrenadePhysics.ThrowSpeed ? velocity.Select(x => x * GrenadePhysics.ThrowSpeed / speed).ToArray() : velocity, now);
+    }
+    string? Release(P p, string kind, double[] origin, double[] velocity, long now)
+    {
+        p.Grenades.Remove(kind);
+        // A decoy sounds like its owner's gun.
+        var weapon = kind == GrenadeRules.Decoy ? (p.Primary ?? p.Secondary)?.Class ?? "pistol" : null;
+        Grenades.Throw(p.Id, kind, origin, velocity, now, weapon);
+        return null;
+    }
 
     public void Leave(string id, long now) { Combat.Kill(id, now); if (carrier == id) DropBomb(id); if (planter == id) planter = null; if (defuser == id) defuser = null; }
 
@@ -484,6 +544,7 @@ sealed class CsMatch
         RememberPositions();
         if (Phase == "freeze" && now >= PhaseEndsAt) { Phase = "live"; LiveAt = now; PhaseEndsAt = now + CsRules.RoundMs; Event("live", now, null, null); }
         if (Phase == "freeze") PickUp(now);
+        if (Phase is "live" or "planted" or "end") Grenades.Tick(now);
         if (Phase is "live" or "planted")
         {
             // Plant and defuse progress: the holder must stay alive and in place.
@@ -576,7 +637,7 @@ sealed class CsMatch
         {
             swapped = !swapped;
             var money = roundsPlayed >= 2 * HalfRounds ? CsRules.OvertimeMoney : CsRules.StartMoney;
-            foreach (var p in players.Values) { p.Money = money; p.Primary = null; p.Secondary = null; p.Armor = 0; p.Helmet = false; p.Kit = false; }
+            foreach (var p in players.Values) { p.Money = money; p.Primary = null; p.Secondary = null; p.Armor = 0; p.Helmet = false; p.Kit = false; p.Grenades.Clear(); }
             lossStreak[0] = 0; lossStreak[1] = 0;
             Event(roundsPlayed == HalfRounds ? "halftime" : "overtime-half", now, null, null);
         }
@@ -598,8 +659,9 @@ sealed class CsMatch
 
     public CsView View() => new(Round, Phase, PhaseEndsAt, LiveAt, [score[0], score[1]], SideOf(1), HalfRounds, Overtime,
         players.Values.Select(p => new CsPlayerView(p.Id, p.Team, SideOf(p.Team), p.Money, Combat.Alive(p.Id), Math.Round(Combat.Health(p.Id), 1), Math.Round(p.Armor, 1), p.Helmet, p.Kit,
-            p.Primary?.Id, p.Secondary?.Id, p.Kills, p.Deaths, InBuyZone(p), SiteOf(p), CalloutOf(p), Holding(p).Id)).ToArray(),
+            p.Primary?.Id, p.Secondary?.Id, p.Kills, p.Deaths, InBuyZone(p), SiteOf(p), CalloutOf(p), Holding(p).Id, p.Grenades.Count > 0 ? p.Grenades.ToArray() : null, p.Flash)).ToArray(),
         new CsBombView(bombState, carrier, site, bombAt, explodesAt, planter, plantDoneAt, defuser, defuseDoneAt), lastWinner, lastReason, WinnerTeam, events.TakeLast(16).ToArray(),
         roundSpawns.Count > 0 ? new Dictionary<string, double[]>(roundSpawns) : null,
-        map?.BombSites.Select(z => new CsSiteView(z.Name, Math.Round((z.Min[0] + z.Max[0]) / 2), Math.Round((z.Min[1] + z.Max[1]) / 2), Math.Round((z.Min[2] + z.Max[2]) / 2))).ToArray());
+        map?.BombSites.Select(z => new CsSiteView(z.Name, Math.Round((z.Min[0] + z.Max[0]) / 2), Math.Round((z.Min[1] + z.Max[1]) / 2), Math.Round((z.Min[2] + z.Max[2]) / 2))).ToArray(),
+        Grenades.View() is { Count: > 0 } thrownGrenades ? thrownGrenades : null);
 }

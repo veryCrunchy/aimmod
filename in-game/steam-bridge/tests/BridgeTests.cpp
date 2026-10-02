@@ -7,6 +7,7 @@
 #include "BotOrders.hpp"
 #include "Codec.hpp"
 #include "GhostMath.hpp"
+#include "GrenadePhysics.hpp"
 #include "Json.hpp"
 #include "PoseFile.hpp"
 #include "Walker.hpp"
@@ -1147,6 +1148,54 @@ int main()
         Check(inflated && *inflated == repeat && z.size() < repeat.size() / 4, "zlib streams round-trip and use back-references");
         const auto empty = Inflate(avatar::Zlib(nullptr, 0));
         Check(empty && empty->empty(), "An empty zlib stream is valid");
+    }
+    {
+        // CS grenades (GrenadePhysics.hpp): the same flight as the service's GrenadePhysics.
+        using namespace bridge::grenades;
+        const Vec full = ThrowVelocity(0, 0, 1);
+        Check(std::fabs(Len(full[0], full[1], full[2]) - ThrowSpeed) < 1e-6 && std::fabs(std::atan2(full[2], full[0]) * 180 / 3.14159265358979323846 - 10) < 1e-6 &&
+                  std::fabs(Len(ThrowVelocity(0, 0, 0)[0], 0, ThrowVelocity(0, 0, 0)[2]) - ThrowSpeed * 0.3) < 1e-6,
+              "Grenade throws: full speed on fire, 30 % underhand, aimed 10 degrees up at level");
+        const auto flat = Simulate({0, 0, 180}, full, Floor(0));
+        // The service's MultiplayerChecks.GoldenRestMs / GoldenRestX for the same throw.
+        Check(flat.back().motion == Rest && std::fabs(flat.back().t - 2206) < 0.5 && std::fabs(flat.back().x - 3852.8) < 0.5 &&
+                  std::any_of(flat.begin(), flat.end(), [](const Key& k) { return k.motion == Slide; }),
+              "A grenade on a level floor bounces, slides and rests where the service's physics says");
+        Check(Simulate({0, 0, 180}, full, Floor(0)) == flat, "The same throw flies the same path every time");
+        // A floor at 0 and a wall at x = 800 facing back.
+        const Trace room = [](const Vec& a, const Vec& b) -> std::optional<Hit> {
+            std::optional<double> best;
+            Vec normal{};
+            if (a[2] >= 0 && b[2] < 0) best = a[2] / (a[2] - b[2]), normal = {0, 0, 1};
+            if (a[0] <= 800 && b[0] > 800)
+            {
+                const double f = (800 - a[0]) / (b[0] - a[0]);
+                if (!best || f < *best) best = f, normal = {-1, 0, 0};
+            }
+            if (!best) return std::nullopt;
+            return Hit{{a[0] + (b[0] - a[0]) * *best, a[1] + (b[1] - a[1]) * *best, a[2] + (b[2] - a[2]) * *best}, normal};
+        };
+        const auto keys = Simulate({0, 0, 180}, full, room);
+        bool inside = true, ordered = true, exact = true, wall = false;
+        for (std::size_t i = 0; i < keys.size(); ++i)
+        {
+            inside = inside && keys[i].x <= 800 && keys[i].z >= -0.01;
+            wall = wall || keys[i].impact == WallImpact;
+            if (i == 0) continue;
+            ordered = ordered && keys[i].t >= keys[i - 1].t;
+            const Vec at = Pos(keys[i - 1], (keys[i].t - keys[i - 1].t) / 1000);
+            exact = exact && Len(at[0] - keys[i].x, at[1] - keys[i].y, at[2] - keys[i].z) < 3;
+        }
+        Check(wall && inside && ordered && exact && keys.back().motion == Rest, "A grenade bounces off a wall, stays in the room and each key follows from the last");
+        const auto lost = Simulate({0, 0, 100}, {100, 0, 0}, [](const Vec&, const Vec&) { return std::optional<Hit>{}; });
+        Check(lost.back().motion == Rest && std::fabs(lost.back().t - MaxSeconds * 1000) < 20, "With nothing to hit, a path ends after 8 s");
+        const auto r = ParseSim("AIMMOD_GRENADESIM_1\t7\nthrow\t3\the\t1\t2\t3\t10\t0\t-5\nthrow\tx\the\t1\t2\t3\t4\t5\t6\nlos\t9\t0\t0\t0\t5\t5\t5\nnoise\n");
+        Check(r && r->sequence == 7 && r->throws.size() == 1 && r->throws[0].id == 3 && r->throws[0].kind == "he" && r->throws[0].velocity[2] == -5 && r->los.size() == 1 && r->los[0].tag == 9 &&
+                  r->los[0].to[1] == 5 && !ParseSim("AIMMOD_BOTS_1\t1\n"),
+              "grenade-sim.tsv: throws and line-of-sight checks; bad rows skipped, a foreign header refused");
+        const std::string out = FormatPaths(1234, {{3, {{0, 1, 2, 3, 4, 5, 6, Flight, NoImpact}, {500, 7, 8, 9, 0, 0, 0, Rest, FloorImpact}}}}, {{9, false}, {10, true}});
+        Check(out == "AIMMOD_GRENADEPATHS_1\t1234\npath\t3\t2\t0.000\t1.000\t2.000\t3.000\t4.000\t5.000\t6.000\t0\t0\t500.000\t7.000\t8.000\t9.000\t0.000\t0.000\t0.000\t2\t2\nlos\t9\t0\nlos\t10\t1\n",
+              "grenade-paths.tsv: each path's keys and each line of sight");
     }
     std::printf("%d/%d checks passed\n", checks - failures, checks);
     return failures == 0 ? 0 : 1;

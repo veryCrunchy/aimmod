@@ -9,6 +9,7 @@
 //    freeplay. Missing bindings disable it (logged); leaving the gate
 //    releases spawn protection.
 #include "CsGear.hpp"
+#include "CsGrenades.hpp"
 #include "GameBindings.hpp"
 
 #include <Unreal/FWeakObjectPtr.hpp>
@@ -135,6 +136,7 @@ namespace aimmod
         // CS: the slots as last applied (to draw what changed), and the weapons in the hand and the bomb in the world.
         std::optional<cs::Loadout> m_csLoadout;
         CsGear m_gear;
+        CsGrenades m_grenades; // CS grenades in the hand and in the world (grenades.tsv)
         struct PendingSpawn
         {
             RoundState::Spawn spawn;

@@ -47,13 +47,20 @@ namespace aimmod
             m_stabRequested = false;
             return stab;
         }
+        // The slot the game has in the hand (last tick), -1 unknown.
+        int hand() const { return m_hand; }
+
+        // Shared with CsGrenades: a model of tinted basic shapes on `parent` (owned by `owner`), a part's
+        // place on its parent, and an AimMod actor (no collision) to hang models on in the world.
+        static game::UObject* BuildModel(game::UObject* owner, game::UObject* parent, const std::vector<cs::Part>& parts, std::vector<RC::Unreal::FWeakObjectPtr>* lights);
+        static void Place(game::UObject* component, const double location[3], const double rotation[3], const double* scale);
+        static game::UObject* SpawnHolder(game::UObject* character, double x, double y, double z);
 
     private:
         bool Bind(game::UObject* player);
         int InHand(game::UObject* handler) const;
         void Press(game::UObject* player, int slot);
         bool KeyPressed(game::UObject* player, const char* key) const;
-        game::UObject* BuildModel(game::UObject* owner, game::UObject* parent, const std::vector<cs::Part>& parts, std::vector<RC::Unreal::FWeakObjectPtr>* lights);
         void HandModels(game::UObject* character, int slot);
         void KnifeAttacks(double now, game::UObject* player, game::UObject* character, int hand);
         void WorldBomb(double now, game::UObject* player, game::UObject* character, const std::optional<RoundState::Bomb>& bomb);
@@ -62,6 +69,7 @@ namespace aimmod
         game::Bindings& m_b;
         game::Scene& m_scene;
 
+        int m_hand{-1};
         bool m_bound{}, m_disabled{};
         game::Getter m_currentNum, m_keyJustPressed;
         game::Getter m_pressed[cs::Slots], m_released[cs::Slots];

@@ -37,3 +37,14 @@ test('CS teammates show their gear under the name: bomb, weapon, armour, kit and
   assert.equal(mate.bombNode.style.display,'','the bomb carrier is marked');assert.equal(mate.kitNode.style.display,'none');assert.equal(mate.armorNode.style.display,'none');
   assert.deepEqual(Object.assign({},s.api.gearOf('w=AK-47;hp=5')),{w:'AK-47',hp:'5'});
 });
+test('CS teammates show their grenades as small chips',()=>{
+  const s=setup();
+  s.fire(JSON.stringify({tags:[{n:'Nova',t:'T',f:1,a:1,c:0,x:0.5,y:0.5,d:8,g:'w=AK-47;hp=100;g=he,flash,flash,smoke'}]}));
+  const mate=s.body.children[0].children[0];
+  assert.deepEqual(Array.from(mate.nadeNodes,n=>n.style.display==='none'?'':n.textContent),['HE','FL','FL','SM']);
+  assert.match(mate.nadeNodes[3].className,/wt-smoke/);
+  s.fire(JSON.stringify({tags:[{n:'Nova',t:'T',f:1,a:1,c:0,x:0.5,y:0.5,d:8,g:'w=AK-47;hp=100;g=molotov'}]}));
+  assert.deepEqual(Array.from(mate.nadeNodes,n=>n.style.display==='none'?'':n.textContent),['MO','','','']);
+  s.fire(JSON.stringify({tags:[{n:'Nova',t:'T',f:1,a:1,c:0,x:0.5,y:0.5,d:8,g:'w=AK-47;hp=100'}]}));
+  assert.ok(mate.nadeNodes.every(n=>n.style.display==='none'),'no grenades, no chips');
+});

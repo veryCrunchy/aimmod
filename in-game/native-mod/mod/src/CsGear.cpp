@@ -158,6 +158,7 @@ namespace aimmod
             m_releaseSlot = -1;
         }
         const int hand = InHand(handler);
+        m_hand = hand;
         m_switcher.Observe(hand);
         if (m_haveLoadout)
         {
@@ -268,6 +269,30 @@ namespace aimmod
             ++built;
         }
         return built > 0 ? root : nullptr;
+    }
+
+    void CsGear::Place(UObject* component, const double location[3], const double rotation[3], const double* scale) { Relative(component, location, rotation, scale); }
+
+    UObject* CsGear::SpawnHolder(UObject* character, double x, double y, double z)
+    {
+        UObject* world = character ? static_cast<RC::Unreal::AActor*>(character)->GetWorld() : nullptr;
+        UClass* actorClass = game::FindClass(STR("/Script/Engine.StaticMeshActor"));
+        if (!world || !actorClass) return nullptr;
+        using namespace RC::Unreal;
+        const FTransform transform{FQuat(FRotator(0, 0, 0)), FVector(static_cast<float>(x), static_cast<float>(y), static_cast<float>(z)), FVector(1, 1, 1)};
+        AActor* spawned = UGameplayStatics::BeginDeferredActorSpawnFromClass(world, actorClass, transform, ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
+        if (!spawned) return nullptr;
+        UGameplayStatics::FinishSpawningActor(spawned, transform);
+        spawned->SetActorEnableCollision(false);
+        UObject* root = GetObject(spawned, STR("StaticMeshComponent"));
+        if (!root)
+        {
+            Call(spawned, STR("/Script/Engine.Actor:K2_DestroyActor"));
+            return nullptr;
+        }
+        CallByte(root, STR("/Script/Engine.SceneComponent:SetMobility"), Movable);
+        CallByte(root, STR("/Script/Engine.PrimitiveComponent:SetCollisionEnabled"), NoCollision);
+        return spawned;
     }
 
     void CsGear::HandModels(UObject* character, int slot)

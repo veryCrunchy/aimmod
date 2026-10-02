@@ -12,7 +12,8 @@ static partial class MultiplayerChecks
         Check(CsRules.Profiles.All(w => MatchScenario.ViewModels.Contains(w.Look.Model)) && CsRules.Profiles.All(w => w.Look.ThirdPerson == "-" || MatchScenario.ThirdPersonModels.Contains(w.Look.ThirdPerson)),
             "Every CS item uses one of KovaaK's own viewmodels and third-person models");
         Check(CsRules.Weapons.Where(w => w.Class == "pistol").All(w => w.Slot == CsRules.PistolSlot) && CsRules.Weapons.Where(w => w.Class != "pistol").All(w => w.Slot == CsRules.PrimarySlot)
-            && CsRules.Knife.Slot == CsRules.KnifeSlot && CsRules.Bomb.Slot == CsRules.BombSlot, "Slots the CS way: 1 primary, 2 pistol, 3 knife, 4 bomb");
+            && CsRules.Knife.Slot == CsRules.KnifeSlot && CsRules.Grenade.Slot == CsRules.GrenadeSlot && CsRules.Bomb.Slot == CsRules.BombSlot && CsRules.GrenadeSlot == 3 && CsRules.BombSlot == 4,
+            "Slots the CS way: 1 primary, 2 pistol, 3 knife, 4 grenades, 5 bomb");
         Check(CsRules.Find("ak47")!.Look.Model == "KovaaKs Rifle" && CsRules.Find("m4a1s")!.Look.Model == "Heavy Surge Rifle" && CsRules.Find("awp")!.Look is { Model: "Spider", Scope: true, Magazine: 5 }
             && CsRules.Find("mac10")!.Look.Model == "Machine Pistol" && CsRules.Find("deagle")!.Look.Model == "Law Bringer" && CsRules.Knife.Look.Model == CsRules.BlankModel && CsRules.Bomb.Look.Model == CsRules.BlankModel,
             "Rifles, SMGs, pistols and the sniper get their class's viewmodel; the knife and bomb are drawn by AimModCore");
@@ -22,7 +23,7 @@ static partial class MultiplayerChecks
             "Rifles kick more than SMGs, the AWP most");
         Check(CsRules.FindAny("knife") == CsRules.Knife && CsRules.Find("knife") is null && CsRules.ByProfile(CsRules.Bomb.Combat.Name) == CsRules.Bomb, "The knife and bomb aren't for sale but are known items");
         Check(CsRules.InSlot(0, "ak47", "glock", false)?.Id == "ak47" && CsRules.InSlot(1, null, "usp", false)?.Id == "usp" && CsRules.InSlot(2, null, null, false) == CsRules.Knife
-            && CsRules.InSlot(3, null, null, true) == CsRules.Bomb && CsRules.InSlot(3, null, null, false) is null && CsRules.InSlot(0, null, "usp", false) is null, "What each slot holds");
+            && CsRules.InSlot(4, null, null, true) == CsRules.Bomb && CsRules.InSlot(4, null, null, false) is null && CsRules.InSlot(3, null, null, false, true) == CsRules.Grenade && CsRules.InSlot(3, null, null, true) is null && CsRules.InSlot(0, null, "usp", false) is null, "What each slot holds");
 
         // The arena: every CS profile with its look, the four slots filled, the weapon shown.
         var content = new FakeContent();
@@ -37,8 +38,8 @@ static partial class MultiplayerChecks
         }
         Check(CsRules.Profiles.All(w => Profile(w.Combat.Name) is { } p && p.Contains("\nWeaponModel=" + w.Look.Model + "\n", StringComparison.Ordinal)) && !arena.Contains("WeaponModel=Rifle\n", StringComparison.Ordinal),
             "The CS arena carries every CS profile with its viewmodel");
-        Check(arena.Contains("WeaponProfileNames=AimMod CS USP-S;AimMod CS Glock-18;AimMod CS Knife;AimMod CS C4;;;;\n", StringComparison.Ordinal) && arena.Contains("\nHideWeapon=false\n", StringComparison.Ordinal)
-            && !MatchScenario.Validate(BaseScenario, arena).Except(MatchScenario.Validate(BaseScenario, BaseScenario)).Any(), "The player's slots: two pistols until the loadout, the knife, the bomb; the weapon is shown; the arena validates");
+        Check(arena.Contains("WeaponProfileNames=AimMod CS USP-S;AimMod CS Glock-18;AimMod CS Knife;AimMod CS Grenade;AimMod CS C4;;;\n", StringComparison.Ordinal) && arena.Contains("\nHideWeapon=false\n", StringComparison.Ordinal)
+            && !MatchScenario.Validate(BaseScenario, arena).Except(MatchScenario.Validate(BaseScenario, BaseScenario)).Any(), "The player's slots: two pistols until the loadout, the knife, grenades, the bomb; the weapon is shown; the arena validates");
         var ak = Profile("AimMod CS AK-47")!; var awp = Profile("AimMod CS AWP")!; var knife = Profile("AimMod CS Knife")!; var bomb = Profile("AimMod CS C4")!;
         Check(ak.Contains("\nMagazineMax=30\n") && ak.Contains("\nReloadTimeFromEmpty=2.43\n") && ak.Contains("\nMaxRecoilUp=0.42\n") && ak.Contains("\nSpreadSSA=0.0,0.0,0.0,0.0\n") && ak.Contains("\nCanAimDownSight=false\n")
             && ak.Contains("\n3rdPersonWeaponModel=AK47\n") && ak.Contains("\nFullyAutomatic=true\n"), "The AK: 30 rounds, CS2 reload, a view kick, no spread, KovaaK's AK in third person");
@@ -68,9 +69,11 @@ static partial class MultiplayerChecks
 
         // round-state.tsv: the loadout names slots 0-3 (the bomb only for its carrier, nothing while down).
         var me = new CsPlayerView("me", 1, CsRules.T, 800, true, 100, 0, false, false, "ak47", "glock", 0, 0);
-        Check(MultiplayerService.CsLoadoutLine(me, true) == "loadout\tAimMod CS AK-47\tAimMod CS Glock-18\t0\t0\t0\tAimMod CS Knife\tAimMod CS C4"
-            && MultiplayerService.CsLoadoutLine(me with { Primary = null }, false) == "loadout\t-\tAimMod CS Glock-18\t0\t0\t0\tAimMod CS Knife\t-"
-            && MultiplayerService.CsLoadoutLine(me with { Alive = false }, true).EndsWith("\t-\t-", StringComparison.Ordinal), "The loadout line fills the knife and, for its carrier, the bomb slot");
+        Check(MultiplayerService.CsLoadoutLine(me, true) == "loadout\tAimMod CS AK-47\tAimMod CS Glock-18\t0\t0\t0\tAimMod CS Knife\tAimMod CS C4\t-"
+            && MultiplayerService.CsLoadoutLine(me with { Primary = null }, false) == "loadout\t-\tAimMod CS Glock-18\t0\t0\t0\tAimMod CS Knife\t-\t-"
+            && MultiplayerService.CsLoadoutLine(me with { Grenades = ["flash"] }, false).EndsWith("\t-\tAimMod CS Grenade", StringComparison.Ordinal)
+            && MultiplayerService.CsLoadoutLine(me with { Alive = false, Grenades = ["he"] }, true).EndsWith("\t-\t-\t-", StringComparison.Ordinal),
+            "The loadout line fills the knife, the grenade slot while you carry any and, for its carrier, the bomb slot");
         Check(MultiplayerService.CsBombLine(new CsBombView("planted", null, "A", [10, 20.04, -30], 50_000, null, null, "b", 49_000), 1000) == "bomb\tplanted\t10\t20\t-30\t49000\t1"
             && MultiplayerService.CsBombLine(new CsBombView("dropped", null, null, [1, 2, 3], null, null, null, null, null), 0) == "bomb\tdropped\t1\t2\t3\t0\t0"
             && MultiplayerService.CsBombLine(new CsBombView("carried", "a", null, null, null, null, null, null, null), 0) is null, "The bomb line says where the bomb lies and when it goes off, in local time");
@@ -88,14 +91,14 @@ static partial class MultiplayerChecks
         var live = t0 + CsRules.FreezeMs + 1000;
         var stab = match.Combat.Claim("a", Stab(live, CsRules.KnifeSlot), live + 50, 40);
         Check(stab is null && match.View().Players.First(p => p.Member == "b").Health == 60, "A knife hit within reach does 40 (" + (stab ?? "accepted") + ", " + match.View().Players.First(p => p.Member == "b").Health + ")");
-        Check(match.Combat.Claim("a", Stab(live + 600, CsRules.BombSlot), live + 650, 40) == "weapon" && match.Combat.Claim("a", Stab(live + 1200, CsRules.PrimarySlot), live + 1250, 40) == "weapon",
-            "The bomb slot never hits, and an empty primary slot has no weapon");
+        Check(match.Combat.Claim("a", Stab(live + 600, CsRules.BombSlot), live + 650, 40) == "weapon" && match.Combat.Claim("a", Stab(live + 900, CsRules.GrenadeSlot), live + 950, 40) == "weapon"
+            && match.Combat.Claim("a", Stab(live + 1200, CsRules.PrimarySlot), live + 1250, 40) == "weapon", "The bomb and grenade slots never hit, and an empty primary slot has no weapon");
         var far = new CsMatch(["a", "b"], t0, 6, true, null);
         match = far; Place("a", 0, 0); Place("b", 600, 180); far.Tick(t0 + CsRules.FreezeMs);
         Check(far.Combat.Claim("a", Stab(live, CsRules.KnifeSlot, 600), live + 50, 40) == "range" && far.Combat.Claim("a", Stab(live + 500, CsRules.PistolSlot, 600), live + 550, 40) is null,
             "Beyond the knife's reach the stab is refused; the pistol still hits");
 
-        // Slashes in quick succession do 25; the right-mouse stab (slot 4) does 65 within its shorter reach, once a second.
+        // Slashes in quick succession do 25; the right-mouse stab (claimed as slot 5) does 65 within its shorter reach, once a second.
         var quick = new CsMatch(["a", "b"], t0, 6, true, null);
         match = quick; Place("a", 0, 0); Place("b", 150, 180); quick.Tick(t0 + CsRules.FreezeMs);
         Check(quick.Combat.Claim("a", Stab(live, CsRules.KnifeSlot), live + 10, 40) is null && quick.Combat.Claim("a", Stab(live + 450, CsRules.KnifeSlot), live + 460, 40) is null
@@ -120,7 +123,8 @@ static partial class MultiplayerChecks
         var frame = LivePoseFrame.Parse("AIMMOD_POSE_1\t5\npose\t1790871546958\t1\t2\t3\t0\t90\t0\t90\nweapon\t1790871546958\t2\n");
         Check(frame?.Weapon == 2 && LivePoseFrame.Parse("AIMMOD_POSE_1\t5\npose\t1\t1\t2\t3\t0\t90\t0\t90\nweapon\t1\t9\n") is null && LivePoseFrame.Parse("AIMMOD_POSE_1\t5\npose\t1\t1\t2\t3\t0\t90\t0\t90\n")?.Weapon is null,
             "The self-pose weapon row names the held slot (0-7)");
-        Check(GameBinds.Uses(arena, LobbyModes.Cs).Any(u => u is { Action: "Weapon3", Label: "Knife" }) && GameBinds.Uses(arena, LobbyModes.Cs).Any(u => u is { Action: "Weapon4", Label: "Bomb" }), "The binds check covers the knife and bomb keys");
+        Check(GameBinds.Uses(arena, LobbyModes.Cs).Any(u => u is { Action: "Weapon3", Label: "Knife" }) && GameBinds.Uses(arena, LobbyModes.Cs).Any(u => u is { Action: "Weapon4", Label: "Grenades" })
+            && GameBinds.Uses(arena, LobbyModes.Cs).Any(u => u is { Action: "Weapon5", Label: "Bomb" }), "The binds check covers the knife, grenade and bomb keys");
         Check(MultiplayerPrefs.Apply(new(), J(new { roundVolume = 3 }))!.RoundVolume == 1 && MultiplayerPrefs.Apply(new(), J(new { roundVolume = -1 }))!.RoundVolume == 0 && new MultiplayerPrefs().RoundVolume == 0.7,
             "The bomb and round sounds volume is a preference (0-100 %, default 70 %)");
         RoundSounds();

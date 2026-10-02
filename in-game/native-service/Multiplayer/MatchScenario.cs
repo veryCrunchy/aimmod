@@ -407,7 +407,7 @@ static partial class MatchScenario
 
     // CS arena: every CS profile is in the scenario (the buyable weapons, the knife and the bomb),
     // so AimModCore can fill the slots the CS way each round from the host's loadout: 0 primary,
-    // 1 pistol, 2 knife, 3 bomb (the carrier's). KovaaK's own Weapon1..Weapon4 keys switch them.
+    // 1 pistol, 2 knife, 3 grenades, 4 bomb (the carrier's). KovaaK's own Weapon1..Weapon5 keys switch them.
     static void CsArena(Section header, List<Section> sections, Section? player, LobbySettings s)
     {
         header.Set("Timelimit", Num(3 * 3600));
@@ -420,8 +420,8 @@ static partial class MatchScenario
             sections.Add(new Section { Title = "[Weapon Profile]", Lines = CsWeaponLines(w, s.AdsZoom, s.AdsSensitivity) });
         }
         if (player is null) return;
-        // Until AimModCore applies the round's loadout: a pistol in each of the first two slots, the knife, the bomb.
-        player.Set("WeaponProfileNames", string.Join(';', CsRules.Weapons[1].Combat.Name, CsRules.Weapons[0].Combat.Name, CsRules.Knife.Combat.Name, CsRules.Bomb.Combat.Name, "", "", "", ""));
+        // Until AimModCore applies the round's loadout: a pistol in each of the first two slots, the knife, grenades, the bomb.
+        player.Set("WeaponProfileNames", string.Join(';', CsRules.Weapons[1].Combat.Name, CsRules.Weapons[0].Combat.Name, CsRules.Knife.Combat.Name, CsRules.Grenade.Combat.Name, CsRules.Bomb.Combat.Name, "", "", ""));
         player.Set("HideWeapon", "false");
         player.Set("MaxHealth", Num(CsRules.MaxHealth));
         player.Set("LifeStealPercent", "0.0"); player.Set("HealthRegainedonkill", "0.0"); player.Set("HealthRegenPerSec", "0.0");

@@ -101,9 +101,9 @@ static partial class GameBinds
         var weapons = (player.GetValueOrDefault("WeaponProfileNames") ?? "").Split(';');
         var reload = weapons.Any(w => w.Length > 0 && sections.Any(s => s.Title == "[Weapon Profile]" && s.Fields.GetValueOrDefault("Name") == w && Number(s.Fields.GetValueOrDefault("MagazineMax")) > 0));
         if (reload || cs) uses.Add(new("Reload", "Reload"));
-        // CS: the primary and pistol bought into slots 1 and 2, the knife on 3, the bomb on 4; other
+        // CS: the primary and pistol bought into slots 1 and 2, the knife on 3, grenades on 4, the bomb on 5; other
         // scenarios switch between the slots they fill.
-        if (cs) { uses.Add(new("Weapon1", "Primary")); uses.Add(new("Weapon2", "Pistol")); uses.Add(new("Weapon3", "Knife")); uses.Add(new("Weapon4", "Bomb")); }
+        if (cs) { uses.Add(new("Weapon1", "Primary")); uses.Add(new("Weapon2", "Pistol")); uses.Add(new("Weapon3", "Knife")); uses.Add(new("Weapon4", "Grenades")); uses.Add(new("Weapon5", "Bomb")); }
         else if (weapons.Count(w => w.Length > 0) >= 2)
             for (var i = 0; i < Math.Min(8, weapons.Length); i++) if (weapons[i].Length > 0) uses.Add(new("Weapon" + (i + 1), "Weapon " + (i + 1)));
         return uses;

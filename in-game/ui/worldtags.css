@@ -22,3 +22,6 @@
 .wt-tag.enemy .wt-name{color:#ff8fa3}
 .wt-tag.down .wt-name{color:#7f968a}
 .wt-tag.down .wt-dist{display:none}
+/* A teammate's grenades: small chips (HE, FL, SM, MO, IN, DC). */
+.wt-nade{font-size:8px;padding:1px 2px;margin:0 1px;background:#9fb7aa}
+.wt-he{background:#9ccf6a}.wt-flash{background:#f2f2f2}.wt-smoke{background:#b8c2c8}.wt-molotov,.wt-incendiary{background:#f0a050}.wt-decoy{background:#c9b27a}

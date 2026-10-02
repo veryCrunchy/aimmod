@@ -178,6 +178,24 @@ sealed class LobbyCore
         if (m.Cs is null && combat.Leader is not null) CloseRound();
         return refused is null ? LobbyResult.Success : LobbyResult.Fail(refused, "Shot not applied (" + refused + ").");
     }
+    // CS grenades on the host (MultiplayerService.Grenades.cs): the running round's grenade field, to
+    // trade paths and line-of-sight traces with this machine's game; a change is broadcast.
+    public void WithCsGrenades(Action<CsGrenadeField> act)
+    {
+        if (match is not { Phase: MatchPhases.Live, Cs: { } cs }) return;
+        var before = cs.Grenades.Revision;
+        act(cs.Grenades);
+        if (cs.Grenades.Revision != before) { UpdateCombat(match, cs.Combat); Changed(); }
+    }
+    // A bot's grenade (BotGrenades): one it carries, at the velocity its logic aimed.
+    public LobbyResult BotThrow(string bot, string kind, double[] from, double[] velocity)
+    {
+        if (Find(bot) is not { Bot: not null }) return LobbyResult.Fail("not-bot", "Not a bot.");
+        if (match is not { Phase: MatchPhases.Live, Cs: { } cs } m || !m.Players.Contains(bot)) return LobbyResult.Fail("stale", "No CS round is running.");
+        var refused = cs.BotThrow(bot, kind, from, velocity, clock());
+        if (refused is null) Changed();
+        return refused is null ? LobbyResult.Success : LobbyResult.Fail(refused, "Not thrown (" + refused + ").");
+    }
     // Wait for everyone to load the scenario before the countdown (set when AimMod can load scenarios).
     public bool RequireLoading { get; set; }
     // How long everyone has to load before the host is asked to retry or abort. Clients
@@ -418,7 +436,7 @@ sealed class LobbyCore
                 foreach (var b in members.Where(x => x.Bot is not null && rm.Players.Contains(x.Id))) rm.Loaded.Add(b.Id);
                 System("Loading again.");
                 return LobbyResult.Success;
-            case "buy" or "use" or "drop" or "hold":
+            case "buy" or "use" or "drop" or "hold" or "throw":
                 return CsAction(member, action, args);
             // Bots: the host adds one (skill easy, normal or hard; team 0, 1 or 2), or fills every free slot.
             case "add-bot":
@@ -738,8 +756,22 @@ sealed class LobbyCore
         FinishMatch();
     }
 
+    // A throw: {kind, strength 0..1, o: [x, y, z] (the camera), r: [pitch, yaw]}.
+    static (string Kind, double Strength, double[] Origin, double Pitch, double Yaw)? ThrowArgs(JsonElement a)
+    {
+        try
+        {
+            if (a.ValueKind != JsonValueKind.Object || a.GetProperty("kind").GetString() is not { Length: > 0 and <= 16 } kind) return null;
+            var strength = a.GetProperty("strength").GetDouble();
+            var o = a.GetProperty("o"); var r = a.GetProperty("r");
+            if (o.GetArrayLength() != 3 || r.GetArrayLength() != 2) return null;
+            return (kind, Math.Clamp(strength, 0, 1), [o[0].GetDouble(), o[1].GetDouble(), o[2].GetDouble()], r[0].GetDouble(), r[1].GetDouble());
+        }
+        catch (Exception ex) when (ex is KeyNotFoundException or InvalidOperationException or FormatException) { return null; }
+    }
+
     // CS actions from a player's own client: buy an item, hold or release the use key, drop the bomb,
-    // and which weapon slot they hold (what the others see in their hands).
+    // which weapon slot they hold (what the others see in their hands), and throw a grenade.
     LobbyResult CsAction(Member member, string action, JsonElement args)
     {
         if (match is not { Phase: MatchPhases.Live, Cs: { } cs } m || !m.Players.Contains(member.Id)) return LobbyResult.Fail("invalid", "No CS round is running.");
@@ -749,6 +781,8 @@ sealed class LobbyCore
         else if (action == "drop") refused = cs.Drop(member.Id, clock());
         else if (action == "hold")
             refused = args.ValueKind == JsonValueKind.Object && args.TryGetProperty("slot", out var slot) && slot.TryGetInt32(out var heldSlot) ? cs.Hold(member.Id, heldSlot) : "invalid";
+        else if (action == "throw")
+            refused = ThrowArgs(args) is { } t ? cs.Throw(member.Id, t.Kind, t.Strength, t.Origin, t.Pitch, t.Yaw, clock()) : "invalid";
         else
             refused = args.ValueKind == JsonValueKind.Object && args.TryGetProperty("held", out var held) && held.ValueKind is JsonValueKind.True or JsonValueKind.False ? cs.Use(member.Id, held.GetBoolean(), clock()) : "invalid";
         Changed();
@@ -758,6 +792,7 @@ sealed class LobbyCore
             "owned" => "You already have that.", "not-in-site" => "Not in a bomb site.", "moving" => "Stand still to plant.", "not-at-bomb" => "Get to the bomb to defuse.",
             "no-bomb" => "You don’t have the bomb.", "freeze" => "Wait for freeze time to end.", "no-track" => "AimMod can’t see where you are (no pose feed from AimModCore).",
             "dead" => "You’re down until the next round.", "busy" => "A teammate is already defusing.", "nothing-to-use" => "Nothing to use here.", "not-now" => "Not now.",
+            "carry-limit" => "You can carry 4 grenades.", "no-grenade" => "You don’t have that grenade.", "origin" => "Throw refused: AimMod saw you somewhere else.",
             _ => "Not now (" + refused + ").",
         });
     }
@@ -846,7 +881,7 @@ sealed class LobbyCore
             cs.Tick(now);
             cs.Combat.ProcessPending(now);
             UpdateCombat(match, cs.Combat);
-            var csKey = cs.Round + "|" + cs.Phase + "|" + cs.View().Events.LastOrDefault()?.Id;
+            var csKey = cs.Round + "|" + cs.Phase + "|" + cs.View().Events.LastOrDefault()?.Id + "|" + cs.Grenades.Revision;
             if (csKey != match.CsKey) { match.CsKey = csKey; Changed(); }
             if (cs.Over || match.Players.Count(id => Find(id) is not null) < 2) CloseRound();
         }

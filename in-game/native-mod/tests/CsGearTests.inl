@@ -6,10 +6,10 @@ namespace csgear_checks
     using namespace aimmod;
     using namespace aimmod::cs;
 
-    inline Loadout Make(std::string primary, std::string pistol, std::string knife = "AimMod CS Knife", std::string bomb = "-")
+    inline Loadout Make(std::string primary, std::string pistol, std::string knife = "AimMod CS Knife", std::string bomb = "-", std::string grenade = "-")
     {
         Loadout l;
-        l.names = {std::move(primary), std::move(pistol), std::move(knife), std::move(bomb)};
+        l.names = {std::move(primary), std::move(pistol), std::move(knife), std::move(grenade), std::move(bomb)};
         return l;
     }
 
@@ -26,8 +26,13 @@ namespace csgear_checks
                   !ParseRoundState("AIMMOD_ROUND_1\t1\nmatch\tA\nbomb\tplanted\t0\t0\t0\t-5\t0\n") && !ParseRoundState("AIMMOD_ROUND_1\t1\nmatch\tA\nbomb\tdropped\t1e9\t0\t0\t0\t0\n"),
               "malformed knife, bomb columns and bomb lines are refused");
         const Loadout l = FromRound(*r->loadout);
-        CHECK(l.Has(PrimarySlot) && l.Has(PistolSlot) && l.Has(KnifeSlot) && l.Has(BombSlot) && !FromRound(*old->loadout).Has(KnifeSlot) && !FromRound(*old->loadout).Has(PrimarySlot),
+        CHECK(l.Has(PrimarySlot) && l.Has(PistolSlot) && l.Has(KnifeSlot) && l.Has(BombSlot) && !l.Has(GrenadeSlot) && !FromRound(*old->loadout).Has(KnifeSlot) && !FromRound(*old->loadout).Has(PrimarySlot),
               "round loadout to slots");
+        auto nine = ParseRoundState("AIMMOD_ROUND_1\t5\nmatch\tA\nloadout\t-\tAimMod CS Glock-18\t0\t0\t0\tAimMod CS Knife\t-\tAimMod CS Grenade\n");
+        CHECK(nine && nine->loadout && nine->loadout->grenade == "AimMod CS Grenade" && nine->loadout->bomb == "-" && FromRound(*nine->loadout).Has(GrenadeSlot) &&
+                  !FromRound(*nine->loadout).Has(BombSlot) && r->loadout->grenade.empty(),
+              "round state: the grenade slot (ninth column) while grenades are carried");
+        static_assert(GrenadeSlot == 3 && BombSlot == 4 && StabSlot == 5 && Slots == 5, "CS slots: 4 grenades, 5 bomb; the stab claimed past them");
     }
 
     inline void Switching()
@@ -65,6 +70,9 @@ namespace csgear_checks
         CHECK(AfterLoadout(&bought, Make("AimMod CS AK-47", "AimMod CS Glock-18", "AimMod CS Knife", "AimMod CS C4"), PrimarySlot) == -1, "picking up the bomb keeps the gun in hand");
         const Loadout carrying = Make("AimMod CS AK-47", "AimMod CS Glock-18", "AimMod CS Knife", "AimMod CS C4");
         CHECK(AfterLoadout(&carrying, bought, BombSlot) == PrimarySlot && AfterLoadout(&carrying, bought, KnifeSlot) == -1, "dropping or planting the bomb from the hand draws the best weapon");
+        const Loadout nades = Make("AimMod CS AK-47", "AimMod CS Glock-18", "AimMod CS Knife", "-", "AimMod CS Grenade");
+        CHECK(AfterLoadout(&bought, nades, PrimarySlot) == -1 && AfterLoadout(&nades, bought, GrenadeSlot) == PrimarySlot && Cycle(nades, KnifeSlot, 1) == GrenadeSlot && Cycle(nades, GrenadeSlot, 1) == PrimarySlot,
+              "buying grenades keeps the gun in hand; throwing the last one draws the best weapon; the wheel reaches the grenade slot");
         CHECK(AfterLoadout(&bought, Make("AimMod CS AK-47", "AimMod CS Glock-18"), PrimarySlot) == -1, "an unchanged loadout keeps the weapon");
     }
 

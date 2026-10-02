@@ -109,3 +109,21 @@ test('the buy menu stays hidden until it has a size, then is centred again on re
   window.innerWidth=2560;window.innerHeight=1440;listeners.resize();
   assert.equal(menu.style.left,String(Math.round((2560-640*1.33)/2))+'px','re-centred when the view resizes');
 });
+test('grenades: a Grenades buy category, what you carry with the one in hand, and the flash and smoke overlays',()=>{
+  const s=setup();const calls=[];
+  const buy=base.buy.concat([{key:null,id:'flash',label:'Flashbang (1/2)',category:'grenade',price:200,owned:false,affordable:true,disabled:null,profile:null},
+    {key:null,id:'molotov',label:'Molotov',category:'grenade',price:400,owned:false,affordable:true,disabled:'You carry 4 grenades',profile:null}]);
+  s.hud.render(s.root,Object.assign({},base,{buy}),(a,id)=>calls.push([a,id]));
+  const t=s.text(s.root);assert.ok(t.includes('Grenades')&&t.includes('Flashbang (1/2)')&&t.includes('You carry 4 grenades'));
+  const items=s.walk(s.root).filter(e=>e.tag==='button'&&/cs-item/.test(e.className));
+  items.find(b=>b.children[1].children[0].textContent==='Flashbang (1/2)').onclick();
+  items.find(b=>b.children[1].children[0].textContent==='Molotov').onclick();
+  assert.deepEqual(calls,[['cs-buy','flash']],'a grenade buys on click; one over the carry limit does not');
+  s.hud.render(s.root,Object.assign({},base,{buyOpen:false,phase:'live',grenades:[{id:'he',label:'HE',count:1,inHand:false},{id:'flash',label:'FL',count:2,inHand:true}],grenadeKey:'4',flash:0.8,smoke:0.5}),()=>{});
+  const nades=s.walk(s.root).filter(e=>/cs-nade( |$)/.test(e.className));
+  assert.deepEqual(nades.map(n=>n.textContent),['HE','FL ×2']);assert.match(nades[1].className,/hand/);
+  const flash=s.walk(s.root).find(e=>e.className==='cs-flash'),fog=s.walk(s.root).find(e=>e.className==='cs-smoke');
+  assert.equal(flash.style.opacity,'0.8');assert.equal(fog.style.opacity,String(0.5*0.92));
+  s.hud.render(s.root,Object.assign({},base,{buyOpen:false,phase:'live',flash:0,smoke:0}),()=>{});
+  assert.ok(!s.walk(s.root).some(e=>e.className==='cs-flash'||e.className==='cs-smoke'),'no overlay once it clears');
+});

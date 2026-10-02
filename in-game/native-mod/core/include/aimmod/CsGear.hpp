@@ -11,20 +11,20 @@
 
 namespace aimmod::cs
 {
-    // KovaaK's Weapon1..Weapon4 keys, numbered from 0.
-    constexpr int PrimarySlot = 0, PistolSlot = 1, KnifeSlot = 2, BombSlot = 3, Slots = 4;
+    // KovaaK's Weapon1..Weapon5 keys, numbered from 0: CS's 1 primary, 2 pistol, 3 knife, 4 grenades, 5 bomb.
+    constexpr int PrimarySlot = 0, PistolSlot = 1, KnifeSlot = 2, GrenadeSlot = 3, BombSlot = 4, Slots = 5;
     // The knife's right-mouse stab, claimed as this slot (the host knows it as the stab).
-    constexpr int StabSlot = 4;
+    constexpr int StabSlot = 5;
 
-    // The four CS slots' weapon profiles ("" or "-": empty).
+    // The five CS slots' weapon profiles ("" or "-": empty).
     struct Loadout
     {
         std::array<std::string, Slots> names;
         bool Has(int slot) const { return slot >= 0 && slot < Slots && !names[static_cast<std::size_t>(slot)].empty() && names[static_cast<std::size_t>(slot)] != "-"; }
     };
-    // From round-state.tsv's loadout line; the knife and bomb columns may be missing (empty).
+    // From round-state.tsv's loadout line; the knife, bomb and grenade columns may be missing (empty).
     Loadout FromRound(const RoundState::Loadout& line);
-    // The weapon CS would draw: primary, pistol, knife, bomb; -1 if nothing.
+    // The weapon CS would draw: primary, pistol, knife, grenades, bomb; -1 if nothing.
     int Best(const Loadout& l);
     // The mouse wheel: +1 the next slot (wheel down), -1 the previous (wheel up), skipping empty
     // slots and wrapping round; `current` when no other slot has a weapon.
@@ -48,7 +48,7 @@ namespace aimmod::cs
 
     // After the host's loadout changed: the slot to draw, or -1 to keep the weapon in hand.
     //  - something new in a slot (a purchase, the bomb picked up) is drawn, the primary first,
-    //    except the bomb, which only fills its slot (CS keeps your gun in hand);
+    //    except grenades and the bomb, which only fill their slots (CS keeps your gun in hand);
     //  - the slot in hand went empty (the bomb dropped or planted, a weapon lost): the best one;
     //  - the first loadout of a round: the best one.
     int AfterLoadout(const Loadout* before, const Loadout& after, int inHand);

@@ -2,7 +2,8 @@
 // (native-mod/DESIGN.md "World tags"): teammates in their team colour (through walls, like CS),
 // an enemy only while under the crosshair. Positions are 0..1 of the viewport and arrive every
 // frame, so the nodes are kept and only moved. CS teammates also show their gear under the name,
-// as in CS: the bomb, the weapon in hand, armour and helmet, the defuse kit and a health bar.
+// as in CS: the bomb, the weapon in hand, armour and helmet, the defuse kit, their grenades and a
+// health bar.
 // Gameface: DOM only, no grid, gap or var().
 (function(root){
   'use strict';
@@ -22,6 +23,8 @@
     el.weaponNode=span('wt-weapon',gear);
     el.armorNode=span('wt-chip wt-armor',gear);
     el.kitNode=span('wt-chip wt-kit',gear);el.kitNode.textContent='KIT';
+    // Up to four grenades (g=he,flash,flash,smoke), one small chip each.
+    el.nadeNodes=[];for(var n=0;n<4;n++){el.nadeNodes.push(span('wt-chip wt-nade',gear));}
     var bar=span('wt-hp',el);el.hpBar=bar;el.hpFill=span('wt-hp-fill',bar);
     el.distNode=span('wt-dist',el);
     ensure().appendChild(el);nodes[i]=el;return el;
@@ -36,6 +39,7 @@
   function show(el,on){var d=on?'':'none';if(el.style.display!==d)el.style.display=d;}
   function text(el,value){if(el.textContent!==value)el.textContent=value;}
   function team(t){return t==='T'||t==='1'?'t':t==='CT'||t==='2'?'ct':'none';}
+  var NADES={he:'HE',flash:'FL',smoke:'SM',molotov:'MO',incendiary:'IN',decoy:'DC'};
   function render(data){
     var tags=data&&data.tags&&data.tags.length?data.tags:[];
     for(var i=0;i<tags.length&&i<32;i++){
@@ -47,6 +51,9 @@
       show(el.bombNode,geared&&g.c4==='1');
       show(el.kitNode,geared&&g.kit==='1');
       show(el.armorNode,geared&&g.ar==='1');text(el.armorNode,g.hm==='1'?'A+H':'A');
+      var nades=geared&&g.g?String(g.g).split(','):[];
+      for(var k=0;k<el.nadeNodes.length;k++){var id=nades[k]||'';var on=!!NADES[id];show(el.nadeNodes[k],on);
+        if(on){text(el.nadeNodes[k],NADES[id]);var nc='wt-chip wt-nade wt-'+id;if(el.nadeNodes[k].className!==nc)el.nadeNodes[k].className=nc;}}
       var hp=geared&&g.hp!==undefined?Math.max(0,Math.min(100,+g.hp||0)):null;
       show(el.hpBar,hp!==null);
       if(hp!==null){var w=hp+'%';if(el.hpFill.style.width!==w)el.hpFill.style.width=w;var hc='wt-hp-fill'+(hp<30?' low':hp<60?' mid':'');if(el.hpFill.className!==hc)el.hpFill.className=hc;}

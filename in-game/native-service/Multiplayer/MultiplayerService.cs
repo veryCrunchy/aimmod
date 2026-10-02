@@ -1344,6 +1344,7 @@ sealed partial class MultiplayerService : IDisposable
             UpdateStandIn();
             StepBots();
             StepScoreBots();
+            StepGrenades();
             TrackLocalRun();
             Remember();
         }
@@ -1910,7 +1911,7 @@ sealed partial class MultiplayerService : IDisposable
             var tracker = poseTracker;
             foreach (var claim in shotFeed.Poll(match.Id, match.Round, offset, (id, t) => tracker.SeenAt(id, t) ?? (tracker.LastSeen.TryGetValue(id, out var last) ? last : null), clock()))
             {
-                if (match.Cs is not null && claim.Slot == CsRules.BombSlot) continue; // the bomb plants, it never hits
+                if (match.Cs is not null && claim.Slot is CsRules.BombSlot or CsRules.GrenadeSlot) continue; // the bomb plants and grenades are thrown: they never hit
                 SendClaim(claim);
             }
             ResendClaims();

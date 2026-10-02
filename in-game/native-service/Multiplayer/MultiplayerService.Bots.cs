@@ -56,7 +56,10 @@ sealed partial class MultiplayerService
             return positions.TryGetValue(id, out var p) ? new BotPlayer(id, tag, p.At.X, p.At.Y, p.At.Z, team, alive, p.Speed) : null;
         }).Where(p => p is not null).Select(p => p!).ToList();
         var bots = lobby.Members.Where(m => IsBot(m) && match.Players.Contains(m.Id)).Select(m => (m.Id, m.Bot!)).ToList();
-        var step = botBrain.Step(new BotWorld(now, match.Mode, bots, players, botSight, match.Cs, csObjectives, view?.Events ?? []));
+        // Smoke and flashes (CsGrenades.cs) take sight away; bot grenades go after the brain's own step.
+        var world = new BotWorld(now, match.Mode, bots, players, GrenadeSight(match.Cs, botSight, players, now), match.Cs, csObjectives, view?.Events ?? []);
+        var step = botBrain.Step(world);
+        StepBotGrenades(world);
         LastBotStep = step;
         foreach (var a in step.Actions) core.Apply(a.Bot, a.Action, JsonSerializer.SerializeToElement(a.Args, Protocol.Json), library);
         foreach (var shot in step.Shots) core.BotShot(shot.Bot, shot.Victim, shot.Head, shot.Slot, shot.Dir);
