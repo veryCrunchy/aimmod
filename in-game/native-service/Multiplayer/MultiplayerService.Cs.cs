@@ -119,7 +119,9 @@ sealed partial class MultiplayerService
         var hostNow = clock() + HostOffset();
         var buyWindow = cs.Phase == "freeze" || (cs.Phase == "live" && cs.LiveAt is { } live && hostNow < live + CsRules.BuyMs);
         if (!buyWindow || me.InBuyZone == false || !me.Alive) buyOpen = false;
-        var foreground = csKeys.Foreground();
+        // While the chat input or the radio menu is open the keys are theirs (MultiplayerService.Chat.cs).
+        var foreground = csKeys.Foreground() && !ChatCapturing;
+        if (ChatCapturing) buyOpen = false;
         DeadSpectate(match, cs, me, foreground);
         CsGrenades(match, cs, me, foreground);
         if (!foreground) { if (useHeld) { useHeld = false; Command("use", JsonSerializer.SerializeToElement(new { held = false })); } return; }

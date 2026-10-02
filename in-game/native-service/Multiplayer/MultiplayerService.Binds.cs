@@ -39,6 +39,9 @@ sealed partial class MultiplayerService
         var own = new List<(string, string)>();
         if (s.Mode == LobbyModes.Cs) { own.Add(("Plant / defuse", CsUseKey)); own.Add(("Buy", CsBuyKey)); }
         own.Add(("Scoreboard", prefs.ScoreboardKey));
+        // In-match chat (MultiplayerService.Chat.cs): team chat and the radio menus only where there are teams.
+        own.Add(("All chat", ChatAllKey));
+        if (MatchChat.Teams(s.Mode)) { own.Add(("Team chat", ChatTeamKey)); for (var i = 0; i < RadioKeys.Length; i++) own.Add(("Radio " + MatchChat.Radio[i].Title.ToLowerInvariant(), RadioKeys[i])); }
         return GameBinds.Rows(uses, Binds?.Invoke() ?? GameBinds.Bound.Standard, own);
     }
 

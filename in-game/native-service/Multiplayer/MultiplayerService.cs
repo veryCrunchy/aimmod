@@ -83,6 +83,8 @@ sealed partial class MultiplayerService : IDisposable
         if (simulation) Simulation = new MultiplayerSimulation(this.clock, library, completedRuns, seed);
         // A marker left by a crash never outlives the session it described.
         DeleteSessionMarker();
+        // The bot chat contract (MultiplayerService.Chat.cs): the bot AI posts its callouts through it.
+        BotSay = SayAsBot;
         // A failure in one tick must never take the whole service down: log it and keep going.
         if (autoTick) timer = new Timer(_ => { try { Tick(); } catch (Exception ex) { Console.Error.WriteLine("Multiplayer tick failed: " + ex.GetType().Name + ": " + ex.Message); } }, null, 100, 100);
     }
@@ -268,6 +270,8 @@ sealed partial class MultiplayerService : IDisposable
                     return CosmeticAction(action, args);
                 case "cs-buy" or "cs-buy-menu":
                     return CsAction(action, Text("id") ?? Text("item"));
+                case "chat-send" or "chat-close" or "chat-radio":
+                    return ChatAction(action, args);
                 case "leave-run-cancel" or "leave-run-now":
                     return LeaveRunAction(action);
                 case "favourite":
@@ -1032,7 +1036,9 @@ sealed partial class MultiplayerService : IDisposable
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return ""; }
     }
-    string NoticeJson(GameNotice? notice = null)
+    // page: the notify page's copy (the chat feed in full); the notice file AimModCore and Notify.lua
+    // read gets the chat's state only (open, line count), which is all the host acts on.
+    string NoticeJson(GameNotice? notice = null, bool page = true)
     {
         lock (gate)
         {
@@ -1043,7 +1049,12 @@ sealed partial class MultiplayerService : IDisposable
             var cs = CsHud();
             var (board, boardFull) = NoticeBoards();
             var play = PlayRequest(clock());
-            if (notice is null && badge is null && duel is null && combat is null && cs is null && board is null && boardFull is null && play is null && !CsSwallowMenu(clock())) return "{\"version\":1,\"active\":false}";
+            var chat = ChatHud();
+            if (notice is null && badge is null && duel is null && combat is null && cs is null && board is null && boardFull is null && play is null && chat is null && !CsSwallowMenu(clock())) return "{\"version\":1,\"active\":false}";
+            // typing: the chat input is open, so the layer takes the keyboard; the radio menu, like the buy
+            // menu, takes the mouse (cursor) for its clickable callouts and the digit keys.
+            var typing = chat?.Open is not null;
+            var menu = cs?.BuyOpen == true || chat?.Radio is not null;
             return JsonSerializer.Serialize(new
             {
                 version = 1, active = notice is not null, badge, notice?.Id, notice?.Kind, notice?.Eyebrow, notice?.Title, notice?.Body, notice?.Key, notice?.Countdown, notice?.Sound, notice?.Invite, notice?.Note,
@@ -1054,9 +1065,10 @@ sealed partial class MultiplayerService : IDisposable
                 layout = cs is not null || board is not null || boardFull is not null || InMatch() ? "full" : "toast",
                 // The buy menu just closed with Escape: AimModNativeUI closes KovaaK's pause menu again.
                 swallowMenu = CsSwallowMenu(clock()) ? true : (bool?)null,
-                actions = notice?.Actions, interactive = notice?.Actions is { Count: > 0 } || cs?.BuyOpen == true,
-                // cursor: the CS buy menu is open, so AimModNativeUI shows the cursor in game (and hands input back after).
-                cursor = cs?.BuyOpen == true, play, volume = prefs.Sounds ? prefs.Volume : 0, duel, combat, cs, board, boardFull,
+                actions = notice?.Actions, interactive = notice?.Actions is { Count: > 0 } || menu || typing,
+                // cursor: the CS buy menu or a radio menu is open, so AimModNativeUI shows the cursor in game (and hands input back after).
+                cursor = menu, typing = typing ? true : (bool?)null, play, volume = prefs.Sounds ? prefs.Volume : 0, duel, combat, cs, board, boardFull,
+                chat = chat is null ? null : page ? chat : (object)new { open = chat.Open, session = chat.Session, lines = chat.Lines.Count, radio = chat.Radio is not null },
             }, Protocol.Json);
         }
     }
@@ -1066,7 +1078,7 @@ sealed partial class MultiplayerService : IDisposable
     {
         if (outputFolder is null) return;
         var notice = ComputeNotice(clock());
-        var json = NoticeJson(notice);
+        var json = NoticeJson(notice, page: false);
         if (json == lastNoticeJson) return;
         try { AtomicFile.WriteText(Path.Combine(outputFolder, "multiplayer-notify.json"), json); lastNoticeJson = json; }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
@@ -1352,6 +1364,7 @@ sealed partial class MultiplayerService : IDisposable
             StepBots();
             StepScoreBots();
             StepGrenades();
+            StepChat();
             TrackLocalRun();
             PushShots();
             Remember();
@@ -1392,7 +1405,8 @@ sealed partial class MultiplayerService : IDisposable
         var now = clock();
         if (!force && (snapshot.Revision == lastBroadcast || now - broadcastAt < 250)) return;
         lastBroadcast = snapshot.Revision; broadcastAt = now;
-        foreach (var peer in RemotePeers(snapshot)) Send(peer, "snapshot", new { snapshot });
+        // Each member gets only the chat lines they may see (team chat, CS dead chat: MatchChat.cs).
+        foreach (var peer in RemotePeers(snapshot)) Send(peer, "snapshot", new { snapshot = MatchChat.For(snapshot, peer) });
         transport.Advertise(snapshot);
     }
 
@@ -1493,7 +1507,7 @@ sealed partial class MultiplayerService : IDisposable
                 if (joined.Ok && m.Body.TryGetProperty("avatar", out var av) && av.ValueKind == JsonValueKind.String) core.Apply(peer, "avatar", JsonSerializer.SerializeToElement(new { avatar = av.GetString() }), library);
                 if (!joined.Ok) { Send(peer, "reject", new { code = joined.Code, message = joined.Message }); transport.Close(peer); return; }
                 core.SetLink(peer, transport.Link(peer)?.Route ?? "relay", transport.Link(peer)?.Ping);
-                Send(peer, "welcome", new { member = peer, snapshot = core.Snapshot() });
+                Send(peer, "welcome", new { member = peer, snapshot = MatchChat.For(core.Snapshot(), peer) });
                 break;
             case "command":
                 var id = m.Body.TryGetProperty("id", out var i) && i.TryGetInt64(out var iv) ? iv : 0;
@@ -2166,7 +2180,7 @@ sealed partial class MultiplayerService : IDisposable
         lock (gate)
         {
             var now = clock();
-            var lobby = Current;
+            var lobby = Current is { } whole ? MatchChat.For(whole, SelfId) : null;
             var offset = core is null && hostPeer is not null && clocks.TryGetValue(hostPeer, out var sync) ? sync.Offset : 0;
             var caps = game.Capabilities;
             object? lobbyView = null;

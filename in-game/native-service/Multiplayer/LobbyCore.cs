@@ -99,9 +99,30 @@ sealed class LobbyCore
     void System(string text) { AddChat(null, "", text, true); }
     void AddChat(string? from, string name, string text, bool system, string? clip = null)
     {
-        chat.Add(new ChatLine(++chatId, from, name, text, clock(), system, clip));
+        AddLine(new ChatLine(++chatId, from, name, text, clock(), system, clip));
+    }
+    void AddLine(ChatLine line)
+    {
+        chat.Add(line);
         if (chat.Count > ChatLimit) chat.RemoveRange(0, chat.Count - ChatLimit);
         Changed();
+    }
+    // In-match chat (MatchChat.cs): a line with a scope, said by a player of the running match, gets
+    // their team, whether they are down (CS) and, for team lines in CS, where they stand. Null: a
+    // plain lobby line (no scope, or not in a match).
+    ChatLine? MatchLine(Member member, string? scope, bool radio)
+    {
+        if (scope is not (MatchChat.All or MatchChat.Team) || match is not { Phase: not (MatchPhases.Final or MatchPhases.Loading) } m || !m.Players.Contains(member.Id)) return null;
+        var teams = MatchChat.Teams(m.Settings.Mode);
+        // CS keeps its own teams (its hit validation has none); team deathmatch's are the combat's.
+        var csPlayer = m.Cs?.View().Players.FirstOrDefault(p => p.Member == member.Id);
+        var team = csPlayer?.Team ?? m.Combat?.TeamOf(member.Id) ?? 0;
+        if (team == 0 && teams) team = member.Team;
+        if (!teams || team is not (1 or 2)) { scope = MatchChat.All; team = 0; radio = false; }
+        var dead = csPlayer is { Alive: false };
+        string? place = null;
+        if (scope == MatchChat.Team && m.Cs is { } c && !dead && c.Combat.Position(member.Id) is { } at) place = MatchChat.Location(csObjectives, at.X, at.Y, at.Z);
+        return new ChatLine(0, member.Id, member.Name, "", 0, false, null, scope, team, dead, place, radio, m.Id);
     }
     // A clip a member shared, once its file has reached the host.
     public void ShareClip(string from, string clip, string? label)
@@ -361,6 +382,7 @@ sealed class LobbyCore
                 while (member.ChatTimes.Count > 0 && now - member.ChatTimes.Peek() > 5000) member.ChatTimes.Dequeue();
                 if (member.ChatTimes.Count >= 5) return LobbyResult.Fail("slow", "Slow down a little.");
                 member.ChatTimes.Enqueue(now);
+                if (MatchLine(member, Text("scope"), Flag("radio") == true) is { } said) { AddLine(said with { Id = ++chatId, Text = text, At = now }); return LobbyResult.Success; }
                 AddChat(member.Id, member.Name, text, false);
                 return LobbyResult.Success;
             case "role":

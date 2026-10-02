@@ -42,7 +42,7 @@ static partial class MultiplayerChecks
         CsTeams();
         Marker();
         var root = Path.Combine(Path.GetTempPath(), "aimmod-mp-test-" + Guid.NewGuid().ToString("N"));
-        try { Content(root); Generator(root); Blocked(root); AutoLeave(root); LoadGateService(root); StandInStream(root); FriendlyFire(); StandIns(root); Bots(root); ClaimTiming(root); HitRegistration(root); HitPipeline(root); RestartDuringMatch(root); CsMaps(root); LoadGateEnsureMap(root); Binds(root); Service(root); Transfers(root); Replays(root); Maps(root); Tournaments(root); }
+        try { Content(root); Generator(root); Blocked(root); AutoLeave(root); LoadGateService(root); StandInStream(root); FriendlyFire(); StandIns(root); Bots(root); Chat(root); ClaimTiming(root); HitRegistration(root); HitPipeline(root); RestartDuringMatch(root); CsMaps(root); LoadGateEnsureMap(root); Binds(root); Service(root); Transfers(root); Replays(root); Maps(root); Tournaments(root); }
         finally { try { Directory.Delete(root, true); } catch (IOException) { } }
         Console.WriteLine($"{count} multiplayer checks passed.");
     }

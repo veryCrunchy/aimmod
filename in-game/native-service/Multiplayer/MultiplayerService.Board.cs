@@ -8,7 +8,8 @@ sealed partial class MultiplayerService
 
     // The scoreboard key is held down (MultiplayerHotkey, only while KovaaK's has focus).
     public void ScoreboardHeld(bool held) => boardHeld = held;
-    public bool BoardArmed { get { lock (gate) return Current?.Match is not null; } }
+    // Not while typing a chat line (Tab is a key like any other then).
+    public bool BoardArmed { get { lock (gate) return Current?.Match is not null && !chatInput.Open; } }
 
     // The current match's standings, or null outside a match.
     public Board? BoardView()
