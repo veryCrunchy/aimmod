@@ -1629,12 +1629,39 @@ form, rising with streaks and slumps but never falling.
     smoke call, how blind it is, the flash it looks away from), and the
     service logs the same line for every bot each second (`[bots] …`).
     Always logged: each decoy verdict as it changes, each smoke call, a bot
-    blinded, a bot's own grenade calls (`[bots] … throws a flash: …`).
+    blinded, a bot's own grenade calls (`[bots] … throws a flash: …`), each
+    hold plan (post-plant, each site's anchors: every bot's role and spot),
+    the defenders' split, death calls, the retake's calls and the idle
+    watchdog's re-plans. The developer page and the per-second line add each
+    bot's spot (its role there, whether it sees the bomb, its cover) and the
+    point it looks at; AimModSteam's 5 s line adds where each bot looks and
+    how far it sees ahead, and logs each area it works out.
   - Logs: the grid's growth, and every 5 s each bot's order, goal,
     distance, path length and progress; the service adds the orders to
     its 30 s bot line.
-  - CT bots split over the sites by their place among their own side's
-    bots; near its spot a bot faces the enemy spawn's way.
+  - Holding areas (`SiteSpots.hpp`): the service asks for an area per
+    site and one for the planted bomb (`area\t<key>\t<x>\t<y>\t<z>\t<rmin>\t<rmax>\t<entry>`
+    and `from` rows: where the other side comes from), and AimModSteam works
+    each out on the complete grid, one A* or about 800 traces a tick, into
+    `bot-spots.tsv` (`area`, `entrance`, `lurk` and `spot` rows). Entrances:
+    A* from each source to the centre, the point `entry` along the way (its
+    outer point twice that out), then A* again around the ways found (circles
+    along them it keeps out of) for another way in, kept when it comes in
+    elsewhere and is at most 2.2 times as long. Spots: grid points rmin to
+    rmax out, on the centre's level and within two rmax of walking, sampled
+    to at most 600; a trace from a standing eye to the bomb (40 cm short of
+    it) and to each entrance at chest height; cover is the grid directions
+    walled within two cells. Up to 48 spots (the best eight for each
+    entrance, ten for the bomb, then the rest), and a lurk spot by each outer
+    point (off the way, the way in sight). The service sizes an area from its
+    site's box: rmin 0.2, rmax 3.2 and entry 1.8 half-diagonals (clamped to
+    250-700, 2400-5600 and 1200-3600 cm).
+  - The nav probe works out every site's post-plant and hold areas the same
+    way, picks five distinct spots out of grenade range and walks to each:
+    both ported CS maps give one to three ways in per area and every spot is
+    walked to.
+  - `look\t<peer>\t<cm>` in `bot-sight.tsv`: how far each bot sees straight
+    ahead (a trace along its view, 25 m at most), for the idle watchdog.
   - Walkers move like the local player: run speed and step height from its
     `CharacterMovement` (a ported map is scaled up, CS runs at 1100 cm/s
     with 79 cm steps).
@@ -1679,8 +1706,11 @@ form, rising with streaks and slumps but never falling.
   (650 / 380 / 220 ms), then fires in bursts. A shot lands by a hit chance
   (28 / 45 / 62 % at close range on a still target, less with distance, a
   moving target and deeper into a spray) times how close the crosshair is to
-  the body, times its own movement (a run keeps a fifth; Normal and Hard bots
-  counter-strafe and wait for the stop, Easy bots shoot on the move). A
+  the body, times its own movement: with a CS gun the share of its cone
+  (`CsFeel`, the cones players' bullets get, by speed and stance; an AWP
+  standing still is scoped) that falls on the body, else a run keeps a
+  fifth; Normal and Hard bots counter-strafe and wait for the stop, Easy
+  bots shoot on the move. A
   landed shot goes through `CombatMatch.BotHit`: alive, fire rate, round
   phase, spawn protection, friendly fire and armour, like a player's hit. It
   strafes in a fight (25 / 60 / 100 %): Easy side to side, Normal and Hard
@@ -1752,15 +1782,89 @@ form, rising with streaks and slumps but never falling.
   else an eco. Terrorists plan the round (the same on every machine): a
   rush, a default (map control part of the way to both sites, then at a
   call 20 to 35 s in, the site together) or a split (half by way of the
-  other site's approach); ecos rush. The carrier plants, the nearest
-  Terrorist fetches a dropped bomb, and after the plant they hold around it
-  facing the way the defence comes back. Counter-Terrorists anchor both
-  sites with one playing forward; a sighting or sound near a site pulls all
-  but one anchor over; with the bomb down they gather short of it (two of
-  them, or 6 s), then retake: the nearest defuses, the others cover (Hard
-  bots keep defusing through a fight near the end). Low on health with
-  nothing in sight, a bot falls back to its nearest teammate. A bot that
-  loses sight of an enemy goes where it last saw them.
+  other site's approach); ecos rush. With four or more on a default one
+  lurks, quietly out towards the other site for the rotation. A site the
+  side lost two players at before its call (their deaths called out) is
+  contested: they go to the other one. The carrier plants, the nearest
+  Terrorist fetches a dropped bomb. Low on health with nothing in sight, a
+  bot falls back to its nearest teammate. A bot that loses sight of an enemy
+  goes where it last saw them.
+- **Post-plant** (`BotHolds`, `BotPositions.cs`). Each Terrorist bot gets a
+  role and a spot of its own from the bomb's area: the defenders' main way
+  in (from their spawn), the bomb itself, a second way in (or a crossfire
+  on the main one from at least 22 / 35 degrees off it, Normal / Hard), a
+  lurker by the main way's outer point (four or more, or three with a Hard
+  bot), then more crossfires. Spots are at least 9.6 m apart (out of one
+  molotov's spread and most of an HE's blast; relaxed when the area is
+  small), see what the role watches, prefer walls around them and not too
+  many ways in at once, and bots go to the spots that make the least walking
+  in all. An enemy heard or seen at a way in (or a teammate killed there)
+  moves the crossfire to it. The plan is made again when that, the living
+  bots, the area or a banned spot changes, and logged with every bot's role
+  and spot. Without an area yet the bots spread round the bomb, 6-15 m out.
+- **Holding an angle** (`BotScan`). The head mostly stays on the angle the
+  bot holds (2-4 s at a time), then checks the other ways in or the bomb its
+  spot sees (about a second), drifting a few degrees all the while (Easy 5,
+  Normal 3.5, Hard 2.5); Normal and Hard bots jiggle-peek their angle every
+  6-18 s and shift to a spot close by (1.5-6.5 m, seeing the same) every
+  12-28 s. A fresh sound wins: it turns to it.
+- **The clock** (post-plant). Too little left for a defuse without a kit
+  (under 12.5 s) or two or more down: safe, far, walled-in spots, crouched,
+  no peeks. Three or more down with time to spare: saving (back towards
+  their spawn). A defuse they can still stop: the two nearest swing on it
+  after a reaction time (1.2 / 0.6 / 0.25 s), facing the bomb, from their
+  spot if it sees the bomb (a wide swing from cover) else the nearest spot
+  that does; Normal and Hard bots throw fire on it (Hard an HE when they
+  have no fire); the others keep their spots, an eye on the bomb.
+- **The retake** (`BotRetake`). The defenders gather by the way in they are
+  nearest on the whole (its outer point, out of sight; one where Terrorists
+  were just seen only if there is no other), go once two are there (or after
+  6 s, or when the clock presses), one close behind the other (0.9 / 0.65 /
+  0.45 s apart) so the next can trade, the first flashing over the site
+  (Normal and Hard). The nearest with a kit (else the nearest) defuses, the
+  others cover from spots that see the bomb, watching where Terrorists would
+  hold. With no time left for a defuse from where they are, Normal and Hard
+  bots save.
+- **The split** (`BotSplits`). Counter-Terrorists read where the Terrorists
+  hit in the last rounds (the planted site, else the site raised): two
+  recent hits on a site make it heavy (63 % of the read), one doesn't. Five:
+  2-1-2 (one forward) or 3-2 heavy; four 2-2 or 3-1; three 2-1 (two where
+  the read points); two 1-1 (both on a very strong read); their own eco
+  stacks. Each defender goes to the site nearest it, the forward one is the
+  one in between, and the split is re-applied as defenders die (each keeps
+  its site where it can), after the side's reaction time. Anchors hold
+  spots from the site's area that watch its ways in (two anchors: two ways
+  in, or a crossfire).
+- **Rotations and deaths called out.** A teammate's death is called to the
+  side (`TeamKnowledge.Deaths`): where it fell, when, who killed it and
+  roughly how many were there (who hurt it in the last 4 s, and the enemies
+  the side knew about near it), fading over 25 s and kept fresh by sightings
+  or sounds near it; a dead enemy is forgotten at once (bots used to watch
+  where one fell). Defenders react after 1.8 / 0.9 / 0.45 s: to a death or a
+  believed sighting near a site, the forward one and other anchors go over
+  until there is one more defender than the enemies called (two at least),
+  never taking the last one off a site; a full execute (three or more) takes
+  everyone but one anchor, and those not already in the site set up short of
+  it to retake rather than run in one by one.
+- **Idle watchdog** (`BotIdle`). A bot that stands still (under 35 cm,
+  8 degrees) with a wall in its face (its view clear for under 2.2 m) for
+  2.5 s logs it (`… stood still facing a wall for 2.5 s at …: re-planning`),
+  looks round the open ways for 3 s and has its hold planned again without
+  that spot (banned for the round).
+- **Callouts in chat** (`BotCallouts`, `MultiplayerService.BotSay`: posts as
+  the bot, team only; the chat adds the bot's place; null: no callouts). Bots
+  call enemies spotted with how many and where ("2 B site", "One long, he's
+  low", "Last one long"), their utility ("Smoking A main", "Flashing out",
+  "Molly on the bomb"), the plan ("Going A", "Split B", "Lurking B", "I'll
+  hold A"), rotations ("Rotating B"), the bomb ("Planting A", "Planted A",
+  "Bomb down mid", "Defusing, cover me", "They're defusing!"), their death
+  ("I died A, 2 there, one low"), being low, a decoy (Hard: "Decoy B, ignore
+  it") and saving. Places come from the map's callout zones, else the site,
+  near a site, a spawn or mid. Each bot has its own chattiness (Easy less,
+  and slower to type); at most one line a bot every 3 s, the same line from
+  a team once in 5 s, a callout too late to matter (3.5 s, 6 s for the bomb
+  and deaths) dropped. Now and then one bot says "gg" or "nt" to everyone at
+  a round's end.
 - **Tracks.** A bot's track (hits, a dropped bomb) uses a player's
   convention: the floor its game reports under it plus a standing player's
   camera height (this machine's own, once seen). A carrier with no track

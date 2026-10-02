@@ -148,6 +148,9 @@ sealed record MapObjectives(IReadOnlyList<ObjectiveZone> Zones, IReadOnlyList<Ob
     public IReadOnlyList<ObjectiveZone> BombSites => Zones.Where(z => z.Type == "bomb_site").ToArray();
     public IReadOnlyList<ObjectiveZone> BuyZones(string side) => Zones.Where(z => z.Type == "buy_zone" && (z.Team == "any" || z.Team == (side == CsRules.T ? "terrorist" : "counter_terrorist"))).ToArray();
     public IReadOnlyList<ObjectiveSpawn> SpawnsFor(string side) => Spawns.Where(s => s.Team == "any" || s.Team == (side == CsRules.T ? "terrorist" : "counter_terrorist")).ToArray();
+    // The bomb site, and the map's callout zone, a point (an eye) is in.
+    public string? SiteAt(double x, double y, double eyeZ) => BombSites.FirstOrDefault(z => z.Contains(x, y, eyeZ))?.Name;
+    public string? CalloutAt(double x, double y, double eyeZ) => Callouts.FirstOrDefault(z => z.Contains(x, y, eyeZ))?.Name;
 
     public static string FileFor(string mapFile) => Path.GetFileNameWithoutExtension(mapFile) + ".aimmod.json";
 
@@ -684,8 +687,8 @@ sealed class CsMatch
     }
 
     // The bomb site (letter) and callout the player stands in now.
-    string? SiteOf(P p) => map is not null && Combat.Position(p.Id) is { } at ? map.BombSites.FirstOrDefault(z => z.Contains(at.X, at.Y, at.Z))?.Name : null;
-    string? CalloutOf(P p) => map is not null && Combat.Position(p.Id) is { } at ? map.Callouts.FirstOrDefault(z => z.Contains(at.X, at.Y, at.Z))?.Name : null;
+    string? SiteOf(P p) => map is not null && Combat.Position(p.Id) is { } at ? map.SiteAt(at.X, at.Y, at.Z) : null;
+    string? CalloutOf(P p) => map is not null && Combat.Position(p.Id) is { } at ? map.CalloutAt(at.X, at.Y, at.Z) : null;
 
     void Finish(long now, int? winner) { Phase = "over"; WinnerTeam = winner; PhaseEndsAt = now; Event("match-end", now, null, null, winner ?? 0); }
 

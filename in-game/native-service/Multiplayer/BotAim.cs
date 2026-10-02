@@ -112,6 +112,17 @@ static class BotAim
         if (speed is not { } v || v <= StillSpeed) return 1;
         return Math.Clamp(1 - 0.8 * (v - StillSpeed) / (RunningSpeed - StillSpeed), 0.2, 1);
     }
+    // A CS gun (CsFeel, the same cones the players' bullets get): the share of its shots that land on a
+    // body `distance` away, from the cone its own movement and stance give it (an AWP standing still
+    // is scoped). Other weapons, or no spread: Moving(speed).
+    public static double MoveAccuracy(CsFeelSpec? weapon, double? speed, bool crouch, double distance)
+    {
+        if (weapon is not { Spreads: true } w) return Moving(speed);
+        var v = (speed ?? 0) / CsFeel.UnitCm;
+        var cone = CsFeel.ConeNow(w, v, false, crouch, w.ZoomLevels > 0 && v < 20 ? 1 : 0) + w.Spread;
+        var body = Math.Atan2(45, Math.Max(1, distance));
+        return cone <= 0 ? 1 : Math.Clamp(body / cone, 0.05, 1);
+    }
     // Whether a bot waits for its counter-strafe to stop it before the next shot: harder bots do;
     // an easy bot fires on the move. Unknown speed (an older AimModSteam): never waits.
     public static bool WaitsToStop(BotSkill s, double? speed) => s.Id != BotSkills.Easy && speed is { } v && v > StillSpeed * 1.6;

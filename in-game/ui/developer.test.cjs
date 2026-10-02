@@ -64,5 +64,10 @@ test('with bot debug on the page lists each bot\'s senses: what it heard, the de
   const text=s.text(s.container);
   assert.ok(text.includes('BOT Ace · anchor')&&text.includes('heard gunfire (rifle) 23 m through a wall')&&text.includes('gunfire #2 rifle: decoy (never moves, no hits)')&&text.includes('smoke: HoldEdge')&&text.includes('blind 70%')&&text.includes('looking away (own flash)'));
   assert.ok(text.includes('BOT Kit · roam')&&!text.includes('blind 0%'),'a calm bot shows just its movement');
+  const held=JSON.parse(JSON.stringify(on));held.status.botDebug=true;
+  held.status.bots=[{name:'BOT Ace',role:'post-plant (entrance 0)',move:'run/crouch',heard:[],sources:[],smoke:null,blind:0,flash:null,spot:'entrance 0 at (-3900, 1500), sees the bomb, cover 3',look:'(-3000, 1300, 160)'}];
+  s.api.enter(s.container);s.last().finish(200,held);
+  const heldText=s.text(s.container);
+  assert.ok(heldText.includes('BOT Ace · post-plant (entrance 0)')&&heldText.includes('entrance 0 at (-3900, 1500), sees the bomb, cover 3')&&heldText.includes('looking at (-3000, 1300, 160)'),'a holding bot shows its spot and where it looks');
   s.button(s.container,'Off').onclick();assert.deepEqual(JSON.parse(s.last().body),{action:'bot-debug',on:false});
 });

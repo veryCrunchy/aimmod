@@ -15,6 +15,7 @@
 #include "GhostMath.hpp"
 #include "AvatarState.hpp"
 #include "BotOrders.hpp"
+#include "SiteSpots.hpp"
 #include "Walker.hpp"
 
 #include <Unreal/FWeakObjectPtr.hpp>
@@ -174,6 +175,7 @@ namespace aimmod
             double tunedSpeed = -1, tunedStep = -1;
             bool tuneLogged = false;
             double nextStatusLog = 0;
+            double look = -1; // how far it sees straight ahead (cm), traced with its sight
         };
         // The map's nav grid for the bots (NavGrid.hpp), grown a trace budget per tick; reset with the scenario.
         std::shared_ptr<bridge::ghost::NavGrid> m_nav;
@@ -212,6 +214,12 @@ namespace aimmod
         std::vector<bridge::bots::Report> m_botReports;
         void ReadBotOrders();
         void WriteBotSight();
+        // Where the bots hold a site or the planted bomb (SiteSpots.hpp), worked out on the nav grid once
+        // it is complete, a trace budget a tick; bot-spots.tsv for the service. Reset with the scenario.
+        std::map<std::string, bridge::ghost::SpotArea> m_areas;
+        bool m_areasChanged = false;
+        void StepAreas(RC::Unreal::UObject* character);
+        void WriteSpots();
         std::string DevLook(std::uint64_t peer);
         bool IsDevPeer(std::uint64_t peer) const { return peer >= 1 && peer <= 16; }
         game::Getter m_lineTrace;

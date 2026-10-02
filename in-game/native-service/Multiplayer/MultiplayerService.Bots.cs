@@ -9,7 +9,10 @@ namespace AimMod.InGame.Multiplayer;
 //  - bot-orders.tsv (service -> AimModSteam): per bot peer, roam / walk to a goal / hold, the point to
 //    face, where to stand at a round start, the sight targets to trace, or (on a client) the pose the
 //    host reported for it.
-//  - bot-sight.tsv (AimModSteam -> service): each bot avatar's position and which targets it sees.
+//  - bot-sight.tsv (AimModSteam -> service): each bot avatar's position, which targets it sees and how
+//    far it sees straight ahead.
+//  - bot-spots.tsv (AimModSteam -> service): the holding spots it worked out on its nav grid for the
+//    areas the orders ask for (a site, the planted bomb; BotPositions.cs).
 //  - "bots" (host -> all): the bots' positions 10 times a second, so every player's game draws them.
 sealed partial class MultiplayerService
 {
@@ -17,9 +20,15 @@ sealed partial class MultiplayerService
     readonly BotBrain botBrain = new();
     readonly Dictionary<string, BotSight> botSight = new(StringComparer.Ordinal); // member -> latest sight
     readonly Dictionary<string, (long At, double[] Pose)> botPoses = new(StringComparer.Ordinal); // client: member -> host pose
+    Dictionary<string, SpotArea> botAreas = new(StringComparer.Ordinal); long botSpotsStamp = -1;
     long botSightStamp = -1, botOrdersSeq, botPosesSentAt, botSightLoggedAt = long.MinValue / 2;
     string? lastBotOrders; bool botOrdersWritten;
     internal BotStep? LastBotStep { get; private set; }
+    // Bot callouts in chat (BotCallouts.cs): posts a line as that bot (member, team only, text); the
+    // chat adds the place. Null: no callouts.
+    public Action<string, bool, string>? BotSay { get; set; }
+    readonly BotCallouts botCallouts = new();
+    readonly List<BotEvent> botThrowEvents = [];
     // Bot debug (developer menu): the bridge draws each bot's path and goal, and logs every second.
     public bool BotDebug { get; set; }
     public LobbyResult SetBotDebug(bool on) { lock (gate) { BotDebug = on; lastBotOrders = null; return LobbyResult.Success; } }
@@ -40,6 +49,7 @@ sealed partial class MultiplayerService
             return;
         }
         ReadBotSight();
+        ReadBotSpots();
         if (core is null) { WritePuppetOrders(match); return; }
         var now = clock();
         FeedBotTracks(match, now);
@@ -60,17 +70,18 @@ sealed partial class MultiplayerService
         // brain's (BotTactics); they hear everyone's shots (the shot log); bot grenades go after the
         // brain's own step, its calls first.
         shotLog.Reset(ShotKey(match));
-        var world = new BotWorld(now, match.Mode, bots, players, BotVision.Sight(match.Cs, botSight, players, now), match.Cs, csObjectives, view?.Events ?? [], shotLog.Recent.ToArray());
+        var world = new BotWorld(now, match.Mode, bots, players, BotVision.Sight(match.Cs, botSight, players, now), match.Cs, csObjectives, view?.Events ?? [], shotLog.Recent.ToArray(), botAreas);
         var step = botBrain.Step(world);
         StepBotUtility(world, step.Utility ?? []);
         LastBotStep = step;
         LogBots(step, now);
+        SayBots(match, world, step, now);
         foreach (var a in step.Actions) core.Apply(a.Bot, a.Action, JsonSerializer.SerializeToElement(a.Args, Protocol.Json), library);
         RecordBotFire(match, step, now); // before the hits: a killing shot still sounds
         foreach (var shot in step.Shots) core.BotShot(shot.Bot, shot.Victim, shot.Head, shot.Slot, shot.Dir);
         if (step.Shots.Count > 0) PushCombat();
         PushShots();
-        WriteBotOrders(FormatBotOrders(step.Orders));
+        WriteBotOrders(FormatBotOrders(step.Orders) + BotAreas.Format(step.Areas ?? []));
         // Everyone else's game draws the bots where this machine's game has them.
         if (now - botPosesSentAt >= 100)
         {
@@ -84,7 +95,7 @@ sealed partial class MultiplayerService
             botSightLoggedAt = now;
             Console.Error.WriteLine("Bots: " + bots.Count + " in the match, " + botSight.Count(kv => now - kv.Value.At <= 1000) + " reported by the game"
                 + (botSight.Count == 0 ? " (no " + BotSightFile + " from AimModSteam: bots walk but can't see, so they don't shoot)" : "")
-                + "; orders: " + string.Join(", ", step.Orders.Select(o => (StandIns.GetValueOrDefault(o.Member) ?? "?") + " " + o.Mode
+                + "; orders: " + string.Join(", ", step.Orders.Select(o => (StandIns.GetValueOrDefault(o.Member) ?? "?") + " " + o.Mode + (o.Role is { } role ? " (" + role + ")" : "")
                     + (o.Goal is { Length: >= 2 } g ? " to " + R(g[0]).ToString(CultureInfo.InvariantCulture) + "," + R(g[1]).ToString(CultureInfo.InvariantCulture) : "")
                     + (o.Face is not null ? " facing" : "") + (botSight.TryGetValue(o.Member, out var at) ? " at " + R(at.X).ToString(CultureInfo.InvariantCulture) + "," + R(at.Y).ToString(CultureInfo.InvariantCulture) : ""))));
         }
@@ -99,8 +110,29 @@ sealed partial class MultiplayerService
         var step = (BotGrenadePolicy ?? botGrenades).Step(world, requests);
         foreach (var (bot, item) in step.Buys) core.Apply(bot, "buy", JsonSerializer.SerializeToElement(new { item }, Protocol.Json), library);
         foreach (var t in step.Throws)
-            if (core.BotThrow(t.Bot, t.Kind, t.From, t.Velocity) is { Ok: true } && requests.FirstOrDefault(r => r.Bot == t.Bot && r.Kind == t.Kind) is { } why)
-                Console.Error.WriteLine("[bots] " + BotName(t.Bot) + " throws a " + t.Kind + ": " + why.Why);
+            if (core.BotThrow(t.Bot, t.Kind, t.From, t.Velocity) is { Ok: true })
+            {
+                if (requests.FirstOrDefault(r => r.Bot == t.Bot && r.Kind == t.Kind) is { } why) Console.Error.WriteLine("[bots] " + BotName(t.Bot) + " throws a " + t.Kind + ": " + why.Why);
+                // Its callout: what it throws and where (fire on a planted bomb is "on the bomb").
+                var onBomb = world.Cs!.Bomb is { State: "planted", Position: { Length: 3 } b } && Math.Sqrt(Math.Pow(t.Target[0] - b[0], 2) + Math.Pow(t.Target[1] - b[1], 2)) < 400;
+                botThrowEvents.Add(new BotEvent(t.Bot, "utility", 0, t.Target, onBomb ? "the bomb" : BotCallouts.Place(world.Map, t.Target), t.Kind, world.Now));
+            }
+    }
+
+    // Callouts: the brain's events and the throws, through the callouts' chattiness, rate limit and
+    // de-duplication, to chat as each bot (BotSay; none without it).
+    void SayBots(MatchSnapshot match, BotWorld world, BotStep step, long now)
+    {
+        var thrown = botThrowEvents.ToArray();
+        botThrowEvents.Clear();
+        if (BotSay is not { } say || match.Cs is not { } cs) return;
+        string Team(string m) => cs.Players.FirstOrDefault(p => p.Member == m)?.Side ?? "?";
+        string? Skill(string m) => world.Bots.FirstOrDefault(b => b.Member == m).Skill;
+        foreach (var line in botCallouts.Step(now, (step.Events ?? []).Concat(thrown), Team, Skill))
+        {
+            say(line.Bot, line.TeamOnly, line.Text);
+            if (BotDebug) Console.Error.WriteLine("[bots] " + BotName(line.Bot) + (line.TeamOnly ? " (team): " : " (all): ") + line.Text);
+        }
     }
 
     // The bot log: what the brain noticed (decoy verdicts, smoke calls, flashes) as it happens, and
@@ -129,11 +161,13 @@ sealed partial class MultiplayerService
         + (d.Decoys.Count > 0 ? " | sources " + string.Join("; ", d.Decoys) : "")
         + (d.Smoke is { } sm ? " | smoke: " + sm : "")
         + (d.Blind > 0.05 ? " | blind " + d.Blind.ToString("0.00", CultureInfo.InvariantCulture) : "")
-        + (d.Flash is { } fl ? " | " + fl : "");
+        + (d.Flash is { } fl ? " | " + fl : "")
+        + (d.Spot is { } sp ? " | " + sp : "")
+        + (d.Look is { } lk ? " | looking at " + lk : "");
     // The developer menu's bot list (bot debug): the same, one entry per bot.
     internal object? BotDebugView() => LastBotStep?.Debug?.Select(d => new
     {
-        name = BotName(d.Bot), role = d.Role, move = d.Move, heard = d.Heard, sources = d.Decoys, smoke = d.Smoke, blind = Math.Round(d.Blind, 2), flash = d.Flash,
+        name = BotName(d.Bot), role = d.Role, move = d.Move, heard = d.Heard, sources = d.Decoys, smoke = d.Smoke, blind = Math.Round(d.Blind, 2), flash = d.Flash, spot = d.Spot, look = d.Look,
     }).ToArray();
 
     // Test hooks (checks only): a bot's track and health on the host, and a client's shot at a bot
@@ -289,8 +323,24 @@ sealed partial class MultiplayerService
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
     }
 
+    // bot-spots.tsv: the holding spots AimModSteam worked out (BotAreas.Parse), read when it changes.
+    void ReadBotSpots()
+    {
+        var path = Path.Combine(outputFolder!, BotAreas.FileName);
+        try
+        {
+            if (!File.Exists(path)) return;
+            var info = new FileInfo(path);
+            if (info.Length > 256 * 1024 || info.LastWriteTimeUtc.Ticks == botSpotsStamp) return;
+            botSpotsStamp = info.LastWriteTimeUtc.Ticks;
+            if (BotAreas.Parse(File.ReadAllText(path)) is { } areas) botAreas = areas;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+    }
+
     // bot-sight.tsv: "AIMMOD_BOTSIGHT_1\t<unix ms>", then "bot\t<peer>\tx\ty\tz\tyaw" (capsule centre),
-    // "vel\t<peer>\t<speed cm/s>\t<crouch 0|1>" (newer bridges) and "seen\t<peer>\t<tag>\t0|1" rows.
+    // "vel\t<peer>\t<speed cm/s>\t<crouch 0|1>" (newer bridges), "look\t<peer>\t<cm clear ahead>" and
+    // "seen\t<peer>\t<tag>\t0|1" rows.
     void ReadBotSight()
     {
         var path = Path.Combine(outputFolder!, BotSightFile);
@@ -318,6 +368,7 @@ sealed partial class MultiplayerService
         // A stale file (the game stopped writing it) says nothing.
         if (Math.Abs(now - at) > 5000) return null;
         var pos = new Dictionary<string, double[]>(); var seen = new Dictionary<string, HashSet<int>>(); var vel = new Dictionary<string, (double Speed, bool Crouch)>();
+        var look = new Dictionary<string, double>();
         static double? Num(string s) => double.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out var v) && double.IsFinite(v) && Math.Abs(v) < 1e7 ? v : null;
         foreach (var line in lines.Skip(1).Take(256))
         {
@@ -327,6 +378,8 @@ sealed partial class MultiplayerService
                 pos[p[1]] = p.Length == 7 && Num(p[6]) is { } fl && fl <= z ? [x, y, z, yaw, fl] : [x, y, z, yaw];
             else if (p.Length == 4 && p[0] == "vel" && p[1].Length is > 0 and <= 2 && Num(p[2]) is { } speed && speed is >= 0 and < 20_000 && p[3] is "0" or "1")
                 vel[p[1]] = (speed, p[3] == "1");
+            else if (p.Length == 3 && p[0] == "look" && p[1].Length is > 0 and <= 2 && Num(p[2]) is { } ahead && ahead is >= 0 and < 100_000)
+                look[p[1]] = ahead;
             else if (p.Length == 4 && p[0] == "seen" && int.TryParse(p[2], NumberStyles.None, CultureInfo.InvariantCulture, out var tag) && tag < 64 && p[3] is "0" or "1")
             {
                 if (!seen.TryGetValue(p[1], out var set)) seen[p[1]] = set = [];
@@ -334,6 +387,6 @@ sealed partial class MultiplayerService
             }
         }
         return pos.ToDictionary(kv => kv.Key, kv => new BotSight(at, kv.Value[0], kv.Value[1], kv.Value[2], kv.Value[3], seen.TryGetValue(kv.Key, out var s) ? s : new HashSet<int>(), kv.Value.Length > 4 ? kv.Value[4] : null,
-            vel.TryGetValue(kv.Key, out var v) ? v.Speed : null, vel.TryGetValue(kv.Key, out var c) && c.Crouch));
+            vel.TryGetValue(kv.Key, out var v) ? v.Speed : null, vel.TryGetValue(kv.Key, out var c) && c.Crouch, look.TryGetValue(kv.Key, out var l) ? l : null));
     }
 }

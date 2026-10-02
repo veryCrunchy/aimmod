@@ -2,8 +2,10 @@ namespace AimMod.InGame.Multiplayer;
 
 // What a side knows (BotBrain), shared between its bots like callouts: the latest sighting of each
 // enemy (any teammate's eyes or ears), the gunfire it heard grouped by where it came from (and
-// whether that was a decoy), the grenades it saw or heard land, and the decoys its bots called.
-// Memory fades: a sighting counts for KnowMs, a sound for HeardMs, less sure as it ages.
+// whether that was a decoy), the grenades it saw or heard land, the decoys its bots called, and its
+// own deaths as called out (where, when, who killed and roughly how many were there).
+// Memory fades: a sighting counts for KnowMs, a sound for HeardMs, a death for DeathMs (a sighting
+// or a sound near it keeps it fresh), less sure as it ages. A dead enemy is forgotten at once.
 sealed class TeamKnowledge
 {
     public const long KnowMs = 6000, HeardMs = 4500;
@@ -13,7 +15,24 @@ sealed class TeamKnowledge
         // A sound never overwrites a fresher sighting.
         if (heard && Enemies.TryGetValue(enemy, out var have) && !have.Heard && t - have.T < 1500) return;
         Enemies[enemy] = (at, t, heard);
+        // A death call near it is fresh again: the enemies are still there.
+        for (var i = 0; i < Deaths.Count; i++)
+            if (Deaths[i].T < t && Dist2(Deaths[i].At, at) < DeathNearCm) Deaths[i] = Deaths[i] with { T = Math.Min(t, Deaths[i].T + DeathMs) };
     }
+    // An enemy that died is no threat to watch any more.
+    public void Forget(string enemy) => Enemies.Remove(enemy);
+
+    // A teammate's death, as the side hears it called: where it fell, when (refreshed by sightings
+    // near it), who killed it and roughly how many were there (what it saw and heard just before).
+    public sealed record DeathCall(string Victim, double[] At, long T, long DiedAt, IReadOnlyList<string> Killers, int Count, string? Site);
+    public const long DeathMs = 25_000;
+    public const double DeathNearCm = 2200;
+    public readonly List<DeathCall> Deaths = [];
+    public void Died(DeathCall d) { Deaths.RemoveAll(x => x.Victim == d.Victim); Deaths.Add(d); }
+    // The calls still fresh (a bot reacts to one only once it had time to: `since` is the reaction).
+    public IEnumerable<DeathCall> FreshDeaths(long now, long since = 0) => Deaths.Where(d => now - d.T <= DeathMs && now - d.DiedAt >= since);
+    public static double DeathConfidence(DeathCall d, long now) => Math.Clamp(1 - (now - d.T) / (double)DeathMs, 0, 1);
+    static double Dist2(double[] a, double[] b) => Math.Sqrt((a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1]));
     public IEnumerable<(string Enemy, double[] At, long T, bool Heard)> Fresh(long now) => Fresh(now, null);
     // Fresh, without what `ignore` rejects (the sounds a bot took for a decoy).
     public IEnumerable<(string Enemy, double[] At, long T, bool Heard)> Fresh(long now, Func<string, bool>? ignore) =>
@@ -26,13 +45,14 @@ sealed class TeamKnowledge
     public readonly List<SoundSource> Sounds = [];
     // Grenades the side saw thrown or heard land: id -> where and when it came to rest.
     public readonly Dictionary<long, (double[] At, long RestT)> Grenades = new();
-    public void Clear() { Enemies.Clear(); Sounds.Clear(); Grenades.Clear(); }
+    public void Clear() { Enemies.Clear(); Sounds.Clear(); Grenades.Clear(); Deaths.Clear(); }
     // Long forgotten: out of memory altogether (a deathmatch never clears between rounds).
     public void Prune(long now)
     {
         foreach (var key in Enemies.Where(kv => now - kv.Value.T > 30_000).Select(kv => kv.Key).ToArray()) Enemies.Remove(key);
         foreach (var id in Grenades.Where(kv => now - kv.Value.RestT > 30_000).Select(kv => kv.Key).ToArray()) Grenades.Remove(id);
         Sounds.RemoveAll(s => now - s.LastT > 30_000);
+        Deaths.RemoveAll(d => now - d.T > DeathMs * 2);
     }
     public static string SoundKey(int id) => "sound#" + id;
 }
