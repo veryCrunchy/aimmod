@@ -111,7 +111,7 @@ sealed partial class MultiplayerService
                 transport = transport.Kind, online = transport.Available, bridge = transport.BridgeVersion,
                 capabilities = game.Capabilities.OrderBy(c => c, StringComparer.Ordinal).ToArray(),
                 simulation = Simulation is not null, simulationForced,
-                looks = AvatarProfiles.All.Select(a => new { a.Id, a.Label }), look = prefs.Avatar, avatar = DevAvatarState, botDebug = BotDebug,
+                looks = AvatarProfiles.All.Select(a => new { a.Id, a.Label }), look = prefs.Avatar, avatar = DevAvatarState, botDebug = BotDebug, bots = BotDebug ? BotDebugView() : null,
                 lobby = lobby is null ? null : new { lobby.Code, members = lobby.Members.Count, simulated = lobby.Members.Count(m => m.Simulated), isHost = lobby.HostId == SelfId, phase = lobby.Match?.Phase ?? "lobby" },
             };
         }

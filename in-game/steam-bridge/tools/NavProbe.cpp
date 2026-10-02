@@ -1,7 +1,10 @@
 // Development tool: the bots' navigation on a ported CS map, offline. Loads the map-creator map and
 // its AimMod objectives file, grows the nav grid with the same code as the game (NavGrid.hpp), and
 // reports coverage, which spawns and bomb sites reach each other, and how bot walkers (Walker.hpp)
-// fare walking from every side's spawns to every site: arrival time, stuck recoveries, blocked steps.
+// fare walking from every side's spawns to every site: arrival time, stuck recoveries, blocked steps;
+// running, shift-walking while pre-aiming corners, and round a smoke halfway along the way; then as
+// squads of five. Also how they turn: snaps (a step faster than the turn rate) and the largest
+// turning acceleration. Exit code 0: every pair connected and every walk and squad arrived.
 //
 //   aimmod_nav_probe <map.json> <map.aimmod.json> [--walk seconds] [--verbose] [--at x y z]
 //
@@ -15,6 +18,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <deque>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -39,6 +43,58 @@ namespace
                 out.push_back({s.array[0].number * scale, s.array[1].number * scale, s.array[2].number * scale, s.array.size() > 3 ? s.array[3].number : 0});
         return out;
     }
+
+    // The point halfway along a path (by length).
+    std::optional<std::array<double, 3>> Halfway(const std::vector<std::array<double, 3>>& way)
+    {
+        if (way.size() < 2) return std::nullopt;
+        double length = 0;
+        for (std::size_t i = 1; i < way.size(); ++i) length += std::hypot(way[i][0] - way[i - 1][0], way[i][1] - way[i - 1][1]);
+        double left = length / 2;
+        for (std::size_t i = 1; i < way.size(); ++i)
+        {
+            const double l = std::hypot(way[i][0] - way[i - 1][0], way[i][1] - way[i - 1][1]);
+            if (l >= left && l > 0)
+            {
+                const double u = left / l;
+                return std::array<double, 3>{way[i - 1][0] + (way[i][0] - way[i - 1][0]) * u, way[i - 1][1] + (way[i][1] - way[i - 1][1]) * u, way[i - 1][2] + (way[i][2] - way[i - 1][2]) * u};
+            }
+            left -= l;
+        }
+        return way.back();
+    }
+
+    // How the walkers turn, 60 steps a second: a step turning faster than the turn rate (with its
+    // overshoot) is a snap; the turning speed should change no faster than the walker's acceleration.
+    struct Turning
+    {
+        double lastYaw = 0, lastRate = 0;
+        bool haveRate = false;
+        int snaps = 0;
+        double maxAccel = 0, limit = 0;
+        void Start(double yaw)
+        {
+            lastYaw = yaw;
+            haveRate = false;
+        }
+        void Add(double yaw, const ghost::Walker& w)
+        {
+            constexpr double dt = 1 / 60.0;
+            const double turn = ghost::WrapAngle(yaw - lastYaw), rate = turn / dt;
+            if (std::fabs(turn) > w.turnRate * (1 + w.overshoot) * dt + 1e-6) ++snaps;
+            if (haveRate) maxAccel = std::max(maxAccel, std::fabs(rate - lastRate) / dt);
+            limit = std::max(limit, w.TurnAccel());
+            lastRate = rate;
+            haveRate = true;
+            lastYaw = yaw;
+        }
+        void Merge(const Turning& other)
+        {
+            snaps += other.snaps;
+            maxAccel = std::max(maxAccel, other.maxAccel);
+            limit = std::max(limit, other.limit);
+        }
+    };
 } // namespace
 
 int main(int argc, char** argv)
@@ -140,47 +196,88 @@ int main(int argc, char** argv)
         }
     std::printf("coverage: %d/%d target pairs connected (%.0f%%)\n", linked, pairs, pairs ? 100.0 * linked / pairs : 0.0);
 
-    // Walkers from each side's first five spawns to every site.
+    // Walkers from each side's first five spawns to every site: running; then shift-walking and
+    // pre-aiming corners; then running round a zone to avoid (a smoke) on the middle of the way.
     if (walkSeconds <= 0) return 0;
     const auto shared = std::make_shared<ghost::NavGrid>(grid);
+    Turning turning;
     int runs = 0, arrived = 0;
-    for (const auto* side : {&tSpawns, &ctSpawns})
-        for (std::size_t i = 0; i < side->size() && i < 5; ++i)
-            for (const auto& t : targets)
-            {
-                if (t.name.rfind("site", 0) != 0) continue;
-                ghost::Walker w;
-                w.nav = shared;
-                w.spawns = {{(*side)[i][0], (*side)[i][1], (*side)[i][2]}};
-                w.Tune(1100, 79);
-                w.PlaceAt((*side)[i][0], (*side)[i][1], (*side)[i][2], (*side)[i][3], 145, floor);
-                w.goal = t.at;
-                double at = -1;
-                const bool verbose = map.verbose;
-                for (int f = 0; f < static_cast<int>(walkSeconds * 60) && at < 0; ++f)
+    enum class Run { Plain, WalkPreaim, Avoid };
+    for (const Run run : {Run::Plain, Run::WalkPreaim, Run::Avoid})
+    {
+        const char* runName = run == Run::Plain ? "walk" : run == Run::WalkPreaim ? "sneak" : "avoid";
+        // Shift-walking is 52% of the run speed: twice the time.
+        const double seconds = run == Run::WalkPreaim ? walkSeconds * 2 : walkSeconds;
+        int runRuns = 0, runArrived = 0, zonesThrough = 0;
+        double closestToZone = 1e9; // of the walks planned round their zone
+        for (const auto* side : {&tSpawns, &ctSpawns})
+            for (std::size_t i = 0; i < side->size() && i < 5; ++i)
+                for (const auto& t : targets)
                 {
-                    const auto s = w.Step(f / 60.0, 1 / 60.0, 145, floor, clear);
-                    if (verbose && f % 30 == 0)
+                    if (t.name.rfind("site", 0) != 0) continue;
+                    ghost::Walker w;
+                    w.nav = shared;
+                    w.spawns = {{(*side)[i][0], (*side)[i][1], (*side)[i][2]}};
+                    w.Tune(1100, 79);
+                    w.PlaceAt((*side)[i][0], (*side)[i][1], (*side)[i][2], (*side)[i][3], 145, floor);
+                    w.goal = t.at;
+                    w.walkGait = w.preaim = run == Run::WalkPreaim;
+                    std::optional<std::array<double, 5>> zone;
+                    bool plannedThrough = false;
+                    double zoneEdge = 1e9;
+                    if (run == Run::Avoid)
                     {
-                        const auto next = w.target == ghost::Walker::NavTarget && !w.navPath.empty() ? w.navPath[std::min(w.navIndex, w.navPath.size() - 1)] : std::array<double, 3>{};
-                        std::printf("      t %5.1f at (%.0f, %.0f, %.0f) target %d path %zu/%zu next (%.0f, %.0f, %.0f) blocked %d plans %d\n", f / 60.0, s.x, s.y, s.z, w.target, w.navIndex,
-                                    w.navPath.size(), next[0], next[1], next[2], w.navBlocked, w.plansFound);
+                        // Halfway along the way it would walk without the zone.
+                        bool reached = false;
+                        const auto way = shared->Path({w.x, w.y, w.z}, t.at, reached);
+                        if (const auto mid = Halfway(way)) zone = std::array<double, 5>{(*mid)[0], (*mid)[1], (*mid)[2], 300, 300};
+                        if (zone)
+                        {
+                            w.avoid = {*zone};
+                            // Whether the plan round it goes through it all the same (no way round worth its cost).
+                            bool ok = false;
+                            for (const auto& p : shared->Path({w.x, w.y, w.z}, t.at, ok, w.avoid))
+                                if (ghost::NavGrid::InZone(p[0], p[1], p[2], *zone)) { plannedThrough = true; break; }
+                            zonesThrough += plannedThrough;
+                        }
                     }
-                    if (std::hypot(s.x - t.at[0], s.y - t.at[1]) < w.arrive + 20) at = f / 60.0;
+                    double at = -1;
+                    const bool verbose = map.verbose;
+                    turning.Start(w.yaw);
+                    for (int f = 0; f < static_cast<int>(seconds * 60) && at < 0; ++f)
+                    {
+                        const auto s = w.Step(f / 60.0, 1 / 60.0, 145, floor, clear);
+                        turning.Add(s.yaw, w);
+                        if (zone) zoneEdge = std::min(zoneEdge, std::hypot(s.x - (*zone)[0], s.y - (*zone)[1]) - (*zone)[3]);
+                        if (verbose && f % 30 == 0)
+                        {
+                            const auto next = w.target == ghost::Walker::NavTarget && !w.navPath.empty() ? w.navPath[std::min(w.navIndex, w.navPath.size() - 1)] : std::array<double, 3>{};
+                            std::printf("      t %5.1f at (%.0f, %.0f, %.0f) target %d path %zu/%zu next (%.0f, %.0f, %.0f) blocked %d plans %d\n", f / 60.0, s.x, s.y, s.z, w.target, w.navIndex,
+                                        w.navPath.size(), next[0], next[1], next[2], w.navBlocked, w.plansFound);
+                        }
+                        if (std::hypot(s.x - t.at[0], s.y - t.at[1]) < w.arrive + 20) at = f / 60.0;
+                    }
+                    ++runRuns;
+                    runArrived += at >= 0;
+                    if (zone && !plannedThrough) closestToZone = std::min(closestToZone, zoneEdge);
+                    if (at < 0)
+                    {
+                        const int g = shared->Nearest(t.at[0], t.at[1], t.at[2]), h = shared->Nearest(w.x, w.y, w.z);
+                        std::printf("    stopped at (%.0f, %.0f, %.0f) target %d, path %zu at %zu%s; goal's grid point %d (%.0f, %.0f, %.0f), here %d\n", w.x, w.y, w.z, w.target, w.navPath.size(),
+                                    w.navIndex, w.navReached ? "" : " (partial)", g, g >= 0 ? shared->nodes[g].x : 0, g >= 0 ? shared->nodes[g].y : 0, g >= 0 ? shared->nodes[g].z : 0, h);
+                    }
+                    std::printf("  %s %s %zu -> %-7s %s in %5.1f s; %4.0f cm left; stuck recoveries %d, blocked %d, plans %d/%d/%d\n", runName, side == &tSpawns ? "T " : "CT", i,
+                                t.name.c_str(), at >= 0 ? "arrived" : "STUCK  ", at >= 0 ? at : seconds, std::hypot(w.x - t.at[0], w.y - t.at[1]), w.stuckRecoveries, w.navBlocked,
+                                w.plansFound, w.plansPending, w.plansFailed);
                 }
-                ++runs;
-                arrived += at >= 0;
-                if (at < 0)
-                {
-                    const int g = shared->Nearest(t.at[0], t.at[1], t.at[2]), h = shared->Nearest(w.x, w.y, w.z);
-                    std::printf("    stopped at (%.0f, %.0f, %.0f) target %d, path %zu at %zu%s; goal's grid point %d (%.0f, %.0f, %.0f), here %d\n", w.x, w.y, w.z, w.target, w.navPath.size(),
-                                w.navIndex, w.navReached ? "" : " (partial)", g, g >= 0 ? shared->nodes[g].x : 0, g >= 0 ? shared->nodes[g].y : 0, g >= 0 ? shared->nodes[g].z : 0, h);
-                }
-                std::printf("  walk %s %zu -> %-7s %s in %5.1f s; %4.0f cm left; stuck recoveries %d, blocked %d, plans %d/%d/%d\n", side == &tSpawns ? "T " : "CT", i,
-                            t.name.c_str(), at >= 0 ? "arrived" : "STUCK  ", at >= 0 ? at : walkSeconds, std::hypot(w.x - t.at[0], w.y - t.at[1]), w.stuckRecoveries, w.navBlocked,
-                            w.plansFound, w.plansPending, w.plansFailed);
-            }
-    std::printf("walks: %d/%d arrived within %.0f s\n", arrived, runs, walkSeconds);
+        runs += runRuns;
+        arrived += runArrived;
+        if (run == Run::Plain) std::printf("walks: %d/%d arrived within %.0f s\n", runArrived, runRuns, seconds);
+        else if (run == Run::WalkPreaim) std::printf("shift-walking and pre-aiming: %d/%d arrived within %.0f s\n", runArrived, runRuns, seconds);
+        else
+            std::printf("round a smoke halfway (radius 300, cost 300 a step): %d/%d arrived within %.0f s; %d planned round it (closest to its edge %.0f cm, negative: inside), %d through it (no way round worth it)\n",
+                        runArrived, runRuns, seconds, runRuns - zonesThrough, closestToZone, zonesThrough);
+    }
 
     // A squad: each side's five walk to every site together, keeping clear of each other.
     int squads = 0, squadsArrived = 0;
@@ -199,6 +296,8 @@ int main(int argc, char** argv)
                 w.goal = t.at;
             }
             double closest = 1e9, at = -1;
+            std::vector<Turning> turns(team.size());
+            for (std::size_t i = 0; i < team.size(); ++i) turns[i].Start(team[i].yaw);
             for (int f = 0; f < static_cast<int>(walkSeconds * 60) && at < 0; ++f)
             {
                 int there = 0;
@@ -208,6 +307,7 @@ int main(int argc, char** argv)
                     for (std::size_t j = 0; j < team.size(); ++j)
                         if (j != i) team[i].others.push_back({team[j].x, team[j].y});
                     const auto s = team[i].Step(f / 60.0, 1 / 60.0, 145, floor, clear);
+                    turns[i].Add(s.yaw, team[i]);
                     there += std::hypot(s.x - t.at[0], s.y - t.at[1]) < team[i].arrive * 3;
                 }
                 for (std::size_t i = 0; i < team.size(); ++i)
@@ -217,12 +317,14 @@ int main(int argc, char** argv)
             }
             int recoveries = 0;
             for (const auto& w : team) recoveries += w.stuckRecoveries;
+            for (const auto& turn : turns) turning.Merge(turn);
             ++squads;
             squadsArrived += at >= 0;
             std::printf("  squad %s -> %-7s %s in %5.1f s; closest two bodies %.0f cm; stuck recoveries %d\n", side == &tSpawns ? "T " : "CT", t.name.c_str(), at >= 0 ? "arrived" : "STUCK  ",
                         at >= 0 ? at : walkSeconds, closest, recoveries);
         }
     std::printf("squads: %d/%d arrived\n", squadsArrived, squads);
+    std::printf("turning: %d snaps (a step faster than the turn rate), largest turning acceleration %.0f deg/s^2 (limit %.0f)\n", turning.snaps, turning.maxAccel, turning.limit);
     arrived += squadsArrived - squads; // a squad that didn't arrive fails the run
     return arrived == runs && linked == pairs ? 0 : 1;
 }

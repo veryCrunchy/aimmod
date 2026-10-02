@@ -1567,9 +1567,13 @@ form, rising with streaks and slumps but never falling.
     (`NavGrid.hpp`): floor points 120 cm apart, grown from every spawn,
     waypoint and goal by line traces (no step over the step height, no
     drop over 1.6 steps, nothing across at foot or waist height), about
-    1500 traces a tick, so a whole map is covered in a few seconds. A bot
-    walks the A* path over it, string-pulled into straight legs over the
-    grid alone (no traces). Without a grid (other arenas) a goal is reached
+    1500 traces a tick, so a whole map is covered in a few seconds (about
+    1.3 s at 60 fps on the ported maps). A* steps diagonally where both
+    straight neighbours link and a trace confirms the diagonal (unchecked
+    diagonals caught bots on prop corners); a seed that lands on a prop
+    tries nearby points. A bot walks the A* path, string-pulled into
+    straight legs over the grid alone (no traces), never across a zone it
+    routed round. Without a grid (other arenas) a goal is reached
     by a route over the waypoints, checked a few straight walks at a time.
   - On a single grid step the walker trusts the grid's floor (a trace that
     began in a low ceiling, a step read differently) but never walks through
@@ -1580,22 +1584,52 @@ form, rising with streaks and slumps but never falling.
     the grid point beyond it out; hop over to the next point.
   - It keeps clear of other bodies (bots, players, the local player): slows
     behind one ahead, steps aside from one alongside, stops beside one
-    already standing on its spot. It turns no faster than its turn rate
-    (`turn`, by difficulty), faces where it walks, checks the most open
-    angles from where it stands (the grid's straight runs) and strafes side
-    to side in a fight (`fight`).
+    already standing on its spot. It checks the most open angles from where
+    it stands (the grid's straight runs).
+  - Moving like a player (`Walker.hpp`): an eased turn for the body and the
+    look (yaw and pitch, at head height), never faster than `turn`, never
+    speeding up faster than `aim` says (default 6 x the rate a second), a
+    little overshoot that settles, no snaps (the host judges flashes by this
+    yaw). Speed changes gradually (full speed in 0.2 s, a stop in 0.15 s);
+    it steers for a point a little ahead on the path (pure pursuit), so it
+    curves through corners, slowing for sharp ones; a curve that would
+    clip a wall falls back to the path point itself. Doorways and narrow
+    gaps (1-2 grid cells across): no corner cutting, 70 % speed. The wall
+    check never looks past the point it walks to (a wall just behind a
+    path point used to stop it).
+  - Orders for that (`BotOrders.hpp`): `move` (run or shift-walk at 52 %,
+    stand or crouch-walk at 34 %, and pre-aim: looking past the next corner
+    of its path rather than straight ahead), `peek` (from where it holds,
+    towards a point: jiggle out and back 60-90 cm, swing wide about 2.5 m
+    and stay, or step out and crouch; the side by a trace from either
+    side), `fight` with a style (`counter`: strafe 0.2-0.45 s, a counter-
+    strafe to a dead stop in about 0.08 s, still for 0.25-0.6 s, the other
+    way; `ad`: side to side), `aim` (angular acceleration and overshoot) and
+    `avoid` (up to 8 circles with a cost per grid step: 1000 or more only
+    when there is no other way). Its game reports each bot's speed and
+    crouch back (`vel` in `bot-sight.tsv`): the brain fires in the still
+    window of a counter-strafe and hears a bot's own gait.
   - Orders also say how far to go (`stop`, a fraction of the way: map
     control, post-plant spots) and a detour first (`via`, a split).
   - `aimmod_nav_probe <map.json> <map.aimmod.json>` (steam-bridge tools)
     runs the same grid and walkers offline on a ported map's brushes
     (convex hulls of each brush's vertices), and reports coverage, which
     spawns and sites connect, and how walkers and five-bot squads fare from
-    each spawn to each site. Both ported CS maps (de_d2_remake, de_d2_beta):
-    every spawn and site connected, every walk and squad arrives.
+    each spawn to each site, plus walks at a shift-walk with pre-aim, walks
+    past an avoid zone on the way, and the turns (snaps, peak angular
+    acceleration). Both ported CS maps (de_d2_remake, de_d2_beta, with the
+    props that now collide): every spawn and site connected, every walk and
+    squad arrives with no stuck recoveries, no snaps.
   - In game, once the grid is complete, AimModSteam logs its coverage: how
     many spawn-to-waypoint pairs connect, and the ones that don't.
   - Bot debug (developer menu): AimModSteam draws each bot's path as small
-    spheres and its goal as a cube, and logs every bot's job every second.
+    spheres and its goal as a cube, and logs every bot's job every second;
+    the developer page lists each bot's senses (`DevStatus.bots`: role,
+    movement, what it heard and how far, the gunfire it judged and why, its
+    smoke call, how blind it is, the flash it looks away from), and the
+    service logs the same line for every bot each second (`[bots] …`).
+    Always logged: each decoy verdict as it changes, each smoke call, a bot
+    blinded, a bot's own grenade calls (`[bots] … throws a flash: …`).
   - Logs: the grid's growth, and every 5 s each bot's order, goal,
     distance, path length and progress; the service adds the orders to
     its 30 s bot line.
@@ -1630,20 +1664,88 @@ form, rising with streaks and slumps but never falling.
   stream from another machine is involved.
 - **Sight.** The host asks its game to trace from each bot's eye to the
   nearest enemies; AimModSteam answers in `bot-sight.tsv`. A bot only targets
-  a player its trace says is in sight.
+  a player its trace says is in sight, and not through a smoke
+  (`BotVision`: the line's chord through the cloud, an ellipsoid the size it
+  has grown to, times how thick it still is; hidden from half a cloud radius
+  of smoke, the same both ways, so two bodies in one smoke see each other only
+  up close, and a cloud hides nothing as it pops or once it has thinned).
 - **Aim** (`BotBrain` and `BotAim`, by difficulty): the crosshair turns onto
-  a target at 260 / 450 / 720 degrees a second, settles on it for
-  220 / 130 / 60 ms after a reaction time (650 / 380 / 220 ms), then fires
-  in bursts. A shot lands by a hit chance (28 / 45 / 62 % at close range on
-  a still target, less with distance, a moving target and deeper into a
-  spray) times how close the crosshair is to the body. A landed shot goes
-  through `CombatMatch.BotHit`: alive, fire rate, round phase, spawn
-  protection, friendly fire and armour, like a player's hit. It strafes in
-  a fight (25 / 60 / 100 %).
-- **Eyes and ears** (`TeamKnowledge`): what any bot of a side sees, and
-  running footsteps (22 m) and gunfire (45 m) it hears, the whole side knows
-  for 6 s. A bot watches the nearest such spot, hunts it when it has nothing
-  else to do, and rotations follow it.
+  a target with an eased turn: at most 260 / 450 / 720 degrees a second,
+  speeding up and slowing down by at most 1100 / 2600 / 5200 degrees a second
+  squared, overshooting a little (18 / 10 / 5 %) and settling, never a snap.
+  AimModSteam turns the body with the same numbers (`turn` and `aim`
+  orders), so the yaw the host judges a flash by is that turn. It settles
+  on the target for 220 / 130 / 60 ms after a reaction time
+  (650 / 380 / 220 ms), then fires in bursts. A shot lands by a hit chance
+  (28 / 45 / 62 % at close range on a still target, less with distance, a
+  moving target and deeper into a spray) times how close the crosshair is to
+  the body, times its own movement (a run keeps a fifth; Normal and Hard bots
+  counter-strafe and wait for the stop, Easy bots shoot on the move). A
+  landed shot goes through `CombatMatch.BotHit`: alive, fire rate, round
+  phase, spawn protection, friendly fire and armour, like a player's hit. It
+  strafes in a fight (25 / 60 / 100 %): Easy side to side, Normal and Hard
+  strafe, counter-strafe to a dead stop, shoot, and strafe the other way.
+- **Ears** (`BotHearing`): running footsteps within 15 / 19 / 22 m (a
+  player's earshot at best); a shift-walk or a crouch-walk is silent, as in
+  CS (by speed: a CS run is 1100 cm/s, the walk threshold 650; bots' own
+  gait comes from their walker's `vel` report). Gunfire from the shared shot
+  log (every shot anyone fired, hits and misses) within 32 / 40 / 45 m,
+  0.6 of that through a wall (its game's trace to the shooter said so, or a
+  shooter round a corner it never traced), and a decoy's fake gunfire the
+  same way. A sound is placed with an error of 18 / 10 / 5 % of its distance
+  (more through a wall). A bot turns to what it just heard and watches it
+  (2.5 s), an anchor holds that angle (Hard bots jiggle- or crouch-peek it),
+  a bot with nothing to do investigates it, and the defence rotates on it.
+- **Memory** (`TeamKnowledge`, `BotMemory.cs`): what any bot of a side sees
+  or hears the whole side knows, like callouts: a sighting for 6 s, a sound
+  for 4.5 s, less sure as it ages; gunfire grouped by where it comes from
+  (`SoundSource`: its shots, bursts and gun class), the grenades the side saw
+  thrown or heard land, and which sources were called decoys.
+- **Decoys** (`BotEars`). A source of gunfire is judged by what a player
+  could notice, each cue adding to a score: a grenade the side saw or heard
+  come to rest right where the shooting started (3), a "shooter" that never
+  moves over three bursts (1) and the same bursts again (1), three bursts
+  over 2 s and nobody near it hurt anyone or got hurt (1), a gun class no
+  living enemy carries this round (1), and every living enemy just seen
+  somewhere else (3). Easy bots always fall for a decoy (they rotate to the
+  fake fight); Normal bots call it at 3 (about 5 s of a decoy), Hard bots at
+  2 (about 3 s, or at the first burst when they saw it land) and tell the
+  side: Normal and Hard teammates then ignore it, Easy ones don't listen.
+  Real gunfire (a shooter on the move, hits) is believed.
+- **Smokes** (`BotTactics.Decide`, per smoke and bot): inside one, a bot goes
+  on through when pressed or when its way lies beyond, else straight out
+  (never standing in one for nothing); a cloud between it and where it goes
+  (or the angle it holds): out of time (a planted bomb, the round clock) it
+  pushes through, behind a flash when it has one; Hard defenders wait it
+  out holding the edge someone would come out of (side by side), and swing
+  wide on that edge as it thins; Hard attackers flash through it and push
+  with mates near, or take another way round (the walker routes round the
+  cloud: `avoid`), or hold its edge; Normal bots hold the edge, reroute when
+  it has long left, swing wide as it fades; Easy bots walk into it or wait
+  about. Counter-Terrorists (Normal, Hard) smoke the choke the enemy comes
+  through (30 % of the way from the enemy they know about), Hard
+  Terrorists split their execute's cross smokes (the defenders' spawn and
+  the other site's rotation). Fire on the floor is routed round by everyone.
+- **Flashes.** Bots are blinded by any flash, their own and their mates'
+  too, by the host's per-player amount (`CsPlayerView.Flash`). White
+  (60 % and up) a bot sees no one: Normal and Hard spray at the enemy they
+  were fighting (its game's trace still says who is in the open) at
+  10 / 18 % of their chance, otherwise back off towards their side and turn
+  away; an Easy bot freezes, turned away. Half blind (25 %) it sees only
+  within 12 m, reacts 1.8 times slower and aims worse. Normal and Hard bots
+  look away from their own flashes as they pop (380 / 520 ms ahead) and from
+  their bot teammates' (bots call their flashes), Hard bots also from a human
+  teammate's thrown close by and, mostly, an enemy flash they see coming;
+  Easy bots never look away and throw sloppily, so they blind themselves and
+  their mates now and then. Hard bots pop-flash the angle they are about to
+  take (half way, at most 7 m out, over head height).
+- **Moving like a player** (`BotTactics.Move`, then AimModSteam's walker):
+  Hard bots shift-walk (silent) within 24 m of an enemy they know about
+  unless they hurry (a rush, a rotation, a retake), Normal bots within 15 m,
+  some of the time; holding a long angle with nothing about, some crouch;
+  Normal and Hard bots pre-aim the corners they clear; fights at long range
+  are sometimes crouched (Hard). The walker turns with the eased turn, curves
+  through corners and counter-strafes (see the bridge's movement below).
 - **CS** (`BotStrategy`, `BotEconomy`). The side buys together: pistol
   rounds, a full buy (rifles, helmets, kits) from $3,700 a head, a half buy
   (SMGs) from $2,000, a force on the last round of a half or at match point,
@@ -1755,12 +1857,14 @@ AimMod's own: procedural models of engine basic shapes and synthesised sounds.
   the `flash` line of `grenades.tsv`, with the frozen after-image of the
   moment of the flash under it for a strong one) and the notice page's top
   layer (`#cs-flash`, played from `cs.flashFx`). A hard flash also rings in
-  your ears. A flashed bot sees nothing. The host logs what each flash did
+  your ears. A flashed bot sees nothing (half blind: only up close; 6.6.4).
+  The host logs what each flash did
   (`[grenades] flash #…`: who it blinded, by how much, and whether the game
   answered the sight lines) and each player's service logs `[grenades] you
   were flashed`.
 - **Smoke.** It blocks sight for bots (the service drops their sight of
-  anyone behind it), enemy name tags (no `world-tags.tsv` row for an enemy
+  anyone behind it: `BotVision`, the line's chord through the cloud as it
+  grows and thins), enemy name tags (no `world-tags.tsv` row for an enemy
   behind it from your camera) and flashes; shots go through it, as in CS. It
   spreads to its full size (about 12 m across, a chokepoint or a doorway and
   its sides) over 1 s. Inside it AimModCore flattens the picture to grey (a
@@ -1817,12 +1921,18 @@ AimMod's own: procedural models of engine basic shapes and synthesised sounds.
 - **Bots** (`BotGrenades`, after `BotBrain` each tick). Buys in freeze time
   with the money left after guns and armour: Easy a flash; Normal a smoke, a
   flash and an HE; Hard a smoke, a flash, a fire grenade, an HE and a second
-  flash. Throws, once per kind a round and one every 2 s: Terrorists heading
-  for a site smoke it off towards the defenders' spawn, then flash over it; a
-  Terrorist burns a defuse; Counter-Terrorists smoke the planted bomb and burn
-  a plant; anyone throws the HE at an enemy they see 7-22 m away. Hooks for
+  flash. Throws, one every 2 s: first the brain's calls (`BotStep.Utility`:
+  a flash through a smoke before a push, a Hard bot's pop-flash, a CT smoke
+  on the choke; see 6.6.4), then once per kind a round: Terrorists heading
+  for a site smoke it off towards the defenders' spawn (Hard bots split the
+  cross smokes), then flash over it; a Terrorist burns a defuse;
+  Counter-Terrorists smoke the planted bomb and burn a plant; anyone throws
+  the HE at an enemy they see 7-22 m away. Easy bots' throws land well short
+  or wide. What bots make of grenades (sight through smoke, blindness,
+  looking away, decoys, smoke calls) is the brain's (6.6.4). Hooks for
   the bot logic: `IBotGrenadePolicy` (replace the policy:
-  `MultiplayerService.BotGrenadePolicy`), `BotGrenades.Buys` and
+  `MultiplayerService.BotGrenadePolicy`; `Step(world, requests)` gets the
+  brain's calls), `BotGrenades.Buys` and
   `BotGrenades.Plan` (this policy's parts), `GrenadeAim.Lob` and
   `GrenadeAim.Timed` (the velocity that lands a grenade on a point, or has it
   there when it goes off), and `LobbyCore.BotThrow` (any carried grenade at

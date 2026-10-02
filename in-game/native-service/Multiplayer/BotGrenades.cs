@@ -11,17 +11,24 @@ namespace AimMod.InGame.Multiplayer;
 interface IBotGrenadePolicy
 {
     BotGrenadeStep Step(BotWorld world);
+    // With the brain's own calls this step (BotBrain's BotStep.Utility: a flash to push a smoke, a
+    // pop-flash, a smoke on a choke); a policy that ignores them just plays its own.
+    BotGrenadeStep Step(BotWorld world, IReadOnlyList<BotUtilityRequest> requests) => Step(world);
 }
 // A throw: the bot, the grenade, its eye and the velocity.
 sealed record BotGrenadeThrow(string Bot, string Kind, double[] From, double[] Velocity, double[] Target);
 sealed record BotGrenadeStep(IReadOnlyList<(string Bot, string Item)> Buys, IReadOnlyList<BotGrenadeThrow> Throws);
 
 // The simple policy: bots buy utility with the money left after their guns and armour (Easy a
-// flash, Normal a smoke, a flash and an HE, Hard the full set with a fire grenade). Terrorists smoke
-// the site they push towards from the Counter-Terrorists' side and flash over it; a Terrorist with
-// a molotov burns a defuse; Counter-Terrorists smoke the planted bomb to defuse under it and burn a
-// plant; anyone with an HE throws it at an enemy they see 7-22 m away. Once per kind a round, one
-// throw every 2 s at most.
+// flash, Normal a smoke, a flash and an HE, Hard the full set with a fire grenade). First the
+// brain's calls (a flash through a smoke, a pop-flash round a corner, a CT smoke on the choke the
+// enemy comes through); then its own: Terrorists smoke the site they push towards from the
+// Counter-Terrorists' side (Hard bots split the cross smokes: the defenders' spawn and the other
+// site's rotation) and flash over it; a Terrorist with a molotov burns a defuse; Counter-Terrorists
+// smoke the planted bomb to defuse under it and burn a plant; anyone with an HE throws it at an
+// enemy they see 7-22 m away. Easy bots throw sloppily (and blind themselves and their mates now
+// and then). Once per kind a round (the brain's calls may use a second flash), one throw every 2 s
+// at most.
 sealed class BotGrenades : IBotGrenadePolicy
 {
     public const long BuyDelayMs = 3000, ThrowGapMs = 2000;
@@ -50,7 +57,9 @@ sealed class BotGrenades : IBotGrenadePolicy
         return list;
     }
 
-    public BotGrenadeStep Step(BotWorld w)
+    public BotGrenadeStep Step(BotWorld w) => Step(w, []);
+    readonly Random sloppy = new(7);
+    public BotGrenadeStep Step(BotWorld w, IReadOnlyList<BotUtilityRequest> requests)
     {
         var buys = new List<(string, string)>(); var throws = new List<BotGrenadeThrow>();
         if (w.Cs is not { } cs) return new(buys, throws);
@@ -66,13 +75,31 @@ sealed class BotGrenades : IBotGrenadePolicy
                 foreach (var item in Buys(me, skill)) buys.Add((member, item));
             }
             if (cs.Phase is not ("live" or "planted") || w.Now < st.NextThrow || me.Grenades is not { Count: > 0 }) continue;
-            if (Plan(w, cs, me, member, st.Thrown) is { } t)
+            var asked = requests.FirstOrDefault(r => r.Bot == member && me.Grenades.Contains(r.Kind));
+            var t = asked is not null ? FromRequest(w, member, asked) : Plan(w, cs, me, member, st.Thrown);
+            if (t is not null && skill == BotSkills.Easy && t.Kind is GrenadeRules.Flash or GrenadeRules.Smoke or GrenadeRules.He)
+            {
+                // An easy bot's throw lands well short or wide of where it meant.
+                var aim = BotTactics.Sloppy(t.From, t.Target, sloppy);
+                t = t.Kind == GrenadeRules.Smoke ? t with { Velocity = GrenadeAim.Lob(t.From, aim), Target = aim }
+                    : t with { Velocity = GrenadeAim.Timed(t.From, aim, (t.Kind == GrenadeRules.He ? GrenadeRules.HeFuseMs : GrenadeRules.FlashFuseMs) / 1000.0), Target = aim };
+            }
+            if (t is not null)
             {
                 throws.Add(t);
                 st.Thrown.Add(t.Kind); st.NextThrow = w.Now + ThrowGapMs;
             }
         }
         return new(buys, throws);
+    }
+
+    // The brain's call as a throw from where the bot's eye is (a timed throw: there when it goes off).
+    static BotGrenadeThrow? FromRequest(BotWorld w, string member, BotUtilityRequest r)
+    {
+        if (w.Players.FirstOrDefault(p => p.Member == member) is not { } self) return null;
+        var eye = new[] { self.X, self.Y, self.Z };
+        var fuse = r.Kind == GrenadeRules.He ? GrenadeRules.HeFuseMs : GrenadeRules.FlashFuseMs;
+        return new BotGrenadeThrow(member, r.Kind, eye, r.Timed ? GrenadeAim.Timed(eye, r.Target, fuse / 1000.0) : GrenadeAim.Lob(eye, r.Target), r.Target);
     }
 
     // This policy's throw for one bot now, or null. `thrown`: the kinds it already threw this round.
@@ -116,8 +143,13 @@ sealed class BotGrenades : IBotGrenadePolicy
             var ctSpawns = cs.Spawns?.Where(kv => cs.Players.FirstOrDefault(p => p.Member == kv.Key)?.Side == CsRules.CT).Select(kv => kv.Value).ToList() ?? [];
             if (Has(GrenadeRules.Smoke) && d is > 600 and < 1800)
             {
-                // Between the site and the defenders' spawn, so the site can't be watched from there.
-                var to = ctSpawns.Count > 0 ? new[] { ctSpawns.Average(p => p[0]), ctSpawns.Average(p => p[1]) } : null;
+                // Between the site and the defenders' spawn, so the site can't be watched from there; a
+                // Hard bot of the second half of the side takes the other cross (the way the defence
+                // rotates in from the other site).
+                var hard = w.Bots.FirstOrDefault(b => b.Member == member).Skill == BotSkills.Hard;
+                var otherSite = sites.Count > 1 ? sites.Where(x => x != site).OrderBy(x => (x.X - site.X) * (x.X - site.X) + (x.Y - site.Y) * (x.Y - site.Y)).First() : null;
+                var to = hard && otherSite is not null && BotStrategy.Hash(member) % 2 == 1 ? new[] { otherSite.X, otherSite.Y }
+                    : ctSpawns.Count > 0 ? new[] { ctSpawns.Average(p => p[0]), ctSpawns.Average(p => p[1]) } : null;
                 var off = to is null ? 0 : Math.Sqrt((to[0] - site.X) * (to[0] - site.X) + (to[1] - site.Y) * (to[1] - site.Y));
                 var spot = to is null || off < 1 ? new[] { site.X, site.Y, floor } : new[] { site.X + (to[0] - site.X) / off * Math.Min(700, off * 0.4), site.Y + (to[1] - site.Y) / off * Math.Min(700, off * 0.4), floor };
                 return Lob(GrenadeRules.Smoke, spot);

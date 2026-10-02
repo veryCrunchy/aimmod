@@ -19,6 +19,7 @@ static partial class MultiplayerChecks
         BotOrdersFile(root);
         BotScoreModes(root);
         BotsOnline(root);
+        BotSenseChecks();
     }
 
     static MapObjectives BotMap()
@@ -81,10 +82,11 @@ static partial class MultiplayerChecks
         var hard = BotSkills.For(BotSkills.Hard); var easy = BotSkills.For(BotSkills.Easy);
         Check(Aim.TurnRate(hard) > Aim.TurnRate(easy) && Aim.SettleMs(hard) < Aim.SettleMs(easy) && Aim.Strafe(hard) > Aim.Strafe(easy), "Harder bots turn faster, settle sooner and strafe harder");
         var s = new BotAimState { Yaw = 0, Pitch = 0 };
-        var left = Aim.Turn(s, 180, 0, 360, 0.1);
-        Check(Math.Abs(s.Yaw - 36) < 0.01 && Math.Abs(left - 144) < 0.01, "Aim turns no faster than the turn rate");
-        for (var i = 0; i < 10; i++) left = Aim.Turn(s, 180, 0, 360, 0.1);
-        Check(left == 0 && Math.Abs(Math.Abs(s.Yaw) - 180) < 0.01, "and gets there");
+        var profile = new BotTurnProfile(360, 100_000, 0);
+        var left = Aim.Turn(s, 179, 0, profile, 0.1);
+        Check(s.Yaw <= 36.01 && left >= 142.9, "Aim turns no faster than the turn rate");
+        for (var i = 0; i < 10; i++) left = Aim.Turn(s, 179, 0, profile, 0.1);
+        Check(left < 0.1 && Math.Abs(s.Yaw - 179) < 0.1, "and gets there");
         Check(Aim.OnTarget(0, 1000) == 1 && Aim.OnTarget(Aim.TargetAngle(1000) * 2, 1000) is > 0 and < 1 && Aim.OnTarget(20, 1000) == 0, "A shot's chance falls off as the crosshair leaves the body");
         var settle = new BotAimState();
         Check(!Aim.Ready(settle, 10, 1000, 0, hard), "Off target: no shot");
@@ -103,15 +105,15 @@ static partial class MultiplayerChecks
         var t = t0 + CsRules.FreezeMs + 500;
         BotWorld World(BotPlayer[] players, Dictionary<string, BotSight> sight, CsView? view = null) =>
             new(t, LobbyModes.Cs, [("c1", BotSkills.Normal), ("c2", BotSkills.Normal)], players, sight, view ?? cs.View(), map, []);
-        // A Terrorist runs past c1, out of its sight but within earshot.
-        var players = new[] { new BotPlayer("t1", 0, -2900, 900, 164, 1, true, 600), new BotPlayer("c1", 1, -2000, 1500, 164, 2, true, 0), new BotPlayer("c2", 2, 3000, 200, 164, 2, true, 0) };
+        // A Terrorist runs past c1, out of its sight but within earshot (a CS run: 1100 cm/s ported).
+        var players = new[] { new BotPlayer("t1", 0, -2900, 900, 164, 1, true, 1000), new BotPlayer("c1", 1, -2000, 1500, 164, 2, true, 0), new BotPlayer("c2", 2, 3000, 200, 164, 2, true, 0) };
         var sight = new Dictionary<string, BotSight> { ["c1"] = new(t, -2000, 1500, 100, 0, new HashSet<int>()), ["c2"] = new(t, 3000, 200, 100, 0, new HashSet<int>()) };
         var heard = brain.Step(World(players, sight));
         Check(brain.KnowledgeOf(CsRules.CT).Fresh(t).Any(k => k.Enemy == "t1" && k.Heard), "A bot hears running footsteps within earshot, and its side knows");
         var c2 = heard.Orders.First(o => o.Member == "c2");
         Check(c2.Goal is { } g && g[0] == -3000 && c2.Role == "rotate", "The anchor on the other site rotates to where the Terrorist was heard");
         var c1 = heard.Orders.First(o => o.Member == "c1");
-        Check(c1.Face is { } f && f[0] == -2900, "The bot that heard it watches that way");
+        Check(c1.Face is { } f && Math.Abs(f[0] + 2900) < 250 && Math.Abs(f[1] - 900) < 250, "The bot that heard it watches that way (about where it was: ears are not exact)");
         Check(heard.Orders.All(o => o.Turn == Aim.TurnRate(BotSkills.For(BotSkills.Normal))), "Every order carries the bot's turn rate");
         // Planted at B: the defenders gather short of it, then retake; the nearest defuses, the other covers.
         var planted = cs.View() with { Phase = "planted", Bomb = cs.View().Bomb with { State = "planted", Position = [-3000, 0, 40], Carrier = null } };
@@ -194,6 +196,8 @@ static partial class MultiplayerChecks
         Run(1200);
         var text = File.Exists(file) ? File.ReadAllText(file) : "";
         Check(text.Contains("\ndebug\t1\n", StringComparison.Ordinal) && text.Contains("\nturn\t1\t720\n", StringComparison.Ordinal), "bot-orders.tsv carries the debug switch and the bot's turn rate (hard: 720 degrees a second)");
+        Check(text.Contains("\naim\t1\t5200\t0.05\n", StringComparison.Ordinal) && text.Contains("\nmove\t1\trun\tstand\t1\n", StringComparison.Ordinal),
+            "and how it turns (eased: 5200 degrees a second squared, 5 % overshoot) and walks (a hard bot pre-aims corners)");
         // Its game reports the bot standing on a floor: its track (for hits, the bomb) is that floor plus a camera height.
         File.WriteAllText(Path.Combine(output, MultiplayerService.BotSightFile), "AIMMOD_BOTSIGHT_1\t" + now + "\nbot\t1\t300\t400\t145\t0\t0\n");
         Run(300);

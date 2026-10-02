@@ -26,3 +26,4 @@
 .dev-replay .actions{margin-top:0}.dev-replay .actions>.button{margin:0 0 0 6px}
 .dev-log{max-height:260px;overflow-y:auto;padding:8px 10px;background:#0b1210;border:1px solid #22302a;border-radius:6px}
 .dev-log-line{font-family:Consolas,monospace;font-size:11px;line-height:1.5;color:#a7bab0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dev-bots{margin:-4px 0 12px}.dev-bot{display:flex;flex-direction:column;padding:6px 0;border-top:1px solid #22302a;font-size:12px}.dev-bot strong{color:#dcebe3}.dev-bot-senses{color:#9fb4aa}

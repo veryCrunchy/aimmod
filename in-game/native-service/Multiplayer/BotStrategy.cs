@@ -27,22 +27,7 @@ sealed record BotJob(string Role, double[]? Goal, double Stop = 1, double[]? Via
 // A side's plan for the round.
 sealed record TeamPlan(string Side, int Round, string Style, int Site, long ExecuteAt, IReadOnlyList<string> Order);
 
-// What a side knows: the latest sighting of each enemy (any teammate's eyes or ears) and where the
-// bomb was last seen. Sightings older than KnowMs are forgotten.
-sealed class TeamKnowledge
-{
-    public const long KnowMs = 6000;
-    public readonly Dictionary<string, (double[] At, long T, bool Heard)> Enemies = new(StringComparer.Ordinal);
-    public void Saw(string enemy, double[] at, long t, bool heard = false)
-    {
-        // A sound never overwrites a fresher sighting.
-        if (heard && Enemies.TryGetValue(enemy, out var have) && !have.Heard && t - have.T < 1500) return;
-        Enemies[enemy] = (at, t, heard);
-    }
-    public IEnumerable<(string Enemy, double[] At, long T, bool Heard)> Fresh(long now) =>
-        Enemies.Where(kv => now - kv.Value.T <= KnowMs).Select(kv => (kv.Key, kv.Value.At, kv.Value.T, kv.Value.Heard));
-    public void Clear() => Enemies.Clear();
-}
+// What a side knows (TeamKnowledge) lives in BotMemory.cs.
 
 static class BotStrategy
 {
