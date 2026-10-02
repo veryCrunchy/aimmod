@@ -645,6 +645,7 @@ namespace aimmod
             if (wasReady != m_overlay.ready() || wasHud != m_hud.ready()) m_output.SetCapabilities(Capabilities());
         }
         TickTags(now);
+        m_match.Sights(now, m_overlay.Gameface());
         PollClipKey();
         if (m_output.poseRequested() && now >= m_nextPose)
         {

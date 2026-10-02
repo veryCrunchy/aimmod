@@ -1110,6 +1110,7 @@
       kv('Overtime',s.overtime===false?'Off':'On · halves of 3 with $12,500');
       kv('ADS zoom',{off:'Off',all:'All weapons'}[s.adsZoom]||'CS-style (AWP scope)');
       kv('Friendly fire',s.friendlyFire===false?'Off':'On · 33 % damage, team kill -$300');
+      kv('Crosshair',s.dynamicCrosshair===false?"KovaaK's own":'Dynamic · opens with movement and spraying');
       if(s.scenario&&s.scenario.csProblem)kv('CS map','Not a CS map: '+safe(s.scenario.csProblem,'')).children[1].className+=' mp-warn-line';
     }
     else if(combat(s.mode)){kv('Frag limit',F.number(s.fragLimit||(s.mode==='vampiric'?10:s.mode==='instagib'?25:s.mode==='team-deathmatch'?50:20),0)+' kills');if(s.mode==='vampiric')kv('Lifesteal',F.number(typeof s.lifesteal==='number'?s.lifesteal:50,0)+' %');}
@@ -1192,6 +1193,7 @@
       pl.appendChild(settingRow('ADS zoom','Right mouse zoom. CS-style: only the AWP scopes, as in CS2.',segmented([{id:'off',label:'Off'},{id:'cs',label:'CS-style'},{id:'all',label:'All weapons'}],s.adsZoom||'cs',function(id){setting('adsZoom',id);},false,'ADS zoom')));
       if((s.adsZoom||'cs')!=='off')pl.appendChild(settingRow('Zoom sensitivity','Sensitivity while zoomed, against hip fire (1.0 keeps it).',stepper(typeof s.adsSensitivity==='number'?s.adsSensitivity:1,0.2,2,0.05,function(v){return F.number(v,2)+'x';},function(v){setting('adsSensitivity',v);},false,'zoom sensitivity')));
       pl.appendChild(settingRow('Friendly fire','CS2 rules: teammates take a third of the damage, a team kill costs $300.',toggleSwitch(s.friendlyFire!==false,'Friendly fire',function(){setting('friendlyFire',s.friendlyFire===false);})));
+      pl.appendChild(settingRow('Dynamic crosshair','A CS crosshair whose gap shows how accurate the next shot is: wider while moving, jumping or spraying.',toggleSwitch(s.dynamicCrosshair!==false,'Dynamic crosshair',function(){setting('dynamicCrosshair',s.dynamicCrosshair===false);})));
     }
     else if(combat(s.mode)){
       var fragDefault=s.mode==='vampiric'?10:s.mode==='instagib'?25:s.mode==='team-deathmatch'?50:20;

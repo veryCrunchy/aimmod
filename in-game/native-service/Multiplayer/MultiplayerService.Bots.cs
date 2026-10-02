@@ -281,6 +281,7 @@ sealed partial class MultiplayerService
         static string F(double v) => v.ToString("0.#", CultureInfo.InvariantCulture);
         var sb = new System.Text.StringBuilder();
         if (BotDebug) sb.Append("debug\t1\n");
+        var cs = Current?.Match?.Cs;
         foreach (var o in orders)
         {
             if (!StandIns.TryGetValue(o.Member, out var peer)) continue;
@@ -299,6 +300,9 @@ sealed partial class MultiplayerService
             if (o.Via is { Length: >= 4 } via) sb.Append("via\t").Append(peer).Append('\t').Append(F(via[0])).Append('\t').Append(F(via[1])).Append('\t').Append(F(via[2])).Append('\t').Append(via[3].ToString("0.##", CultureInfo.InvariantCulture)).Append('\n');
             if (o.Fight > 0) sb.Append("fight\t").Append(peer).Append('\t').Append(o.Fight.ToString("0.##", CultureInfo.InvariantCulture)).Append(o.FightStyle is { } style ? "\t" + style : "").Append('\n');
             if (o.Turn > 0) sb.Append("turn\t").Append(peer).Append('\t').Append(F(o.Turn)).Append('\n');
+            // CS: the bot walks at the speed of the weapon in its hand, as a player does (CsFeel).
+            if (cs?.Players.FirstOrDefault(p => p.Member == o.Member) is { Alive: true } held)
+                sb.Append("speed\t").Append(peer).Append('\t').Append(CsFeel.SpeedShare(CsFeel.ById(held.Holding)).ToString("0.###", CultureInfo.InvariantCulture)).Append('\n');
             if (o.Face is { Length: >= 3 } f) sb.Append("face\t").Append(peer).Append('\t').Append(F(f[0])).Append('\t').Append(F(f[1])).Append('\t').Append(F(f[2])).Append('\n');
             if (o.PlaceToken is { } token && o.PlaceAt is { Length: >= 3 } at)
                 sb.Append("place\t").Append(peer).Append('\t').Append(token).Append('\t').Append(F(at[0])).Append('\t').Append(F(at[1])).Append('\t').Append(F(at[2])).Append('\t').Append(F(at.Length > 3 ? at[3] : 0)).Append('\n');

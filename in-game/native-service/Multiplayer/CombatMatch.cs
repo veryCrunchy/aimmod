@@ -59,15 +59,18 @@ static class CombatRules
 // Shot: AimModCore's shot number (diagnostics); GameHit: the game's own hit counter counted it;
 // GameDamage: the damage per hit the game counted (its headshot multiplier shows in it);
 // Source: how AimModCore found the target (1 ray on the capsule, 2 just beside it, 3 named by the game).
+// Spread, SpreadShot (CS): the bullet's inaccuracy (rad) and the shot whose seed drew its offset; the host
+// turns the camera ray (Pitch, Yaw) by that offset itself (CsFeel) and validates the hit on that ray.
 sealed record HitClaim(string MatchId, int Round, long Seq, long T, double X, double Y, double Z, double Pitch, double Yaw, bool Head,
     double? TargetX, double? TargetY, double? TargetZ, double? TargetRadius, double? TargetHalfHeight, int Slot = 0,
-    long Shot = 0, bool GameHit = false, double? GameDamage = null, int Source = 0)
+    long Shot = 0, bool GameHit = false, double? GameDamage = null, int Source = 0, double? Spread = null, long? SpreadShot = null)
 {
     public object Body() => new
     {
         match = MatchId, round = Round, seq = Seq, t = T, o = new[] { R(X), R(Y), R(Z) }, r = new[] { R(Pitch), R(Yaw) }, head = Head, w = Slot,
         target = TargetX is null ? null : new[] { R(TargetX.Value), R(TargetY!.Value), R(TargetZ!.Value), R(TargetRadius!.Value), R(TargetHalfHeight!.Value) },
         shot = Shot, gh = GameHit, gd = GameDamage is { } d ? R(d) : (double?)null, src = Source,
+        sp = Spread is { } spread ? new[] { Math.Round(spread * 1000, 4), SpreadShot ?? Shot } : null,
     };
     static double R(double v) => Math.Round(v, 2);
 
@@ -100,7 +103,13 @@ sealed record HitClaim(string MatchId, int Round, long Seq, long T, double X, do
             var gameHit = b.TryGetProperty("gh", out var gh) && gh.ValueKind == JsonValueKind.True;
             double? gameDamage = b.TryGetProperty("gd", out var gd) && gd.ValueKind == JsonValueKind.Number && gd.TryGetDouble(out var gdv) && double.IsFinite(gdv) && gdv is >= 0 and <= 100_000 ? gdv : null;
             var source = b.TryGetProperty("src", out var src) && src.TryGetInt32(out var srcv) && srcv is >= 0 and <= 3 ? srcv : 0;
-            return new HitClaim(match, round, seq, t, o[0], o[1], o[2], r[0], r[1], head, target?[0], target?[1], target?[2], target?[3], target?[4], slot, shot, gameHit, gameDamage, source);
+            double? spread = null; long? spreadShot = null;
+            if (b.TryGetProperty("sp", out var sp) && sp.ValueKind != JsonValueKind.Null)
+            {
+                if (Nums(sp, 2) is not { } spv || spv[0] is < 0 or > 1000 || spv[1] < 0 || spv[1] != Math.Truncate(spv[1])) return null;
+                spread = spv[0] / 1000; spreadShot = (long)spv[1];
+            }
+            return new HitClaim(match, round, seq, t, o[0], o[1], o[2], r[0], r[1], head, target?[0], target?[1], target?[2], target?[3], target?[4], slot, shot, gameHit, gameDamage, source, spread, spreadShot);
         }
         catch (Exception ex) when (ex is KeyNotFoundException or InvalidOperationException or FormatException) { return null; }
     }
@@ -159,6 +168,8 @@ sealed class CombatMatch
     // slot is empty), a damage model (armour), and a hook on every kill.
     public bool Respawns { get; set; } = true;
     public Func<string, int, CombatWeapon?>? WeaponFor { get; set; }
+    // CS: the weapon's feel (spread, movement inaccuracy) for a shooter's slot; null: no spread (the camera ray).
+    public Func<string, int, CsFeelSpec?>? SpreadFor { get; set; }
     public Func<string, double, bool, CombatWeapon, double>? DamageModel { get; set; }
     public Action<string, string, CombatWeapon, bool>? OnKill { get; set; }
     // Team damage as a share of the normal damage (0: off). CS2 bullets: 33 %.
@@ -186,6 +197,25 @@ sealed class CombatMatch
         if (dt < 0.02 || dt > 0.5) return [0, 0, 0];
         return [(last.X - before.X) / dt, (last.Y - before.Y) / dt, (last.Z - before.Z) / dt];
     }
+    // How the shooter moved at a shot, from its own track: horizontal speed (u/s, CsFeel.UnitCm) and
+    // whether it was airborne. Benefit of the doubt: the slower of two windows around the shot, and
+    // airborne only when both windows rise or fall fast.
+    (double Speed, bool Air) MotionAt(Player p, long t)
+    {
+        (double H, double V)? Window(long from, long to)
+        {
+            if (At(p.Track, from) is not { } a || At(p.Track, to) is not { } b || to - from < 20) return null;
+            var dt = (to - from) / 1000.0;
+            return (Math.Sqrt((b.X - a.X) * (b.X - a.X) + (b.Y - a.Y) * (b.Y - a.Y)) / dt, Math.Abs(b.Z - a.Z) / dt);
+        }
+        var w1 = Window(t - 100, t); var w2 = Window(t - 50, t + 50);
+        if (w1 is null && w2 is null) return (0, false);
+        var h = Math.Min(w1?.H ?? double.MaxValue, w2?.H ?? double.MaxValue);
+        var air = (w1?.V ?? 0) > CsFeel.AirSpeedCm && (w2?.V ?? w1?.V ?? 0) > CsFeel.AirSpeedCm;
+        return (h / CsFeel.UnitCm, air);
+    }
+    public (double Speed, bool Air) MotionAt(string id, long t) => players.TryGetValue(id, out var p) ? MotionAt(p, t) : (0, false);
+
     // Round start: everyone alive at full health, spawn-protected for a moment, scores kept.
     public void Revive(string id, long now, double health, long protectMs = 0)
     {
@@ -452,7 +482,21 @@ sealed class CombatMatch
         var pitchOff = c.Pitch < Math.Min(eyes.A.Pitch, eyes.B.Pitch) ? Math.Min(eyes.A.Pitch, eyes.B.Pitch) - c.Pitch : Math.Max(0, c.Pitch - Math.Max(eyes.A.Pitch, eyes.B.Pitch));
         if (yawOff > CombatRules.AimToleranceDeg || pitchOff > CombatRules.AimToleranceDeg)
             return Reject("aim", "yaw " + F(yawOff) + "°, pitch " + F(pitchOff) + "° outside the camera's turn between samples (allowed " + CombatRules.AimToleranceDeg + "°)");
+        // CS: the bullet's own ray, rebuilt from the claim's seed and inaccuracy. The inaccuracy must be
+        // one the shooter's movement allows (a running rifle can't claim a standing shot).
         var (dx, dy, dz) = TrackGeometry.Direction(c.Pitch, c.Yaw);
+        if (SpreadFor?.Invoke(shooter.Id, c.Slot) is { Spreads: true } feel)
+        {
+            var (speed, air) = MotionAt(shooter, c.T);
+            var least = CsFeel.MinimumCone(feel, speed, air);
+            var spreadShot = c.SpreadShot ?? c.Shot;
+            var inaccuracy = c.Spread ?? least;
+            if (spreadShot > c.Shot || c.Shot - spreadShot > CsFeel.MaxSeedLag)
+                return Reject("spread", "seed of shot #" + spreadShot.ToString(CultureInfo.InvariantCulture) + " for shot #" + c.Shot.ToString(CultureInfo.InvariantCulture));
+            if (inaccuracy > CsFeel.MaxInaccuracy || inaccuracy < least * CsFeel.HostShare - CsFeel.HostSlack)
+                return Reject("spread", F(inaccuracy * 1000) + " mrad claimed; moving at " + F(speed) + " u/s" + (air ? " in the air" : "") + " needs at least " + F(least * 1000 * CsFeel.HostShare) + " mrad");
+            (dx, dy, dz) = CsFeel.Direction(c.Pitch, c.Yaw, CsFeel.Offset(CsFeel.Salt(c.MatchId), (ulong)spreadShot, inaccuracy, feel.Spread));
+        }
         var tolerance = c.GameHit ? CombatRules.GameHitToleranceCm : CombatRules.RayToleranceCm;
         bool OnRay(double length, double cx, double cy, double cz, double r, double h) =>
             TrackGeometry.HitsCapsule(c.X, c.Y, c.Z, dx, dy, dz, length, cx, cy, cz, r + tolerance, h + tolerance);
@@ -731,8 +775,10 @@ sealed class ShotFeed(string outputFolder)
     // GameHit: the game's own hit counter counted it. Capsule: the drawn target AimModCore's ray
     // met (centre x, y, z, radius, half height) at the shot. GameDamage: the game's damage per hit
     // that frame. Source: 1 the ray met the capsule, 2 passed just beside it, 3 the game named it.
+    // Spread (CS): the bullet's inaccuracy (rad), the shot whose seed drew its offset, and whether the
+    // game's own trace followed it (else only AimModCore's ray did, and that ray decides the hit).
     public sealed record Shot(long UnixMs, long Seq, double X, double Y, double Z, double Pitch, double Yaw, int Weapon, int Target, bool Head,
-        bool GameHit = false, double[]? Capsule = null, double? GameDamage = null, int Source = 0);
+        bool GameHit = false, double[]? Capsule = null, double? GameDamage = null, int Source = 0, double? Spread = null, long SpreadShot = 0, bool SpreadApplied = false);
     // Every shot new in the last Take, hits and misses (the knife's sounds).
     public List<Shot> Fresh { get; } = [];
 
@@ -747,7 +793,8 @@ sealed class ShotFeed(string outputFolder)
     // AimModCore's self-shots.tsv (native-mod/DESIGN.md "Match play"):
     //   AIMMOD_SHOTS_1\t<publish seq>\t<session>
     //   shot\t<unix ms>\t<shot seq>\t<ox>\t<oy>\t<oz>\t<dx>\t<dy>\t<dz>\t<slot>\t<target>\t<headshot 0/1>\t<gameHit 0/1>
-    //       [\t<cx>\t<cy>\t<cz>\t<radius>\t<half height>\t<game damage per hit, -1 unknown>\t<source 0-3>]
+    //       [\t<cx>\t<cy>\t<cz>\t<radius>\t<half height>\t<game damage per hit, -1 unknown>\t<source 0-3>
+    //       [\t<inaccuracy mrad, 0 none>\t<seed shot>\t<game trace followed 0/1>]]
     //   tag\t<target id>\t<stream id>
     // The ray direction becomes pitch and yaw. The earlier pitch/yaw row shape still reads.
     public static (long Sequence, string Session, IReadOnlyList<Shot> Shots)? Parse(string text)
@@ -764,7 +811,7 @@ sealed class ShotFeed(string outputFolder)
         {
             var c = line.Split('\t');
             if (c[0] == "tag") continue; // avatar tags: the claim carries the drawn target itself
-            if (c.Length is not (11 or 13 or 20) || c[0] != "shot" || shots.Count >= MaxShots) return null;
+            if (c.Length is not (11 or 13 or 20 or 23) || c[0] != "shot" || shots.Count >= MaxShots) return null;
             if (!long.TryParse(c[1], NumberStyles.None, CultureInfo.InvariantCulture, out var ms) || !long.TryParse(c[2], NumberStyles.None, CultureInfo.InvariantCulture, out var seq)) return null;
             var n = c.Length >= 13 ? 6 : 5;
             var v = new double[n];
@@ -782,7 +829,13 @@ sealed class ShotFeed(string outputFolder)
             if (n == 6 && c[at + 3] is not ("0" or "1")) return null;
             if (shots.Count > 0 && seq <= shots[^1].Seq) return null;
             double[]? capsule = null; double? damage = null; var source = 0;
-            if (c.Length == 20)
+            double? spread = null; long spreadShot = 0; var applied = false;
+            if (c.Length == 23)
+            {
+                if (!Num(c[20], out var mrad) || mrad is < 0 or > 1000 || !long.TryParse(c[21], NumberStyles.None, CultureInfo.InvariantCulture, out spreadShot) || c[22] is not ("0" or "1")) return null;
+                if (mrad > 0) { spread = mrad / 1000; applied = c[22] == "1"; }
+            }
+            if (c.Length >= 20)
             {
                 var k = new double[7];
                 for (var i = 0; i < 7; i++) if (!Num(c[13 + i], out k[i])) return null;
@@ -791,7 +844,7 @@ sealed class ShotFeed(string outputFolder)
                 if (k[6] is < 0 or > 3 || k[6] != Math.Truncate(k[6])) return null;
                 source = (int)k[6];
             }
-            shots.Add(new Shot(ms, seq, v[0], v[1], v[2], pitch, yaw, weapon, target, c[at + 2] == "1", n == 6 && c[at + 3] == "1", capsule, damage, source));
+            shots.Add(new Shot(ms, seq, v[0], v[1], v[2], pitch, yaw, weapon, target, c[at + 2] == "1", n == 6 && c[at + 3] == "1", capsule, damage, source, spread, spread is null ? 0 : spreadShot, applied));
         }
         return (sequence, session, shots);
     }
@@ -844,10 +897,13 @@ sealed class ShotFeed(string outputFolder)
             // A hit is what the game counted (the hitmarker the shooter saw), on a drawn target. Before
             // the game's counter has said anything (or with an AimModCore without it) the ray decides.
             if (s.Target == 0) { if (s.GameHit) Stats.GameHitNoTarget++; continue; }
-            if (!s.GameHit && GameHitsKnown) { Stats.RayOnly++; continue; }
+            // A CS bullet whose spread the game's trace didn't follow: AimModCore's own ray (with its world
+            // trace) decides, the game's counter spoke for the crosshair.
+            var ownRay = s.Spread is > 0 && !s.SpreadApplied;
+            if (!s.GameHit && GameHitsKnown && !ownRay) { Stats.RayOnly++; continue; }
             var t = s.Capsule is { } k ? new TrackSeen(s.UnixMs + offsetMs, s.Target, k[0], k[1], k[2], k[3], k[4]) : targetAt(s.Target, s.UnixMs + offsetMs);
             claims.Add(new HitClaim(matchId, round, ++claimSeq, s.UnixMs + offsetMs, s.X, s.Y, s.Z, s.Pitch, s.Yaw, s.Head, t?.X, t?.Y, t?.Z, t?.Radius, t?.HalfHeight, s.Weapon,
-                s.Seq, s.GameHit, s.GameDamage, s.Source));
+                s.Seq, s.GameHit, s.GameDamage, s.Source, s.Spread, s.Spread is null ? null : s.SpreadShot));
             Stats.Claims++;
         }
         return claims;

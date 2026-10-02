@@ -8,6 +8,7 @@
 //    game's own functions, only in generated "AimMod Match - " scenarios in
 //    freeplay. Missing bindings disable it (logged); leaving the gate
 //    releases spawn protection.
+#include "CsFeel.hpp"
 #include "CsGear.hpp"
 #include "CsGrenades.hpp"
 #include "GameBindings.hpp"
@@ -38,7 +39,7 @@ namespace aimmod
     {
     public:
         using PoseId = std::function<std::uint32_t(game::UObject* actor)>;
-        MatchPlay(game::Bindings& bindings, game::Scene& scene, Output& output) : m_b(bindings), m_scene(scene), m_output(output), m_gear(bindings, scene) {}
+        MatchPlay(game::Bindings& bindings, game::Scene& scene, Output& output) : m_b(bindings), m_scene(scene), m_output(output), m_gear(bindings, scene), m_feel(bindings, scene) {}
         // "match-play" capability: the character bindings resolved (known after
         // the first match character was seen; true until proven otherwise).
         bool available() const { return !m_disabled; }
@@ -48,6 +49,8 @@ namespace aimmod
         // WeaponParentActor:Send_ShotHit (when the game calls it through reflection): the actor the
         // game's own hit landed on, used as the shot's target. Game thread.
         void OnShotHit(game::UObject* shooter, game::UObject* target, double damage);
+        // CS: the scope view and the dynamic crosshair for the notice layer (its Gameface widget, or null).
+        void Sights(double now, game::UObject* widget) { m_feel.Sights(now, widget); }
 
     private:
         void TickShots(double now, const PoseId& poseId, const std::unordered_map<std::uint32_t, std::string>& poseNames);
@@ -137,6 +140,7 @@ namespace aimmod
         std::optional<cs::Loadout> m_csLoadout;
         CsGear m_gear;
         CsGrenades m_grenades; // CS grenades in the hand and in the world (grenades.tsv)
+        CsFeel m_feel;         // CS spread, scope and speed of the weapon in hand
         struct PendingSpawn
         {
             RoundState::Spawn spawn;

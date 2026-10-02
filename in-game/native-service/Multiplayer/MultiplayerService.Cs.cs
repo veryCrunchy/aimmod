@@ -74,6 +74,9 @@ sealed partial class MultiplayerService
         var buyWindow = cs.Phase == "freeze" || (cs.Phase == "live" && cs.LiveAt is { } live && hostNow < live + CsRules.BuyMs);
         yield return "phase\t" + cs.Phase + "\t" + (cs.Phase == "freeze" ? 1 : 0) + "\t" + (buyWindow ? 1 : 0) + "\t" + (cs.PhaseEndsAt - HostOffset());
         yield return CsLoadoutLine(me, cs.Bomb.Carrier == SelfId);
+        // The weapon feel: the match's spread salt, the dynamic crosshair, the zoom and its sensitivity.
+        var settings = Current?.Settings;
+        yield return CsFeel.Line(match.Id, settings?.DynamicCrosshair ?? true, settings?.AdsZoom ?? AdsZooms.Cs, settings?.AdsSensitivity ?? 1);
         if (CsBombLine(cs.Bomb, HostOffset()) is { } bomb) yield return bomb;
     }
 

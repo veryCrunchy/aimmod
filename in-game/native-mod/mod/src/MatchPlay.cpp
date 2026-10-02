@@ -267,13 +267,13 @@ namespace aimmod
     namespace
     {
         // The shot's target: a drawn capsule, the point where the ray meets (or passes nearest) it.
-        void Aim(ShotRecord& r, const Capsule& c, double along, double z, int source)
+        void Aim(ShotRecord& r, const double direction[3], const Capsule& c, double along, double z, int source)
         {
             r.target = c.id;
             std::copy(c.center, c.center + 3, r.targetCenter);
             r.targetRadius = c.radius;
             r.targetHalfHeight = c.halfHeight;
-            const double point[3] = {r.origin[0] + r.direction[0] * along, r.origin[1] + r.direction[1] * along, z};
+            const double point[3] = {r.origin[0] + direction[0] * along, r.origin[1] + direction[1] * along, z};
             r.headshot = IsHeadHit(point, c.center, c.halfHeight);
             r.source = source;
         }
@@ -410,8 +410,6 @@ namespace aimmod
             std::vector<Capsule> capsules;
             std::vector<UObject*> actors;
             DrawnTargets(character, poseId, capsules, actors);
-            const auto onRay = PickTarget(origin, direction, capsules, 0);
-            const auto nearRay = onRay ? onRay : PickTarget(origin, direction, capsules, GameHitToleranceCm);
             const std::int64_t ms = UnixMs();
             int index = 0;
             for (std::size_t i = 0; i < counts.size(); ++i)
@@ -434,6 +432,15 @@ namespace aimmod
                     r.slot = counts[i].slot;
                     r.gameHit = hits-- > 0;
                     r.gameDamage = r.gameHit ? perHit : -1;
+                    // CS: the bullet's own ray (the camera ray turned by its seeded spread). The record keeps
+                    // the camera ray; the host turns it the same way. When the game's trace didn't follow the
+                    // spread, its hit counter speaks for the crosshair, not the bullet: only this ray counts.
+                    double bullet[3];
+                    const bool spread = m_feel.Bullet(r.slot, r, bullet);
+                    const bool ownRay = spread && !r.spreadApplied;
+                    if (ownRay) r.gameHit = false, r.gameDamage = -1;
+                    const auto onRay = PickTarget(origin, bullet, capsules, 0);
+                    const auto nearRay = onRay ? onRay : PickTarget(origin, bullet, capsules, GameHitToleranceCm);
                     ++m_shotStats.shots;
                     if (r.gameHit) ++m_shotStats.gameHits;
                     // The target: the actor the game's hit named, else the capsule the ray meets, else
@@ -446,24 +453,30 @@ namespace aimmod
                         for (std::size_t j = 0; j < actors.size(); ++j)
                         {
                             if (actors[j] != named) continue;
-                            const auto pass = RayCapsulePass(origin, direction, capsules[j].center, capsules[j].radius, capsules[j].halfHeight);
-                            Aim(r, capsules[j], pass.along, pass.z, SourceGame);
+                            const auto pass = RayCapsulePass(origin, bullet, capsules[j].center, capsules[j].radius, capsules[j].halfHeight);
+                            Aim(r, bullet, capsules[j], pass.along, pass.z, SourceGame);
                             aimed = true;
                             ++m_shotStats.named;
                             break;
                         }
                     }
+                    else if (ownRay && !m_hookHits.empty()) m_hookHits.erase(m_hookHits.begin()); // the crosshair's hit, not this bullet's
                     if (!aimed && onRay)
                     {
                         const Capsule& c = capsules[onRay->index];
-                        Aim(r, c, onRay->along, origin[2] + direction[2] * onRay->along, SourceRay);
-                        ++(r.gameHit ? m_shotStats.onCapsule : m_shotStats.rayOnly);
+                        const double point[3] = {origin[0] + bullet[0] * onRay->along, origin[1] + bullet[1] * onRay->along, origin[2] + bullet[2] * onRay->along};
+                        // Only this ray decides: the map must not stand in its way.
+                        if (!ownRay || !m_feel.WorldBetween(character, origin, point))
+                        {
+                            Aim(r, bullet, c, onRay->along, point[2], SourceRay);
+                            ++(r.gameHit || ownRay ? m_shotStats.onCapsule : m_shotStats.rayOnly);
+                        }
                     }
                     else if (!aimed && r.gameHit && nearRay)
                     {
                         const Capsule& c = capsules[nearRay->index];
-                        const auto pass = RayCapsulePass(origin, direction, c.center, c.radius, c.halfHeight);
-                        Aim(r, c, pass.along, pass.z, SourceNear);
+                        const auto pass = RayCapsulePass(origin, bullet, c.center, c.radius, c.halfHeight);
+                        Aim(r, bullet, c, pass.along, pass.z, SourceNear);
                         ++m_shotStats.nearCapsule;
                     }
                     else if (!aimed && r.gameHit)
@@ -472,13 +485,14 @@ namespace aimmod
                         if (now >= m_nextNoTargetLog)
                         {
                             m_nextNoTargetLog = now + 1;
-                            const auto nearest = PickTarget(origin, direction, capsules, 1e9);
+                            const auto nearest = PickTarget(origin, bullet, capsules, 1e9);
                             Log("match play: shot #" + std::to_string(r.sequence) + " (slot " + std::to_string(r.slot) + ") is a game hit but no drawn target is near the ray (" +
                                 (nearest ? "nearest capsule " + std::to_string(static_cast<int>(nearest->gap)) + " cm off" : std::to_string(capsules.size()) + " drawn") +
                                 "); not claimed");
                         }
                     }
                     m_shots.Add(r);
+                    m_feel.Fired(now, r.slot);
                 }
             }
         }
@@ -498,7 +512,7 @@ namespace aimmod
         std::vector<UObject*> actors;
         DrawnTargets(character, poseId, capsules, actors);
         if (const auto pick = PickTarget(r.origin, r.direction, capsules, 0))
-            Aim(r, capsules[pick->index], pick->along, r.origin[2] + r.direction[2] * pick->along, SourceRay);
+            Aim(r, r.direction, capsules[pick->index], pick->along, r.origin[2] + r.direction[2] * pick->along, SourceRay);
         return true;
     }
 
@@ -889,6 +903,7 @@ namespace aimmod
         }
         m_gear.Release(player, why);
         m_grenades.Release(why);
+        m_feel.Release(player, character, why);
         m_csLoadout.reset();
         Log(std::string("match play: round state released (") + why + ")" + (m_frozen ? "; movement restored" : "") +
             (m_loadoutChanged ? "; scenario loadout restored" : ""));
@@ -1006,8 +1021,11 @@ namespace aimmod
         // CS: switching (wheel, Q, purchases), the knife and bomb in the hand, the bomb in the world.
         if (r->loadout && !r->loadout->knife.empty())
         {
-            m_gear.Tick(now, player, character, Describe(character).weaponHandler.Object(character), *r);
+            UObject* handler = Describe(character).weaponHandler.Object(character);
+            m_gear.Tick(now, player, character, handler, *r);
             m_grenades.Tick(character, m_gear.hand(), m_output.root(), scenario);
+            // CS weapon feel: spread, scope, speed (CsFeel.hpp).
+            if (m_csLoadout) m_feel.Tick(now, player, character, handler, m_gear.hand(), *m_csLoadout, r->feel, m_shotSequence + 1, m_output.root());
         }
     }
 } // namespace aimmod

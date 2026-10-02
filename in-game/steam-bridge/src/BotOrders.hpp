@@ -27,6 +27,8 @@
 //                                                    way); up to 8 per bot
 //   debug\t<0|1>                                     draw the bots' paths and goals in the world
 //   face\t<peer>\t<x>\t<y>\t<z>                       look at that point (an enemy's eye)
+//   speed\t<peer>\t<share>                          CS: the max speed with the weapon in its hand, as a share
+//                                                    of the run speed (knife 1, rifles 0.86-0.9, AWP 0.8)
 //   place\t<peer>\t<token>\t<x>\t<y>\t<z>\t<yaw>      stand there once per token (a round start, a respawn)
 //   sight\t<peer>\t<tag>\t<x>\t<y>\t<z>               trace from the bot's eye to that point
 //   pose\t<peer>\t<x>\t<y>\t<z>\t<yaw>                a client: the host's position for this bot (capsule centre)
@@ -82,6 +84,7 @@ namespace bridge::bots
         Peek peek = Peek::None;
         std::array<double, 3> peekAt{};
         std::vector<std::array<double, 5>> avoid;         // x, y, z, radius, cost per grid step
+        double speed = 0;                                 // CS weapon speed share of the run speed (0: the walker's own)
     };
     struct AreaRequest
     {
@@ -235,6 +238,10 @@ namespace bridge::bots
                     o.counterStrafe = counter;
                 }
             }
+            else if (p[0] == "speed" && p.size() >= 3)
+            {
+                if (const auto s = detail::Number(p[2]); s && *s >= 0.2 && *s <= 1.5) o.speed = *s;
+            }
             else if (p[0] == "turn" && p.size() >= 3)
             {
                 if (const auto t = detail::Number(p[2]); t && *t >= 30 && *t <= 3600) o.turn = *t;
@@ -329,6 +336,32 @@ namespace bridge::bots
         return text;
     }
 } // namespace bridge::bots
+
+// cs-movement.tsv (AimModCore -> AimModSteam), while a CS round runs: AimModCore scales the local
+// player's max speed by the weapon in hand, so the run speed the bots copy is the unscaled one here.
+//   AIMMOD_CSMOVE_1\t<unix ms>\t<run speed, cm/s>\t<share in hand>
+// Older than 3 s (or missing): read the player's speed as it is.
+namespace bridge::csmove
+{
+    constexpr std::int64_t MaxAgeMs = 3000;
+    inline std::optional<double> RunSpeed(std::string_view text, std::int64_t nowMs)
+    {
+        if (text.size() > 256) return std::nullopt;
+        if (const auto nl = text.find('\n'); nl != std::string_view::npos) text = text.substr(0, nl);
+        if (!text.empty() && text.back() == '\r') text.remove_suffix(1);
+        const auto p = bots::detail::Split(text);
+        if (p.size() != 4 || p[0] != "AIMMOD_CSMOVE_1" || p[1].size() > 15) return std::nullopt;
+        std::int64_t at = 0;
+        for (const char c : p[1])
+        {
+            if (c < '0' || c > '9') return std::nullopt;
+            at = at * 10 + (c - '0');
+        }
+        const auto run = bots::detail::Number(p[2]), share = bots::detail::Number(p[3]);
+        if (p[1].empty() || std::llabs(at - nowMs) > MaxAgeMs || !run || *run < 50 || *run > 5000 || !share || *share <= 0 || *share > 2) return std::nullopt;
+        return *run;
+    }
+} // namespace bridge::csmove
 
 // spectate-view.tsv (service -> AimModSteam), while the local player is dead in a CS round:
 //   AIMMOD_VIEW_1\t<unix ms>

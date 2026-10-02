@@ -173,5 +173,66 @@
     if(!fx){paint(el,0);return null;}
     frame(now);return fx?flashAlpha(fx,now-fx.start):0;
   }
-  root.AimModCsHud={render:render,place:place,flash:flash,flashAlpha:flashAlpha};
+  // Sights (AimModCore's AimModScope event, at most 60 a second: {on, lvl, in, blur, gap, xh}), drawn on
+  // their own canvas layer (#cs-sights). AimMod's own art, all of it drawn here:
+  //  - scoped (lvl 1 or 2): black everywhere but a round view, thin black crosshair lines across it
+  //    that thicken towards the rim; scoping in (in 0..1) closes the black in from a wider ring; while
+  //    the shooter moves (blur 0..1) the view veils over and the lines smear into ghosts that settle;
+  //  - the dynamic crosshair (xh): four short lines whose gap is the weapon's current cone (gap: a share
+  //    of half the screen's width), opening while moving, jumping and spraying.
+  function sightsPlan(d,W,H){
+    if(!d||!d.on)return null;
+    var lvl=+d.lvl||0,blur=Math.max(0,Math.min(1,+d.blur||0)),inn=Math.max(0,Math.min(1,typeof d.in==='number'?d.in:1));
+    var cx=W/2,cy=H/2;
+    if(lvl>0){
+      // The round view: most of the screen's height; scoping in shrinks a wider ring onto it.
+      var r=Math.round(H*0.47*(1+0.35*(1-inn))),ghosts=[];
+      // The smear: ghosts of the lines, further out the more the view moves (a fixed pattern, no jitter).
+      var spread=blur*H*0.012;
+      if(blur>0.02)for(var i=0;i<4;i++){var a=i*Math.PI/2+Math.PI/4;ghosts.push({dx:Math.round(Math.cos(a)*spread*10)/10,dy:Math.round(Math.sin(a)*spread*10)/10,alpha:+(0.35*blur).toFixed(3)});}
+      return {scope:true,level:lvl,cx:cx,cy:cy,r:r,veil:+(0.42*blur).toFixed(3),ghosts:ghosts,line:1,thick:3,blurPx:Math.round(blur*6)};
+    }
+    if(!d.xh)return null;
+    var g=Math.max(0,+d.gap||0)*W/2;
+    return {scope:false,cx:cx,cy:cy,gap:Math.round(Math.min(H*0.3,3+g)),len:Math.round(Math.max(6,H*0.0075)),thick:2};
+  }
+  function drawSights(x,p,W,H){
+    x.clearRect(0,0,W,H);
+    function cross(dx,dy,alpha,width){
+      x.globalAlpha=alpha;x.fillStyle='#000000';
+      x.fillRect(p.cx-p.r+dx,p.cy-width/2+dy,p.r*2,width);x.fillRect(p.cx-width/2+dx,p.cy-p.r+dy,width,p.r*2);
+      // The lines thicken in the outer third of the view.
+      var t=p.thick,o=p.r*0.62;x.fillRect(p.cx-p.r+dx,p.cy-t/2+dy,p.r-o,t);x.fillRect(p.cx+o+dx,p.cy-t/2+dy,p.r-o,t);
+      x.fillRect(p.cx-t/2+dx,p.cy-p.r+dy,t,p.r-o);x.fillRect(p.cx-t/2+dx,p.cy+o+dy,t,p.r-o);
+    }
+    if(p.scope){
+      // Black outside the round view: the screen with the circle cut out (opposite winding).
+      x.globalAlpha=1;x.fillStyle='#000000';x.beginPath();x.rect(0,0,W,H);x.moveTo(p.cx+p.r,p.cy);x.arc(p.cx,p.cy,p.r,0,Math.PI*2,true);x.closePath();x.fill();
+      if(p.veil>0){x.globalAlpha=p.veil;x.fillStyle='#10140f';x.beginPath();x.arc(p.cx,p.cy,p.r,0,Math.PI*2);x.fill();}
+      // The rim: a dark lens edge.
+      x.globalAlpha=0.85;x.strokeStyle='#000000';x.lineWidth=Math.max(4,p.r*0.04);x.beginPath();x.arc(p.cx,p.cy,p.r-x.lineWidth/2,0,Math.PI*2);x.stroke();
+      p.ghosts.forEach(function(g){cross(g.dx,g.dy,g.alpha,p.line);});
+      cross(0,0,1,p.line);
+      x.globalAlpha=1;return;
+    }
+    x.globalAlpha=1;
+    var s=p.gap,l=p.len,t=p.thick;
+    [[s,-t/2,l,t],[-s-l,-t/2,l,t],[-t/2,s,t,l],[-t/2,-s-l,t,l]].forEach(function(b){
+      x.fillStyle='#000000';x.fillRect(p.cx+b[0]-1,p.cy+b[1]-1,b[2]+2,b[3]+2);
+      x.fillStyle='#27e4a1';x.fillRect(p.cx+b[0],p.cy+b[1],b[2],b[3]);
+    });
+  }
+  function sights(el,data){
+    if(!el)return null;
+    var d=data;if(typeof d==='string'){try{d=JSON.parse(d);}catch(e){d=null;}}
+    var W=root.innerWidth||1920,H=root.innerHeight||1080,p=sightsPlan(d,W,H);
+    if(!p){if(el.style.display!=='none')el.style.display='none';return null;}
+    if(el.width!==W)el.width=W;if(el.height!==H)el.height=H;
+    if(el.style.display!=='block')el.style.display='block';
+    // Where the engine can blur what is behind the layer, the scope's view blurs too.
+    var bf=p.scope&&p.blurPx>0?'blur('+p.blurPx+'px)':'none';if(el.style.backdropFilter!==bf)el.style.backdropFilter=bf;
+    var x=el.getContext&&el.getContext('2d');if(x)drawSights(x,p,W,H);
+    return p;
+  }
+  root.AimModCsHud={render:render,place:place,flash:flash,flashAlpha:flashAlpha,sights:sights,sightsPlan:sightsPlan};
 })(window);
