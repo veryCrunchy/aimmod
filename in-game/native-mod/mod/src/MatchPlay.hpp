@@ -44,12 +44,18 @@ namespace aimmod
         bool engaged() const { return m_engaged; }
         void Tick(double now, const std::string& scenario, bool inChallenge, bool loading, const PoseId& poseId,
                   const std::unordered_map<std::uint32_t, std::string>& poseNames);
+        // WeaponParentActor:Send_ShotHit (when the game calls it through reflection): the actor the
+        // game's own hit landed on, used as the shot's target. Game thread.
+        void OnShotHit(game::UObject* shooter, game::UObject* target, double damage);
 
     private:
         void TickShots(double now, const PoseId& poseId, const std::unordered_map<std::uint32_t, std::string>& poseNames);
-        // The camera ray and the nearest drawn target it meets (origin, direction, target, headshot).
+        // The visible characters other than the local one, with their capsules (what the shooter sees).
+        void DrawnTargets(game::UObject* character, const PoseId& poseId, std::vector<Capsule>& capsules, std::vector<game::UObject*>& actors);
+        // The camera ray and the nearest drawn target it meets (origin, direction, target, headshot, capsule).
         bool AimRay(game::UObject* player, game::UObject* character, const PoseId& poseId, ShotRecord& shot);
         void PublishShots(const std::unordered_map<std::uint32_t, std::string>& poseNames);
+        void LogShotStats(const char* why);
         void TickPlayState(double now, const std::string& scenario, bool inChallenge, bool loading);
         bool BindCharacter(game::UObject* character);
         void Release(const char* why);
@@ -82,14 +88,29 @@ namespace aimmod
         struct WeaponState
         {
             game::UObject* weapon{};
-            double shots{}, hits{};
+            double shots{}, hits{}, damage{-1};
         };
         std::vector<WeaponState> m_weapons;
         game::UObject* m_shotsCharacter{};
-        std::deque<ShotRecord> m_shots;
+        ShotLog m_shots;
         std::uint64_t m_shotSequence{}, m_shotsPublish{};
         std::int64_t m_session{};
         bool m_shotsWanted{};
+        double m_lastShotsTick{-1};
+        // Send_ShotHit targets not yet given to a shot (at most 0.25 s old).
+        struct HookHit
+        {
+            RC::Unreal::FWeakObjectPtr target;
+            double damage{-1}, at{};
+        };
+        std::vector<HookHit> m_hookHits;
+        // Diagnostics, logged every 10 s while shots flow and when the stream stops.
+        struct ShotStats
+        {
+            std::uint64_t shots{}, gameHits{}, onCapsule{}, nearCapsule{}, named{}, gameHitNoTarget{}, rayOnly{}, hookCalls{};
+        };
+        ShotStats m_shotStats, m_shotStatsLogged;
+        double m_nextShotLog{}, m_nextNoTargetLog{};
 
         // Play state.
         game::UClass* m_class{};

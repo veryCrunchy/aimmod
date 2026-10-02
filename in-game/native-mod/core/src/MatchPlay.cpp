@@ -1,6 +1,7 @@
 #include <aimmod/Formats.hpp>
 #include <aimmod/MatchPlay.hpp>
 
+#include <algorithm>
 #include <charconv>
 #include <cmath>
 #include <vector>
@@ -210,7 +211,50 @@ namespace aimmod
         return best;
     }
 
-    bool IsHeadHit(const double p[3], const double c[3], double halfHeight) { return p[2] >= c[2] + halfHeight * 0.6; }
+    bool IsHeadHit(const double p[3], const double c[3], double halfHeight) { return p[2] >= c[2] + halfHeight * HeadZoneFraction; }
+
+    CapsulePass RayCapsulePass(const double o[3], const double d[3], const double c[3], double radius, double halfHeight)
+    {
+        if (auto t = RayCapsule(o, d, c, radius, halfHeight)) return {0, *t, o[2] + d[2] * *t};
+        // Closest points of the ray O + sD (s >= 0) and the axis C + tZ (|t| <= seg), clamped and
+        // re-projected (the host's TrackGeometry.HitsCapsule does the same).
+        const double seg = std::max(0.0, halfHeight - radius);
+        const double wx = o[0] - c[0], wy = o[1] - c[1], wz = o[2] - c[2];
+        const double b = d[2], dd = d[0] * wx + d[1] * wy + d[2] * wz, denom = 1 - b * b;
+        double s = 0, t = wz;
+        if (denom >= 1e-9)
+        {
+            s = (b * wz - dd) / denom;
+            t = (wz - b * dd) / denom;
+        }
+        s = std::max(0.0, s);
+        t = std::clamp(t, -seg, seg);
+        s = std::max(0.0, -(d[0] * wx + d[1] * wy + d[2] * (wz - t)));
+        t = std::clamp(wz + s * d[2], -seg, seg);
+        const double px = wx + s * d[0], py = wy + s * d[1], pz = wz + s * d[2] - t;
+        return {std::max(0.0, std::sqrt(px * px + py * py + pz * pz) - radius), s, o[2] + d[2] * s};
+    }
+
+    std::optional<TargetPick> PickTarget(const double origin[3], const double direction[3], const std::vector<Capsule>& capsules, double tolerance)
+    {
+        std::optional<TargetPick> best;
+        for (std::size_t i = 0; i < capsules.size(); ++i)
+        {
+            const Capsule& c = capsules[i];
+            if (c.radius <= 0 || c.halfHeight < c.radius) continue;
+            const CapsulePass pass = RayCapsulePass(origin, direction, c.center, c.radius, c.halfHeight);
+            if (pass.gap > tolerance) continue;
+            // An exact hit beats a near pass; exact hits: the nearer target; near passes: the smaller gap.
+            bool better = true;
+            if (best && (pass.gap == 0) != (best->gap == 0)) better = pass.gap == 0;
+            else if (best && pass.gap == 0) better = pass.along < best->along;
+            else if (best) better = pass.gap < best->gap - 1e-9 || (std::fabs(pass.gap - best->gap) <= 1e-9 && pass.along < best->along);
+            if (!better) continue;
+            const double point[3] = {origin[0] + direction[0] * pass.along, origin[1] + direction[1] * pass.along, pass.z};
+            best = TargetPick{i, pass.along, pass.gap, IsHeadHit(point, c.center, c.halfHeight)};
+        }
+        return best;
+    }
 
     std::string FormatShot(const ShotRecord& s)
     {
@@ -225,7 +269,53 @@ namespace aimmod
             out += '\t';
             AppendNumber(out, v, 6);
         }
-        out += "\t" + std::to_string(s.slot) + "\t" + std::to_string(s.target) + "\t" + (s.headshot ? "1" : "0") + "\t" + (s.gameHit ? "1" : "0") + "\n";
+        out += "\t" + std::to_string(s.slot) + "\t" + std::to_string(s.target) + "\t" + (s.headshot ? "1" : "0") + "\t" + (s.gameHit ? "1" : "0");
+        const bool drawn = s.target != 0 && s.targetRadius > 0 && s.targetHalfHeight >= s.targetRadius;
+        for (double v : {drawn ? s.targetCenter[0] : 0.0, drawn ? s.targetCenter[1] : 0.0, drawn ? s.targetCenter[2] : 0.0, drawn ? s.targetRadius : 0.0,
+                         drawn ? s.targetHalfHeight : 0.0})
+        {
+            out += '\t';
+            AppendNumber(out, v, 7);
+        }
+        out += '\t';
+        if (s.gameDamage >= 0 && IsUsableNumber(s.gameDamage)) AppendNumber(out, s.gameDamage, 6);
+        else out += "-1";
+        out += "\t" + std::to_string(std::clamp(s.source, 0, 3)) + "\n";
         return out;
+    }
+
+    void ShotLog::Ack(std::uint64_t sequence)
+    {
+        m_ackSeen = true;
+        m_acked = std::max(m_acked, sequence);
+        while (!m_shots.empty() && m_shots.front().sequence <= m_acked) m_shots.pop_front();
+    }
+
+    void ShotLog::Prune(std::int64_t nowMs)
+    {
+        const std::size_t kept = m_ackSeen ? MaxKept : LegacyKept;
+        const std::int64_t age = m_ackSeen ? MaxAgeMs : LegacyAgeMs;
+        while (!m_shots.empty() && (m_shots.size() > kept || m_shots.front().unixMs < nowMs - age))
+        {
+            if (m_ackSeen) ++m_lost; // never taken by the service
+            m_shots.pop_front();
+        }
+    }
+
+    void ShotLog::Clear()
+    {
+        m_shots.clear();
+        m_acked = 0;
+        m_ackSeen = false;
+    }
+
+    std::optional<ShotAck> ParseShotRequest(std::string_view text)
+    {
+        while (!text.empty() && (text.back() == '\n' || text.back() == '\r' || text.back() == ' ')) text.remove_suffix(1);
+        if (text.size() > 128) return std::nullopt;
+        auto c = Cells(text);
+        ShotAck ack;
+        if (c.size() != 3 || !Int(c[1], ack.sequence) || !Int(c[2], ack.session)) return std::nullopt;
+        return ack;
     }
 } // namespace aimmod

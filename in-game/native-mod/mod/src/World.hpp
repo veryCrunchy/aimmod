@@ -60,7 +60,7 @@ namespace aimmod::game
         // Weapon handler
         Getter weapons;
         // Weapons
-        Field shotsFired, shotsHit;
+        Field shotsFired, shotsHit, weaponDamage; // weaponDamage: DamageDoneThisSession (optional)
     };
     const ClassInfo& Describe(UObject* object);
     void ClearClassCache();
@@ -92,6 +92,7 @@ namespace aimmod::game
         UObject* weapon{};
         int slot{};
         double shots{}, hits{};
+        double damage{-1}; // DamageDoneThisSession, -1 when the weapon has none
     };
     bool ReadWeaponCounters(UObject* character, std::vector<WeaponCount>& out);
 } // namespace aimmod::game

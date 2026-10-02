@@ -60,6 +60,8 @@ namespace aimmod
         // requested (self-shots.request touched within the last 5 s).
         bool shotsRequested() const { return m_shotsRequested.load(std::memory_order_relaxed); }
         void PublishSelfShots(std::string body);
+        // The service's acknowledgement in self-shots.request: the last shot it took, for which session.
+        std::optional<ShotAck> shotsAck() const;
         // play-state.tsv (host verdict on this player). `state` is null while
         // the file is absent, malformed or not rewritten for 5 s; `version`
         // changes whenever a new state (or its loss) is read.
@@ -191,6 +193,7 @@ namespace aimmod
         std::atomic<bool> m_poseRequested{false};
         std::atomic<bool> m_shotsRequested{false};
         std::string m_selfShots;
+        std::optional<ShotAck> m_shotsAck;
         bool m_selfShotsDirty{};
         std::shared_ptr<const PlayState> m_playState;
         std::uint64_t m_playStateVersion{}, m_playStateStamp{}, m_lastPlayStateCheck{}, m_playStateSeenAt{};

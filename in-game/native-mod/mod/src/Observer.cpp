@@ -255,18 +255,28 @@ namespace aimmod
         {
             Getter shape;
             shape.Bind(hit, Shape::Observe);
-            int shooter = -1, target = -1;
+            int shooter = -1, target = -1, damage = -1;
+            game::Kind damageKind = game::Kind::Other;
             for (int i = 0; i < static_cast<int>(shape.params().size()); ++i)
             {
                 const auto& p = shape.params()[static_cast<std::size_t>(i)];
-                if (p.kind != game::Kind::Object || p.ret || p.out) continue;
-                if (shooter < 0) shooter = p.offset;
-                else if (target < 0) target = p.offset;
+                if (p.ret || p.out) continue;
+                if (p.kind == game::Kind::Object)
+                {
+                    if (shooter < 0) shooter = p.offset;
+                    else if (target < 0) target = p.offset;
+                }
+                else if (damage < 0 && game::IsNumeric(p.kind)) damage = p.offset, damageKind = p.kind;
             }
             if (shooter >= 0 && target >= 0)
             {
+                // Shooter, target and DamageDone (when the game passes it).
                 static std::pair<int, int> offsets;
+                static int damageOffset;
+                static game::Kind damageType;
                 offsets = {shooter, target};
+                damageOffset = damage;
+                damageType = damageKind;
                 auto ids = UObjectGlobals::RegisterHook(
                     hit, [](UnrealScriptFunctionCallableContext&, void*) {},
                     [](UnrealScriptFunctionCallableContext& context, void* data) {
@@ -277,6 +287,8 @@ namespace aimmod
                         std::memcpy(&who, context.TheStack.Locals() + offsets.first, sizeof(who));
                         std::memcpy(&whom, context.TheStack.Locals() + offsets.second, sizeof(whom));
                         self->m_sampler.OnShotHit(who, whom);
+                        const auto dealt = damageOffset >= 0 ? game::ReadNumber(context.TheStack.Locals() + damageOffset, damageType) : std::nullopt;
+                        self->m_match.OnShotHit(who, whom, dealt.value_or(-1));
                     },
                     this);
                 m_hooks.emplace_back(hit, ids);
@@ -726,7 +738,8 @@ namespace aimmod
         const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
         if (!m_poses.empty() && ms <= m_poses.back().first) return;
         m_poses.push_back({ms, {location[0], location[1], location[2], rotation[0], rotation[1], rotation[2], *fov}});
-        if (m_poses.size() > 6) m_poses.erase(m_poses.begin());
+        // 16 samples (about 270 ms): a reader polling every 100 ms (the service) never misses one.
+        if (m_poses.size() > 16) m_poses.erase(m_poses.begin());
         if (++m_poseSequence % 2) return; // publish every second sample
         std::string body = "AIMMOD_POSE_1\t" + std::to_string(m_poseSequence) + "\nmeta\t";
         auto escape = [](const std::string& s) {
@@ -775,7 +788,7 @@ namespace aimmod
                     body += "weapon\t" + std::to_string(ms) + "\t" + std::to_string(static_cast<int>(*slot)) + "\n";
         }
         const auto avatars = m_output.avatars();
-        std::string tags;
+        std::string tags, drawn;
         std::vector<UObject*> actors;
         if (UObject* state = m_scene.GameState(); state && m_b.characters.Objects(state, actors, 33))
             for (UObject* actor : actors)
@@ -791,9 +804,23 @@ namespace aimmod
                 if (!avatars->empty())
                     if (auto tag = avatars->find(m_poseNames[id]); tag != avatars->end())
                         tags += "tag\t" + std::to_string(id) + "\t" + tag->second + "\n";
-                body += "target\t" + std::to_string(id) + "\t" + FormatNumber(p[0], 7) + "\t" + FormatNumber(p[1], 7) + "\t" + FormatNumber(p[2], 7) +
-                        "\t" + FormatNumber(*radius, 7) + "\t" + FormatNumber(*half, 7) + "\n";
+                const std::string row = std::to_string(id) + "\t" + FormatNumber(p[0], 7) + "\t" + FormatNumber(p[1], 7) + "\t" + FormatNumber(p[2], 7) + "\t" +
+                                        FormatNumber(*radius, 7) + "\t" + FormatNumber(*half, 7) + "\n";
+                body += "target\t" + row;
+                drawn += row;
             }
+        // The drawn targets of the previous publications too (seen\t<unix ms>\t<target row>), so a reader
+        // that polls slower than 30 Hz still gets every drawn position (the host's lag compensation
+        // and the bots' own tracks are built from them).
+        for (const auto& [stamp, rows] : m_seenHistory)
+            for (std::size_t at = 0; at < rows.size();)
+            {
+                const auto end = rows.find('\n', at);
+                body += "seen\t" + std::to_string(stamp) + "\t" + rows.substr(at, end - at + 1);
+                at = end == std::string::npos ? rows.size() : end + 1;
+            }
+        m_seenHistory.emplace_back(ms, std::move(drawn));
+        if (m_seenHistory.size() > 5) m_seenHistory.pop_front();
         m_output.PublishSelfPose(std::move(body) + tags);
         (void)now;
     }

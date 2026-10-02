@@ -19,6 +19,7 @@
 #include <aimmod/Lifecycle.hpp>
 
 #include <array>
+#include <deque>
 #include <atomic>
 #include <unordered_map>
 #include <cstdint>
@@ -120,6 +121,7 @@ namespace aimmod
         game::Getter m_currentWeapon; // WeaponHandler.GetCurrentWeaponNum: the slot in hand (self-pose weapon row)
         std::uint32_t m_nextPoseId{};
         std::vector<std::pair<std::int64_t, std::array<double, 7>>> m_poses;
+        std::deque<std::pair<std::int64_t, std::string>> m_seenHistory; // earlier publications' target rows
         void PollClipKey();
         void PublishSelfPose(double now);
         void TickTags(double now);

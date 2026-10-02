@@ -185,7 +185,8 @@ namespace bridge::posefile
                 }
                 file.targets.push_back(std::move(target));
             }
-            else return std::nullopt;
+            // Rows AimModCore added later (self, fire, weapon, tag, seen) are not the bridge's: skipped.
+            else if (!(f[0] == "self" || f[0] == "fire" || f[0] == "weapon" || f[0] == "tag" || f[0] == "seen")) return std::nullopt;
         }
         if (!header || !meta || file.rows.empty()) return std::nullopt;
         return file;
