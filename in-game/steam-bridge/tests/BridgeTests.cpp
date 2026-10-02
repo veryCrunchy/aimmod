@@ -550,6 +550,10 @@ int main()
         Check(sp && sp->stream == sid, "reads the stream id back");
         Check(!Parse("AIMMOD_POSE_1\t1\tbad id!\nmeta\ta\tb\t1\npose\t1\t0\t0\t0\t0\t0\t0\t90\n"), "rejects an invalid stream id");
         Check(Parse(sample) && Parse(sample)->stream.empty(), "AimModCore's self-pose.tsv has no stream id");
+        const std::string match = sample + "self\t1759300000116\t1.6\t-2\t96\t34\t96\t0\nfire\t1759300000116\t12\t1\nweapon\t1759300000116\t1\ntag\t7\ts-0011223344556677\n"
+                                         "seen\t1759300000083\t7\t498\t0\t90\t34\t88\n";
+        Check(Parse(match) && Parse(match)->rows.size() == 2 && Parse(match)->targets.size() == 1, "AimModCore's match rows (self, fire, weapon, tag, seen) don't break the pose file");
+        Check(!Parse(sample + "teleport\t1\n"), "an unknown row still rejects the file");
         File many;
         many.sequence = 1;
         for (int i = 0; i < 100; ++i) many.rows.push_back(Row{1000 + i, {0, 0, 0, 0, 0, 0, 90}});

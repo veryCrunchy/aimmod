@@ -2,10 +2,13 @@
 // Host-authoritative match damage (game modes: deathmatch, vampiric 1v1,
 // instagib): the local player's shots out (self-shots.tsv) and the host's
 // verdict on this player in (play-state.tsv). See DESIGN.md "Match play".
+#include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace aimmod
 {
@@ -74,8 +77,38 @@ namespace aimmod
     // First intersection of a ray (unit direction) with a vertical capsule
     // centred at `center`. Returns the distance along the ray, or nullopt.
     std::optional<double> RayCapsule(const double origin[3], const double direction[3], const double center[3], double radius, double halfHeight);
-    // A hit in the top fifth of the capsule counts as a head hit (estimate).
+    // The head zone: a point at least 60 % of the half height above the centre (the top fifth of
+    // the capsule). The host (CombatMatch) uses the same rule, so a headshot here is one there.
+    constexpr double HeadZoneFraction = 0.6;
     bool IsHeadHit(const double point[3], const double center[3], double halfHeight);
+
+    // How a ray passes a vertical capsule: the gap between the ray and the capsule's surface
+    // (0 when it meets it), the distance along the ray there and that point's height.
+    struct CapsulePass
+    {
+        double gap{}, along{}, z{};
+    };
+    CapsulePass RayCapsulePass(const double origin[3], const double direction[3], const double center[3], double radius, double halfHeight);
+
+    // A drawn target: self-pose target id and its capsule.
+    struct Capsule
+    {
+        std::uint32_t id{};
+        double center[3]{};
+        double radius{}, halfHeight{};
+    };
+    struct TargetPick
+    {
+        std::size_t index{};
+        double along{}, gap{};
+        bool head{};
+    };
+    // The capsule the ray meets first; with none, the one it passes nearest within `tolerance` cm
+    // (the visible mesh and the game's own hitboxes stick out of the capsule: the head above it,
+    // arms beside it). nullopt: nothing within reach.
+    std::optional<TargetPick> PickTarget(const double origin[3], const double direction[3], const std::vector<Capsule>& capsules, double tolerance);
+    // Reach for a shot the game counted as a hit whose ray misses every capsule.
+    constexpr double GameHitToleranceCm = 15;
 
     struct ShotRecord
     {
@@ -86,7 +119,49 @@ namespace aimmod
         std::uint32_t target{};         // self-pose target id, 0 = none
         bool headshot{};
         bool gameHit{};                 // the game's own hit counter advanced
+        // The drawn capsule of `target` at the shot (what the shooter saw), when target != 0.
+        double targetCenter[3]{};
+        double targetRadius{}, targetHalfHeight{};
+        double gameDamage{-1};          // damage per hit the game counted in that frame, -1 unknown
+        // How the target was found: 0 none, 1 the ray meets its capsule, 2 the ray passes within
+        // GameHitToleranceCm of it (game hits only), 3 the game named it (Send_ShotHit).
+        int source{};
     };
-    // "shot\t<ms>\t<seq>\t<ox oy oz>\t<dx dy dz>\t<slot>\t<target>\t<headshot>\t<gameHit>\n"
+    enum ShotSource : int { SourceNone = 0, SourceRay = 1, SourceNear = 2, SourceGame = 3 };
+    // "shot\t<ms>\t<seq>\t<ox oy oz>\t<dx dy dz>\t<slot>\t<target>\t<headshot>\t<gameHit>
+    //  \t<cx cy cz>\t<radius>\t<half height>\t<game damage>\t<source>\n"
     std::string FormatShot(const ShotRecord& shot);
+
+    // The shots self-shots.tsv carries. Kept until the service acknowledges them (it writes the
+    // last shot seq it took into self-shots.request), so a slow or stalled reader never loses one;
+    // bounded by MaxKept and MaxAgeMs (what falls out unacknowledged is counted as lost). Before
+    // the first acknowledgement (or from a service that never sends one) the window is the last
+    // LegacyKept shots, at most LegacyAgeMs old.
+    class ShotLog
+    {
+    public:
+        static constexpr std::size_t MaxKept = 256, LegacyKept = 64;
+        static constexpr std::int64_t MaxAgeMs = 15000, LegacyAgeMs = 5000;
+        void Add(const ShotRecord& shot) { m_shots.push_back(shot); }
+        // The service took every shot up to `sequence`.
+        void Ack(std::uint64_t sequence);
+        void Prune(std::int64_t nowMs);
+        void Clear();
+        const std::deque<ShotRecord>& shots() const { return m_shots; }
+        std::uint64_t acked() const { return m_acked; }
+        std::uint64_t lost() const { return m_lost; }
+        bool ackSeen() const { return m_ackSeen; }
+
+    private:
+        std::deque<ShotRecord> m_shots;
+        std::uint64_t m_acked{}, m_lost{};
+        bool m_ackSeen{};
+    };
+    // self-shots.request: "<unix ms>[\t<acked shot seq>\t<session>]". nullopt: no acknowledgement.
+    struct ShotAck
+    {
+        std::uint64_t sequence{};
+        std::int64_t session{};
+    };
+    std::optional<ShotAck> ParseShotRequest(std::string_view text);
 } // namespace aimmod

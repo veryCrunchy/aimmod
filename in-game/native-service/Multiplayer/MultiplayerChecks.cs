@@ -41,7 +41,7 @@ static partial class MultiplayerChecks
         CsTeams();
         Marker();
         var root = Path.Combine(Path.GetTempPath(), "aimmod-mp-test-" + Guid.NewGuid().ToString("N"));
-        try { Content(root); Generator(root); Blocked(root); AutoLeave(root); LoadGateService(root); StandInStream(root); FriendlyFire(); StandIns(root); Bots(root); ClaimTiming(root); RestartDuringMatch(root); CsMaps(root); LoadGateEnsureMap(root); Binds(root); Service(root); Transfers(root); Replays(root); Maps(root); Tournaments(root); }
+        try { Content(root); Generator(root); Blocked(root); AutoLeave(root); LoadGateService(root); StandInStream(root); FriendlyFire(); StandIns(root); Bots(root); ClaimTiming(root); HitRegistration(root); HitPipeline(root); RestartDuringMatch(root); CsMaps(root); LoadGateEnsureMap(root); Binds(root); Service(root); Transfers(root); Replays(root); Maps(root); Tournaments(root); }
         finally { try { Directory.Delete(root, true); } catch (IOException) { } }
         Console.WriteLine($"{count} multiplayer checks passed.");
     }
@@ -508,7 +508,7 @@ static partial class MultiplayerChecks
         for (var k = 0; k < 2; k++) c1.Claim("a", Shot(at + 1000 + k * 120), at + 1050 + k * 120, 40);
         var dead = c1.View().Players.First(p => p.Member == "b");
         Check(!dead.Alive && dead.Deaths == 1 && c1.View().Players.First(p => p.Member == "a").Frags == 1 && c1.View().Events.Any(e => e.Kind == "death" && e.Member == "b" && e.Attacker == "a"), "Health reaching zero is a death and a frag");
-        Check(c1.Claim("a", Shot(at + 1500), at + 1550, 40) == "target-mismatch", "A dead player can't be hit");
+        Check(c1.Claim("a", Shot(at + 1500), at + 1550, 40) == "victim-dead", "A dead player can't be hit (and the refusal says so)");
         c1.Tick(at + 1240 + CombatRules.RespawnMs(LobbyModes.Deathmatch) + 10);
         var back = c1.View().Players.First(p => p.Member == "b");
         Check(back.Alive && back.Health == 100 && c1.View().Events[^1].Kind == "respawn", "Respawn after the delay with full health");
@@ -540,7 +540,7 @@ static partial class MultiplayerChecks
         var shots = ShotFeed.Parse("AIMMOD_SHOTS_1\t3\nshot\t1000\t7\t1\t2\t3\t-4\t90\t0\t0\t0\nshot\t1100\t8\t1\t2\t3\t-4\t91\t0\t9\t1\n");
         var seen = new Dictionary<int, TrackSeen> { [9] = new TrackSeen(1090, 9, 500, 600, 100, 45, 115) };
         var claims = feed.Take(shots, "m", 1, 250, seen);
-        Check(claims.Count == 1 && claims[0] is { Seq: 8, T: 1350, Head: true, TargetX: 500, Yaw: 91 } && feed.Take(shots, "m", 1, 250, seen).Count == 0, "Shot rows become hit claims on the host clock; misses and repeats are skipped");
+        Check(claims.Count == 1 && claims[0] is { Seq: 1, Shot: 8, T: 1350, Head: true, TargetX: 500, Yaw: 91 } && feed.Take(shots, "m", 1, 250, seen).Count == 0, "Shot rows become hit claims on the host clock; misses and repeats are skipped");
         Check(ShotFeed.Parse("AIMMOD_SHOTS_1\t1\nshot\t1\t5\t0\t0\t0\t0\t0\t0\t0\t0\nshot\t2\t4\t0\t0\t0\t0\t0\t0\t0\t0\n") is null && ShotFeed.Parse("AIMMOD_SHOTS_1\t1\nshot\t1\t5\t0\t0\t0\t0\t0\t9\t0\t0\n") is null, "Shot sequences must increase and weapon slots are 0-7");
         var state = PlayState.Format(4, "AimMod Match - X", new CombatPlayerView("me", 42.5, true, 3, 1, null, 900, 10, 0), new CombatEvent(7, "damage", 800, "me", "76561198000000001", 20, true, 42.5, null, null, [0.6, 0.8, 0]), 800, 0);
         Check(state == "AIMMOD_PLAYSTATE_1\t4\nmatch\tAimMod Match - X\nhealth\t42.5\t100\nalive\t1\nrespawnAt\t0\nprotected\t1\nhit\t7\t76561198000000001\t20\t1\t0.6\t0.8\t0\n", "Play state in AimModCore's format: exact scenario, health, life, respawn, protection and the last hit with its direction");
@@ -816,7 +816,7 @@ static partial class MultiplayerChecks
         foreach (var bad in new[] { Swap("aimmod.mp", "other"), Swap("\"v\":1", "\"v\":2"), Swap("\"command\"", "\"teleport\""), Swap("\"seq\":7", "\"seq\":-1"), "[]", "{", Swap("\"body\":{", "\"body\":[{").Replace("}}}", "}}]}") })
             Check(Protocol.Decode(Encoding.UTF8.GetBytes(bad)) is null, "Rejected frame: " + bad[..Math.Min(40, bad.Length)]);
         Check(Protocol.Decode(new byte[Protocol.MaxBytes + 1]) is null, "Oversized frames are rejected");
-        Check(!Protocol.Reliable("score") && Protocol.Reliable("snapshot") && Protocol.Reliable("track") && Protocol.Reliable("hit") && Protocol.Reliable("combat") && Protocol.Reliable("cosmetic.look") && !Protocol.Reliable("bots") && Protocol.Types.Length == 23, "Score frames and bot positions are unreliable; state and tracking samples are reliable");
+        Check(!Protocol.Reliable("score") && Protocol.Reliable("snapshot") && Protocol.Reliable("track") && Protocol.Reliable("hit") && Protocol.Reliable("combat") && Protocol.Reliable("cosmetic.look") && Protocol.Reliable("hit-ack") && !Protocol.Reliable("bots") && Protocol.Types.Length == 24, "Score frames and bot positions are unreliable; state and tracking samples are reliable");
         var sync = new ClockSync();
         sync.Add(0, 1050, 200); sync.Add(1000, 2010, 1020); sync.Add(2000, 3100, 2300);
         Check(sync.Rtt == 20 && sync.Offset == 1000, "Clock sync uses the minimum round-trip sample");

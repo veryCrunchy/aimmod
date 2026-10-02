@@ -20,6 +20,8 @@ sealed record LivePoseFrame(long Sequence, string Stream, string Scenario, strin
     public double[]? Fire { get; init; }
     /// <summary>Optional: the weapon slot the sender holds (0-7, KovaaK's Weapon1..Weapon8).</summary>
     public int? Weapon { get; init; }
+    /// <summary>Optional: earlier publications' drawn targets (seen rows: unix ms, then the target row's id, x, y, z, radius, half height).</summary>
+    public IReadOnlyList<(long UnixMs, double[] Target)> Seen { get; init; } = [];
     public static LivePoseFrame? Parse(string text)
     {
         var lines = text.Replace("\r\n", "\n").Split('\n', StringSplitOptions.RemoveEmptyEntries);
@@ -31,7 +33,7 @@ sealed record LivePoseFrame(long Sequence, string Stream, string Scenario, strin
         if (!IsStreamId(stream)) return null;
         string scenario = "", map = ""; double? scale = null;
         var poses = new List<LivePose>(); var targets = new List<double[]>(); var tags = new Dictionary<int, string>();
-        double[]? self = null, fire = null; int? weapon = null;
+        double[]? self = null, fire = null; int? weapon = null; var seenRows = new List<(long, double[])>();
         static bool Num(string s, out double v) => double.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out v) && double.IsFinite(v) && Math.Abs(v) < 1e12;
         foreach (var line in lines.Skip(1))
         {
@@ -55,6 +57,14 @@ sealed record LivePoseFrame(long Sequence, string Stream, string Scenario, strin
                     for (int i = 0; i < 6; i++) if (!Num(c[i + 1], out t[i])) return null;
                     if (t[0] < 1 || t[0] != Math.Truncate(t[0]) || t[4] <= 0 || t[5] < t[4] || targets.Count >= 128 || targets.Any(x => x[0] == t[0])) return null;
                     targets.Add(t);
+                    break;
+                case "seen" when c.Length == 8:
+                    // seen\t<unix ms>\t<target row>: where a target was drawn at an earlier publication.
+                    if (!long.TryParse(c[1], NumberStyles.None, CultureInfo.InvariantCulture, out var seenMs) || seenRows.Count >= 512) return null;
+                    var row = new double[6];
+                    for (int i = 0; i < 6; i++) if (!Num(c[i + 2], out row[i])) return null;
+                    if (row[0] < 1 || row[0] != Math.Truncate(row[0]) || row[4] <= 0 || row[5] < row[4]) return null;
+                    seenRows.Add((seenMs, row));
                     break;
                 case "tag" when c.Length == 3:
                     if (!int.TryParse(c[1], NumberStyles.None, CultureInfo.InvariantCulture, out var tagged) || tagged < 1 || !IsStreamId(c[2]) || c[2].Length == 0 || tags.Count >= 128) return null;
@@ -80,11 +90,11 @@ sealed record LivePoseFrame(long Sequence, string Stream, string Scenario, strin
                     if (!long.TryParse(c[1], NumberStyles.None, CultureInfo.InvariantCulture, out _) || !int.TryParse(c[2], NumberStyles.None, CultureInfo.InvariantCulture, out var slot) || slot > 7) return null;
                     weapon = slot;
                     break;
-                case "meta" or "pose" or "target" or "tag" or "self" or "fire" or "weapon": return null; // known row, wrong shape
+                case "meta" or "pose" or "target" or "tag" or "self" or "fire" or "weapon" or "seen": return null; // known row, wrong shape
                 default: break; // rows added later are ignored, never fatal
             }
         }
-        return poses.Count == 0 ? null : new(sequence, stream, scenario, map, scale, poses, targets) { Tags = tags, Self = self, Fire = fire, Weapon = weapon };
+        return poses.Count == 0 ? null : new(sequence, stream, scenario, map, scale, poses, targets) { Tags = tags, Self = self, Fire = fire, Weapon = weapon, Seen = seenRows };
     }
 
     /// <summary>Empty (unnamed stream) or [A-Za-z0-9_-]{1,64}.</summary>

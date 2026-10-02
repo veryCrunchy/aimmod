@@ -748,28 +748,42 @@ protection and lifesteal. Clients only claim hits.
   native respawn delays equal to the mode's, no native score, and the same
   invisible helper bot.
 
-**Claim validation** (`CombatMatch.Claim`; reasons are counted per player):
+**Claim validation** (`CombatMatch.Claim`; reasons are counted per player, and
+every decision goes back to the shooter as `hit-ack`; details in 6.2.2):
 
 1. Order and time:
-   - sequence numbers increase (`repeated`);
-   - the shot time is inside the match and at most 1 s old (`time`);
-   - the shooter is alive (`shooter-dead`);
-   - fire rate is at most 1 / `TimeBetweenShots`, with 10% tolerance
-     (`fire-rate`).
-2. Shooter checks:
+   - a claim number already decided is answered again with its first
+     decision and never applied twice (`repeated`);
+   - the shot time is inside the match, at most 1.5 s old and at most 200 ms
+     ahead of the host clock (`time`);
+   - the shooter is alive, or the host killed it after the shot was fired
+     (a trade, within 300 ms) (`shooter-dead`);
+   - fire rate: every run of k accepted hits spans k × 90% of
+     `TimeBetweenShots`, less 20 ms of frame slack (`fire-rate`).
+2. Shooter checks (a claim past the shooter's own track waits up to 300 ms for
+   it, then `no-shooter-track`):
    - the ray starts within 32 cm of the shooter's own camera track
      (`origin`);
-   - it looks within 3° of that track's pitch and yaw (`aim`).
+   - it looks within 3° of the camera's turn between the two samples around
+     the shot (`aim`).
 3. Victim:
-   - the alive opponent whose own track matches the drawn target the game hit
-     (25 cm, 0–200 ms back: the rewind cap) (`target-mismatch`);
-   - without a drawn target, whoever the ray hits after the capped estimated
-     rewind (`miss`).
+   - the opponent whose own track comes closest to the drawn target (25 cm)
+     within the rewind for that shooter and victim: the measured view delay
+     + 100 ms, at least 200 ms, at most 500 ms (`target-mismatch`);
+   - otherwise (or without a drawn target) the host's own rewound ray test,
+     if the drawn target lies within 150 cm of that rewound track (`miss`);
+   - a matched victim the host already killed (`victim-dead`).
 4. Geometry:
-   - the ray must hit that hull (`ray-miss`);
+   - the ray must hit that hull, with 4 cm for rounding, 15 cm when the
+     game itself counted the hit (`ray-miss`);
    - the victim must not be spawn-protected (`spawn-protected`).
 5. Damage is computed by the host:
-   - a headshot is the ray through the top 25 cm sphere of the hull;
+   - the head zone is AimModCore's: where the ray enters the hull is at least
+     60% of the half height above the centre. AimModCore's head flag holds
+     within 4 cm of that line, and the game's own headshot (its damage per
+     hit shows the multiplier) counts anywhere above 20% of the half height;
+   - the weapon's fixed headshot multiplier (CS: ×4, the rifle ×2, the knife
+     and railgun ×1), then armour in CS;
    - damage is clamped to the victim's remaining health, so overkill doesn't
      heal;
    - then lifesteal, death, frag, and the respawn timer.
@@ -789,15 +803,20 @@ exact shapes are in `native-mod/DESIGN.md` ("Match play"), and the service
 follows them:
 
 - `self-shots.tsv`: the shots AimModCore publishes while
-  `self-shots.request` is fresh; the service touches that file every 2 s
-  during a match.
+  `self-shots.request` is fresh; the service rewrites that file every 2 s
+  during a match, and within 100 ms whenever it took new shots, as
+  `<unix ms>\t<last shot seq taken>\t<session>` (the acknowledgement).
   - Header `AIMMOD_SHOTS_1\t<publish seq>\t<session>`. A new session restarts
     the shot sequence.
-  - Rows `shot\t<ms>\t<seq>\t<origin x y z>\t<unit direction x y z>\t<slot>\t<target>\t<headshot>\t<gameHit>`.
-    The service turns the direction into pitch and yaw and claims every shot
-    with a target.
+  - Rows `shot\t<ms>\t<seq>\t<origin x y z>\t<unit direction x y z>\t<slot>\t<target>\t<headshot>\t<gameHit>\t<capsule x y z>\t<radius>\t<half height>\t<game damage per hit>\t<source>`.
+    The service turns the direction into pitch and yaw. It claims every shot
+    with a target that the game counted as a hit (before the game's counter
+    has counted any hit, every shot with a target), with the capsule from
+    the row as the drawn target.
+  - AimModCore keeps every shot until it is acknowledged (at most 256, 15 s),
+    so a slow or stalled poll never loses one.
   - `tag` rows are allowed.
-  - The earlier pitch/yaw row shape still reads.
+  - The 13- and 11-column row shapes still read.
 - `play-state.tsv`: written by the service on change and at least every
   second, because AimModCore drops it after 5 s. Unknown rows reject the
   whole file, so it holds only:
@@ -892,6 +911,59 @@ the arena.
 **Still open:** Hub verification of results (8.4); kill effects need the
 bridge change above.
 
+#### 6.2.2 Hit registration
+
+A shot the shooter's game showed as a hit should count, and nothing else
+should. The pipeline, end to end:
+
+1. **The shot (AimModCore, every frame).** A weapon's `ShotsFiredThisSession`
+   advancing is a shot, `ShotsHitThisSession` the game's own hit (the
+   hitmarker the shooter saw), `DamageDoneThisSession` the damage per hit.
+   Shots counted together in one frame are spread back over that frame. The
+   target is the actor `Send_ShotHit` named (when the game calls it through
+   reflection), else the drawn capsule the camera ray meets, else, for a game
+   hit only, the capsule it passes within 15 cm of (the visible mesh is wider
+   than the capsule; the head can stick out above it). The row carries that
+   capsule exactly as drawn in that frame.
+2. **The feed (service, every 100 ms).** `ShotFeed` claims the game hits
+   with a target, numbers the claims per match, counts game hits without a
+   target, ray hits the game called misses, gaps in the shot sequence and
+   stale shots, and acknowledges the last shot it took.
+3. **The claim (client to host).** A reliable `hit`, kept in `ClaimOutbox`
+   and sent again every 400 ms until the host's `hit-ack` answers it, for up
+   to the claim window plus 1 s.
+4. **The decision (host).** `CombatMatch` keeps every player's timestamped
+   camera track (60 Hz samples, 10 s) and, from each player's tagged drawn
+   targets, where its game drew everyone else. From those it measures each
+   shooter's view delay per victim (the median lag at which its drawn rows
+   match the victim's track; a remote bot's relay can be 300 ms) and rewinds
+   the victim that far (see 6.2.1 for every check). The bots' own tracks are
+   the host's drawn avatars, so the hull the host validates against is the
+   one its game hit-tests. `self-pose.tsv` carries the last 16 camera samples
+   and the drawn targets of the previous publications (`seen` rows), so no
+   sample is lost between polls.
+5. **The confirmation.** Damage, deaths and kills arrive as `combat` events,
+   which drive the crosshair hit marker and the HUD. Each claim's decision
+   comes back as `hit-ack` (`ok`, `reason`, `detail`), and repeats get the
+   first decision.
+
+**Diagnostics** (service log):
+
+- `Hit refused: <player> claim #<n> (shot #<n>) <reason>: <what was
+  measured>` on the host, for every refusal: how far the ray passed outside
+  the hull, the nearest track and its rewind, the aim error, the fire
+  interval.
+- `Hit refused by the host: ...` on the shooter's machine, from `hit-ack`.
+- Every 10 s of a live match, `Hits: ...`: shots read, game hits, game hits
+  without a drawn target, ray-only shots, shots lost before reading, claims,
+  and the decisions (accepted, refused by reason, waiting, resent,
+  unanswered); on the host, per shooter.
+
+AimModCore logs `match play: shots (...)` every 10 s while shots flow: shots
+fired, game hits (on the drawn capsule, just beside it, named by the game,
+without a target), ray hits the game counted as misses, `Send_ShotHit` calls,
+the last shot, the acknowledged shot and the shots lost. It logs each game
+hit without a target near the ray (at most once a second).
 ### 6.3 Tracking duel
 
 **Decided (user): simultaneous.** Both players track each other at the same

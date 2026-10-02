@@ -1298,6 +1298,7 @@ sealed partial class MultiplayerService : IDisposable
                     core = null; mirror = snapshot; Connect(heir.Id);
                     return;
                 }
+                ConfirmClaims();
                 PushCombat();
                 Broadcast(snapshot, force: false);
                 if (now - lastPing > 2000)
@@ -1498,10 +1499,10 @@ sealed partial class MultiplayerService : IDisposable
                 if (ReadFinish(m.Body) is { } run) core!.Finish(peer, run);
                 break;
             case "track":
-                if (TrackBatch.Read(m.Body) is { } batch) core!.Track(peer, batch);
+                if (TrackBatch.Read(m.Body) is { } batch) { core!.Track(peer, batch); if (ConfirmClaims()) PushCombat(); }
                 break;
             case "hit":
-                if (HitClaim.Read(m.Body) is { } claim) { core!.Claim(peer, claim); PushCombat(); }
+                if (HitClaim.Read(m.Body) is { } claim) { core!.Claim(peer, claim); ConfirmClaims(); PushCombat(); }
                 break;
             case "content.request":
                 if (server.Manifest(core!.Settings) is { } manifest) Send(peer, "content.manifest", new { key = manifest.Key, files = manifest.Files, workshop = manifest.Workshop });
@@ -1573,6 +1574,9 @@ sealed partial class MultiplayerService : IDisposable
                 break;
             case "bots":
                 ReceiveBots(m.Body);
+                break;
+            case "hit-ack":
+                ReceiveHitAck(m.Body);
                 break;
             case "replay.chunk":
                 if (ReadReplayChunk(m.Body) is { } fromHost && swap.Chunk(fromHost.Match, fromHost.Round, fromHost.Owner, fromHost.Id, fromHost.Kind, fromHost.Label, fromHost.Size, fromHost.Hash, fromHost.Offset, fromHost.Data) is { } got) swap.Import(got.Bytes, got.Info);
@@ -1883,7 +1887,7 @@ sealed partial class MultiplayerService : IDisposable
         {
             FeedStandIn(batch);
             KeepOwnSamples(batch);
-            if (core is not null) core.Track(SelfId, batch);
+            if (core is not null) { core.Track(SelfId, batch); ConfirmClaims(); }
             else if (hostPeer is not null) Send(hostPeer, "track", batch.Body());
         }
     }
@@ -1898,17 +1902,18 @@ sealed partial class MultiplayerService : IDisposable
         StreamTracking(match);
         shotFeed ??= new ShotFeed(outputFolder);
         shotFeed.Request(clock());
-        if (shotKey != match.Id + "#" + match.Round) { shotKey = match.Id + "#" + match.Round; shotFeed.Reset(); }
+        if (shotKey != match.Id + "#" + match.Round) { shotKey = match.Id + "#" + match.Round; shotFeed.Reset(); outbox.Reset(shotKey); ownAccepted = 0; ownRejected.Clear(); }
         if (match.Phase == MatchPhases.Live && poseTracker is not null)
         {
             var offset = core is not null || hostPeer is null ? 0 : clocks.GetValueOrDefault(hostPeer)?.Offset ?? 0;
             var tracker = poseTracker;
-            foreach (var claim in shotFeed.Poll(match.Id, match.Round, offset, (id, t) => tracker.SeenAt(id, t) ?? (tracker.LastSeen.TryGetValue(id, out var last) ? last : null)))
+            foreach (var claim in shotFeed.Poll(match.Id, match.Round, offset, (id, t) => tracker.SeenAt(id, t) ?? (tracker.LastSeen.TryGetValue(id, out var last) ? last : null), clock()))
             {
                 if (match.Cs is not null && claim.Slot == CsRules.BombSlot) continue; // the bomb plants, it never hits
-                if (core is not null) core.Claim(SelfId, claim);
-                else if (hostPeer is not null) Send(hostPeer, "hit", claim.Body());
+                SendClaim(claim);
             }
+            ResendClaims();
+            LogHitStats(match);
             if (match.Cs is not null) KnifeSounds(shotFeed.Fresh, (id, t) => tracker.SeenAt(id, t) ?? (tracker.LastSeen.TryGetValue(id, out var last) ? last : null), offset);
             shotFeed.Fresh.Clear(); // each shot sounds once
         }
