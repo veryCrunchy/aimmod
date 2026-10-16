@@ -14,5 +14,15 @@
          The advisory concerns mapping deeply nested untrusted graphs; the patched AutoMapper releases are
          commercially licensed and not used by osu!. Revisit when ppy.osu.Game moves off AutoMapper 13. -->
     <NuGetAuditSuppress Include="https://github.com/advisories/GHSA-rvv3-g6hj-g44x" />
+    <!-- SixLabors.ImageSharp 3.1.11 is what ppy.osu.Game and osu.Framework are built against; the fixes ship
+         only in ImageSharp 4, whose API changes break that build. Two advisories are in TIFF encoders and one in
+         HistogramEqualization, none of which AimMod uses. ICC profile and BigTIFF decoding can be reached by a
+         crafted image in a beatmap or skin, as in osu!lazer itself, and lead to denial of service, not code
+         execution. Revisit when ppy.osu.Game moves to ImageSharp 4. -->
+    <NuGetAuditSuppress Include="https://github.com/advisories/GHSA-j9gm-c75j-xc9q" />
+    <NuGetAuditSuppress Include="https://github.com/advisories/GHSA-jjfr-hcj7-qf5w" />
+    <NuGetAuditSuppress Include="https://github.com/advisories/GHSA-j3p4-wp97-rph4" />
+    <NuGetAuditSuppress Include="https://github.com/advisories/GHSA-gwg2-r3hj-4w44" />
+    <NuGetAuditSuppress Include="https://github.com/advisories/GHSA-wmxv-xphr-5c9g" />
   </ItemGroup>
 </Project>
