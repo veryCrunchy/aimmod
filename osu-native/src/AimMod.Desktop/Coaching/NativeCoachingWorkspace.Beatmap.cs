@@ -105,7 +105,14 @@ public partial class NativeCoachingWorkspace
                 }
                 coachingTargetScoreId=run.ScoreId;renderSession();showCoachingPage(0);
             }
-            if (sets.Length == 0)
+            bool adaptive = coachingMapSection == 0 && canStartAdaptive(run);
+            if (adaptive)
+                foreach (var step in adaptiveStep(run!)) mapDetailHost.Add(step);
+            if (sets.Length == 0 && adaptive)
+                mapDetailHost.Add(drillAlternative(focus is { } issue
+                    ? $"Prefer separate drills? Turn {CoachingIssues.Label(issue.Kind).ToLowerInvariant()} at {AimModCoachTimeline.format(issue.TimeMs)} into generated tapping and aim difficulties."
+                    : "Prefer separate drills? Turn one section into generated tapping and aim difficulties.", prepare));
+            else if (sets.Length == 0)
                 mapDetailHost.Add(run is null
                     ? startStep("Choose a play first", "Pick a map from Find a map to turn its hardest section into exercises.",
                         new CoachingButton("Find a map", () => showCoachingPage(2), true, true))
@@ -276,6 +283,17 @@ public partial class NativeCoachingWorkspace
     }
 
     /// <summary>A single numbered next step with its one primary action.</summary>
+    /// <summary>The generated practice-set route, offered beside adaptive practice rather than instead of it.</summary>
+    private static Drawable drillAlternative(string detail, Action prepare)
+    {
+        var action = new CoachingButton("Prepare practice set", prepare, false, true) { Anchor = Anchor.CentreRight, Origin = Anchor.CentreRight };
+        return new Container
+        {
+            RelativeSizeAxes = Axes.X, AutoSizeAxes = Axes.Y, Padding = new MarginPadding { Horizontal = 14 },
+            Children = [flow(detail, 12, AimModPalette.Muted).With(f => { f.Anchor = Anchor.CentreLeft; f.Origin = Anchor.CentreLeft; f.Padding = new MarginPadding { Right = 200 }; }), action],
+        };
+    }
+
     private static Drawable startStep(string title, string detail, CoachingButton action)
     {
         action.Anchor = Anchor.CentreRight;

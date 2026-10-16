@@ -149,14 +149,22 @@ public partial class NativeCoachingWorkspace
             body.Add(flow(tapping?.Cue ?? plan.Cue, 14, AimModPalette.Text));
             if (tapping is not null)
                 body.Add(flow($"Section at {TimeSpan.FromMilliseconds(tapping.StartTimeMs):m\\:ss}. {tapping.Observation}", 15, AimModPalette.Muted));
-            body.Add(flow("Check your starting point, practise the parts, then return to your map.", 14, AimModPalette.Muted));
-            if (run is not null && practiceWorkspace is not null)
-                body.Add(new CoachingButton("Break down this section", () => {
-                    startTraining(plan);
-                    practiceWorkspace.OpenBreakdown(new PracticeMapCandidate(run, [run.ScoreId], 1, run.MissCount, 0), tapping?.FirstObjectIndex);
-                }, true));
+            bool adaptive = canStartAdaptive(run);
+            body.Add(flow(adaptive
+                ? "Play the map through: sections you fail slow down, then speed back up until you clear it at full speed."
+                : "Check your starting point, practise the parts, then return to your map.", 14, AimModPalette.Muted));
+            if (adaptive)
+                body.Add(new CoachingButton("Start adaptive practice", () => { startTraining(plan); playAdaptive(run!); }, true));
             var secondary = new FillFlowContainer<Drawable> { RelativeSizeAxes = Axes.X, AutoSizeAxes = Axes.Y,
                 Direction = FillDirection.Full, Spacing = new(10) };
+            if (run is not null && practiceWorkspace is not null)
+            {
+                var breakdown = new CoachingButton("Break down this section", () => {
+                    startTraining(plan);
+                    practiceWorkspace.OpenBreakdown(new PracticeMapCandidate(run, [run.ScoreId], 1, run.MissCount, 0), tapping?.FirstObjectIndex);
+                }, !adaptive);
+                if (adaptive) secondary.Add(breakdown); else body.Add(breakdown);
+            }
             secondary.Add(new CoachingButton("Choose another play", () => showCoachingPage(2)));
             if (compareMovement is not null) secondary.Add(new CoachingButton("Compare movement", compareMovement));
             if (run?.HasReplayFile == true) secondary.Add(new CoachingButton("Watch replay", () => openReplay(run)));

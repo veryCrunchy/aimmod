@@ -83,6 +83,9 @@ public sealed partial class OffscreenVisualCaptureTests
     [TestCase("coaching-complete", 1600, 900)]
     [TestCase("coaching-practice-many", 1100, 760)]
     [TestCase("coaching-practice-many", 1600, 900)]
+    [TestCase("coaching-adaptive-map", 1100, 760)]
+    [TestCase("coaching-adaptive-map", 1600, 900)]
+    [TestCase("coaching-adaptive-map", 800, 760)]
     [TestCase("coaching-error", 1100, 760)]
     [TestCase("coaching-empty", 1100, 760)]
     [TestCase("ppTargets", 1100, 760)]
@@ -168,6 +171,7 @@ public sealed partial class OffscreenVisualCaptureTests
                 "coaching-populated" => new CaptureCoachingGame(host, source, outputPath, width, height, CoachingCaptureState.Analysing, succeeded, failed),
                 "coaching-complete" => new CaptureCoachingGame(host, source, outputPath, width, height, CoachingCaptureState.Complete, succeeded, failed),
                 "coaching-practice-many" => new CaptureCoachingGame(host, source, outputPath, width, height, CoachingCaptureState.PracticeMany, succeeded, failed),
+                "coaching-adaptive-map" => new CaptureCoachingGame(host, source, outputPath, width, height, CoachingCaptureState.AdaptiveMap, succeeded, failed),
                 "coaching-error" => new CaptureCoachingGame(host, source, outputPath, width, height, CoachingCaptureState.Error, succeeded, failed),
                 "coaching-empty" => new CaptureCoachingGame(host, source, outputPath, width, height, CoachingCaptureState.Empty, succeeded, failed),
                 "replays-analysis" => new CaptureReplayAnalysisGame(host, source, outputPath, width, height, succeeded, failed),
@@ -1484,6 +1488,23 @@ public sealed partial class OffscreenVisualCaptureTests
                     LazerArchive: new LazerBeatmapArchive(0, Guid.NewGuid()))),
                 (_, _) => Task.FromResult(new LazerBeatmapInstallResult(LazerBeatmapInstallStatus.Sent)));
             workspace.RelativeSizeAxes = osu.Framework.Graphics.Axes.Both;
+            if (state == CoachingCaptureState.AdaptiveMap && replays.Length > 0)
+            {
+                // Synthetic progress: early sections cleared at full speed, one slowed after repeated fails.
+                var store = new AdaptivePracticeStore(Path.Combine(Path.GetDirectoryName(outputPath)!, "adaptive-fixture", $"{width}x{height}.json"));
+                var setup = AdaptivePracticeSetup.For(replays[0]);
+                var progress = AdaptivePracticeCoach.Create(setup.Key, replays[0].Title, replays[0].Difficulty, setup.TargetRate, 12, DateTimeOffset.UtcNow);
+                var sections = Enumerable.Range(0, 12).Select(i => new AdaptiveSection(i, i * 10_000, i * 10_000 + 9_000, i * 20, 20)).ToArray();
+                var now = DateTimeOffset.UtcNow;
+                AdaptivePracticeProgress cleanly(AdaptivePracticeProgress p) =>
+                    AdaptivePracticeCoach.Complete(p, sections, AdaptivePracticeCoach.Next(p, sections), new(0, 20, 0, .99, [], 20), now);
+                for (int i = 0; i < 6; i++) progress = cleanly(progress); // sections 1–4 mastered, with their connect runs
+                for (int i = 0; i < 3; i++) progress = AdaptivePracticeCoach.Fail(progress, sections, 4, 42_000 + i * 2_500, now);
+                progress = cleanly(progress);
+                progress = AdaptivePracticeCoach.Fail(progress, sections, 6, 64_000, now);
+                store.Save(progress);
+                workspace.ConfigureAdaptivePractice(() => store, (_, _) => { });
+            }
 
             Add(new osu.Framework.Graphics.Containers.Container
             {
@@ -1504,12 +1525,15 @@ public sealed partial class OffscreenVisualCaptureTests
                     return;
 
                 workspace.BeginAnalysisProgress();
-                bool complete = state is CoachingCaptureState.Complete or CoachingCaptureState.PracticeMany;
+                bool complete = state is CoachingCaptureState.Complete or CoachingCaptureState.PracticeMany or CoachingCaptureState.AdaptiveMap;
                 workspace.SetAnalysisProgress(complete ? 7 : 3, 7, "Blue Zenith [Another]");
                 if (complete)
                     workspace.ApplyNewAnalyses(3, 0);
                 else if (state == CoachingCaptureState.Error)
                     workspace.SetAnalysisError();
+                if (state == CoachingCaptureState.AdaptiveMap && replays.Length > 0)
+                    typeof(NativeCoachingWorkspace).GetMethod("chooseCoachingRun", BindingFlags.Instance | BindingFlags.NonPublic)!
+                        .Invoke(workspace, new object[] { replays[0].ScoreId });
             }, 1200);
         }
 
@@ -1551,6 +1575,7 @@ public sealed partial class OffscreenVisualCaptureTests
         PracticeMany,
         Error,
         Empty,
+        AdaptiveMap,
     }
 
     private sealed partial class CaptureReplayAnalysisGame : OsuGameBase

@@ -977,6 +977,7 @@ public partial class AimModGame : OsuGameBase
         };
         coachingWorkspace.ConfigurePracticeSessions(new CoachingPracticeSessionStore(Storage.GetFullPath($"coaching/practice-sessions-{currentOsuProfile?.UserId ?? 0}.json", true)),
             () => new TrainerHistoryStore(Storage.GetFullPath($"trainers/history-{currentOsuProfile?.UserId ?? 0}.json", true)).Load());
+        coachingWorkspace.ConfigureAdaptivePractice(adaptivePracticeStore, startAdaptivePractice);
         switchWorkspaceRoute(NativeRoute.Coaching, coachingWorkspace);
         coachingWorkspace.RefreshHistory();
         coachingWorkspace.SetAutomaticPracticeStatus(automaticPracticeStatus);
