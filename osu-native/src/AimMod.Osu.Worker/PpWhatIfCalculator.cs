@@ -9,7 +9,6 @@ using osu.Game.Rulesets.Osu;
 using osu.Game.Rulesets.Osu.Difficulty;
 using osu.Game.Rulesets.Scoring;
 using osu.Game.Scoring;
-using osu.Game.Tests.Beatmaps;
 using osu.Game.Online.API;
 using osu.Game.Rulesets;
 using Newtonsoft.Json;

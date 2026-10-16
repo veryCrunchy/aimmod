@@ -1,6 +1,5 @@
 using AimMod.Desktop.LocalLibrary;
 using AimMod.Desktop.Trainers;
-using osu.Game.Tests.Beatmaps;
 using osu.Game.Beatmaps;
 
 namespace AimMod.Desktop;

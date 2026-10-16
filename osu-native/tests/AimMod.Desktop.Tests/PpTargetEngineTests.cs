@@ -203,7 +203,7 @@ public sealed class PpTargetEngineTests
         };
         OfficialBeatmapSet wrongStatus = set(2, "loved", difficulty(11, 5.2) with { Bpm = 180, TotalLengthSeconds = 130 });
         var official = new PpTargetEstimate(210, 340, new PpTargetRange(180, 240), 1, PpTargetConfidence.High,
-            "Official osu! ruleset ppy.osu.Game/2026.730.0");
+            "Official osu! ruleset ppy.osu.Game/2026.916.0");
         PpTargetFilters filters = new(
             SearchText: "target mapper game",
             MinimumStars: 5, MaximumStars: 5.5,
@@ -268,7 +268,7 @@ public sealed class PpTargetEngineTests
         ]);
         var official = new PpTargetEstimate(
             321, 456, new PpTargetRange(290, 350), 1, PpTargetConfidence.High,
-            "Official osu! ruleset ppy.osu.Game/2026.730.0");
+            "Official osu! ruleset ppy.osu.Game/2026.916.0");
 
         PpTargetRankingResult result = PpTargetRanker.Rank(
             profile,

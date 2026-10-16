@@ -50,7 +50,7 @@ class ReleaseChannelManifestTests(unittest.TestCase):
             self.assertEqual("1.2.3", manifest["version"])
             self.assertEqual("a" * 40, manifest["commitSha"])
             self.assertEqual("2026-09-04T12:30:00Z", manifest["publishedAt"])
-            self.assertEqual("8.0.424", manifest["build"]["dotnetSdk"])
+            self.assertEqual("10.0.401", manifest["build"]["dotnetSdk"])
             self.assertEqual("win-stable", manifest["updateFeeds"]["windows"]["channel"])
             self.assertEqual(["linux-x64", "win-x64"], [item["runtimeIdentifier"] for item in manifest["installers"]])
             self.assertTrue(all(item["supportsInAppUpdates"] for item in manifest["installers"]))

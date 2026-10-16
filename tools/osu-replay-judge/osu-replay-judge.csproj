@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <TargetFramework>net8.0</TargetFramework>
+    <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <PublishSingleFile>true</PublishSingleFile>
@@ -13,12 +13,12 @@
 
   <ItemGroup>
     <!--
-      2026.730.0 is the newest official ppy NuGet release currently available.
+      2026.916.0 is the newest official ppy NuGet release currently available.
       It is also the closest published ruleset build to the user's installed
       lazer 2026.804.2 client. Keep both packages on the exact same version:
       replay decoding and judgement rules must move together.
     -->
-    <PackageReference Include="ppy.osu.Game" Version="2026.730.0" />
-    <PackageReference Include="ppy.osu.Game.Rulesets.Osu" Version="2026.730.0" />
+    <PackageReference Include="ppy.osu.Game" Version="2026.916.0" />
+    <PackageReference Include="ppy.osu.Game.Rulesets.Osu" Version="2026.916.0" />
   </ItemGroup>
 </Project>

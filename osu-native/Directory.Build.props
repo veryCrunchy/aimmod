@@ -1,6 +1,6 @@
 <Project>
   <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
+    <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
@@ -9,4 +9,10 @@
     <Deterministic>true</Deterministic>
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
   </PropertyGroup>
+  <ItemGroup>
+    <!-- AutoMapper 13 is a transitive dependency of ppy.osu.Game, used only to detach osu!'s own Realm models.
+         The advisory concerns mapping deeply nested untrusted graphs; the patched AutoMapper releases are
+         commercially licensed and not used by osu!. Revisit when ppy.osu.Game moves off AutoMapper 13. -->
+    <NuGetAuditSuppress Include="https://github.com/advisories/GHSA-rvv3-g6hj-g44x" />
+  </ItemGroup>
 </Project>

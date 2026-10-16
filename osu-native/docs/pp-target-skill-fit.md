@@ -58,7 +58,7 @@ Developer probe, from a Release build:
 ```sh
 cd osu-native
 dotnet build src/AimMod.Desktop/AimMod.Desktop.csproj -c Release
-dotnet src/AimMod.Desktop/bin/Release/net8.0/AimMod.dll --pp-backtest
+dotnet src/AimMod.Desktop/bin/Release/net10.0/AimMod.dll --pp-backtest
 ```
 
 It discovers the local osu!lazer and osu!stable libraries, keeps the most frequent local player's plays and prints aggregate metrics only: no map titles, paths or player names. Do not commit its output. It does not sign in, so only locally stored PP is used (lazer scores; stable scores need AimMod's hydrated PP). AimMod's hydrated local PP is read from a private copy of its cache, so the app cache is never modified; No Fail plays are skipped. Without beatmap files the probe replaces the calculator with a fixed osu!-like shape (miss penalty `0.96 / (m / (4 ln(n)^0.94) + 1)`, `accuracy^4`, `combo^0.1`) anchored on each map's own near-full-combo recorded PP; errors therefore measure the predicted score statistics in PP units, not calculator differences.

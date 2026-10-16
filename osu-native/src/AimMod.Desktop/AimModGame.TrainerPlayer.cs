@@ -1,4 +1,3 @@
-using osu.Game.Tests.Beatmaps;
 using AimMod.Desktop.Trainers;
 using osu.Framework.Allocation;
 using osu.Framework.Graphics;

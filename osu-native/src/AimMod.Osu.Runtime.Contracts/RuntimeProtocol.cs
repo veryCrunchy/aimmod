@@ -167,7 +167,7 @@ public sealed record ReplayJudgementSummary(int Great, int Ok, int Meh, int Miss
 
 public static class ReplayAnalysisProtocol
 {
-    public const string EngineVersion = "ppy.osu.Game/2026.730.0";
+    public const string EngineVersion = "ppy.osu.Game/2026.916.0";
     public const int WallClockTimeoutMs = 120_000;
     public const long MaximumBeatmapBytes = 16 * 1024 * 1024;
     public const long MaximumReplayBytes = 64 * 1024 * 1024;

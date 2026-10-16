@@ -32,7 +32,7 @@ if (args is ["--probe"])
         type = "probe",
         protocolVersion = Protocol.Version,
         engine = "ppy.osu.Game",
-        engineVersion = "2026.730.0",
+        engineVersion = "2026.916.0",
         renderer = "native-window",
         audio = "native-bass-mixer",
         offscreen = false,

@@ -114,12 +114,12 @@ public sealed class ExternalLazerRealmBridgeTests
     [Test]
     public void UsesTheSchemaVersionFromThePinnedPpyRelease()
     {
-        // ppy.osu.Game 2026.730.0 source commit 1032a7c31581513c8be751e46f0940e1c95ed252
-        // declares RealmAccess.schema_version = 51.
+        // ppy.osu.Game 2026.916.0 source commit 98fb49876c0242fcf649e0250d6f6b3458769a9e
+        // declares RealmAccess.schema_version = 52.
         Assert.Multiple(() =>
         {
-            Assert.That(ReplayAnalysisProtocol.EngineVersion, Is.EqualTo("ppy.osu.Game/2026.730.0"));
-            Assert.That(RealmLazerLibrarySnapshotFactory.SupportedSchemaVersion, Is.EqualTo(51));
+            Assert.That(ReplayAnalysisProtocol.EngineVersion, Is.EqualTo("ppy.osu.Game/2026.916.0"));
+            Assert.That(RealmLazerLibrarySnapshotFactory.SupportedSchemaVersion, Is.EqualTo(52));
         });
     }
 

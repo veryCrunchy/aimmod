@@ -10,8 +10,9 @@ namespace AimMod.Osu.Worker;
 /// </summary>
 public sealed class RealmLazerLibrarySnapshotFactory : ILazerLibrarySnapshotFactory
 {
-    // ppy.osu.Game 2026.730.0 pins RealmAccess.schema_version to 51.
-    internal const ulong SupportedSchemaVersion = 51;
+    // ppy.osu.Game 2026.916.0 pins RealmAccess.schema_version to 52. Snapshots are dynamic, so lazer
+    // databases one schema older or newer still open, and their stored version is never rewritten.
+    internal const ulong SupportedSchemaVersion = 52;
 
     private readonly object ownershipLock = new();
     private readonly Dictionary<Guid, OwnedSnapshot> ownedSnapshots = new();

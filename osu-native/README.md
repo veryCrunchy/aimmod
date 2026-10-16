@@ -42,7 +42,7 @@ The release script verifies checked-in dependency pins and rejects React, Tauri,
 
 Dedicated Windows and Linux builds publish through isolated stable and preview channels. See [docs/release-channels.md](docs/release-channels.md) for artifact names, fixed channel manifest URLs, and publishing instructions.
 
-The local proof of concept pins `ppy.osu.Game` and `ppy.osu.Game.Rulesets.Osu` to `2026.730.0`, the newest matching pair published on NuGet during development.
+The local proof of concept pins `ppy.osu.Game` and `ppy.osu.Game.Rulesets.Osu` to `2026.916.0`, the newest matching pair published on NuGet.
 
 Run the native wiring probe without opening a window:
 

@@ -322,7 +322,7 @@ public sealed class LocalScorePpHydrationService : ILocalScorePpHydrationService
         && double.IsFinite(run.Accuracy) && run.Accuracy is >= 0 and <= 1
         && run.MaxCombo >= 0 && run.MissCount >= 0;
 
-    private static bool validPp(double? value) => value is >= 0 and <= 10_000 && double.IsFinite(value.Value);
+    private static bool validPp([System.Diagnostics.CodeAnalysis.NotNullWhen(true)] double? value) => value is >= 0 and <= 10_000 && double.IsFinite(value.Value);
 
     private static string cacheKey(LocalReplay run)
     {
