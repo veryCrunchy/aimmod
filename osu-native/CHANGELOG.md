@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.0](https://github.com/veryCrunchy/aimmod/compare/aimmod-osu-v0.4.0...aimmod-osu-v0.5.0) (2026-10-17)
+
+
+### Features
+
+* **osu:** adaptive practice as coaching's default, on osu! 2026.916.0 and .NET 10 ([#35](https://github.com/veryCrunchy/aimmod/issues/35)) ([aab5396](https://github.com/veryCrunchy/aimmod/commit/aab53966ca8b6a2bbf97f8ff6092b98c33279283))
+
 ## [0.4.0](https://github.com/veryCrunchy/aimmod/compare/aimmod-osu-v0.3.1...aimmod-osu-v0.4.0) (2026-09-30)
 
 
