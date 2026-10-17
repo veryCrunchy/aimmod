@@ -11,7 +11,7 @@ using osu.Game.Rulesets.Objects.Types;
 
 namespace AimMod.Desktop.Trainers;
 
-public partial class NativeTrainerPlayer : Player
+public partial class NativeTrainerPlayer : Player, IPracticeGameplaySession
 {
     [Cached(typeof(IGameplayLeaderboardProvider))]
     private readonly SoloGameplayLeaderboardProvider leaderboard = new();

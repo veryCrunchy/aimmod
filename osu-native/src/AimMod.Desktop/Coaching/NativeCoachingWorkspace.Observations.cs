@@ -116,8 +116,11 @@ public partial class NativeCoachingWorkspace
             var actions = new FillFlowContainer<Drawable> { AutoSizeAxes = Axes.Both, Direction = FillDirection.Horizontal, Spacing = new(8) };
             if (run.HasReplayFile && openReplayMoment is not null)
                 actions.Add(new CoachingButton($"Watch {AimModCoachTimeline.format(section.TimeMs)}", () => openReplayMoment(run, section.TimeMs), compact: true));
+            // Practise starts adaptive practice at this section; generated drills stay one click away.
+            if (canStartAdaptive(run) && section.FirstObjectIndex >= 0)
+                actions.Add(new CoachingButton("Practise from here", () => playAdaptive(run, section.FirstObjectIndex), compact: true));
             if (practiceWorkspace is not null)
-                actions.Add(new CoachingButton("Practise", () => practiceWorkspace.OpenBreakdown(
+                actions.Add(new CoachingButton(canStartAdaptive(run) ? "Drills" : "Practise", () => practiceWorkspace.OpenBreakdown(
                     new PracticeMapCandidate(run, observation.ScoreIds, Math.Max(1, observation.Plays), run.MissCount, 0),
                     section.FirstObjectIndex), compact: true));
             host.Add(new CoachingSectionCard(section, visualFor(section), actions));

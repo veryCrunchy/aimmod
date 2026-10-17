@@ -1,4 +1,3 @@
-using osu.Game.Tests.Beatmaps;
 using AimMod.Desktop.Trainers;
 using osu.Framework.Allocation;
 using osu.Framework.Graphics;
@@ -18,9 +17,15 @@ using osu.Game.Screens;
 
 namespace AimMod.Desktop;
 
+/// <summary>A full-window gameplay session hosted by AimMod: one trainer run or a multi-attempt practice session.</summary>
+public interface IPracticeGameplaySession : osu.Framework.Screens.IScreen
+{
+    void StopSession();
+}
+
 public partial class AimModGame
 {
-    private NativeTrainerPlayer? trainerPlayer;
+    private IPracticeGameplaySession? trainerPlayer;
     private Container? trainerOverlay;
     private Action? restoreTrainerSettings;
 
@@ -109,6 +114,24 @@ public partial class AimModGame
     private void launchPreparedGameplayCore(TrainerSettings settings, bool mouseButtons, WorkingBeatmap map,
         Action<TrainerResult?> complete, Action release, double seekTime, Action<double>? fadeOutro, Mod[] mods)
     {
+        TrainerResult? result = null;
+        launchGameplaySession(settings, mouseButtons, map, mods, release, () => complete(result), applyTablet => new NativeTrainerPlayer(settings, value =>
+        {
+            result = value;
+            applyTablet.Finished();
+        }) { SeekTime = seekTime, OutroProgress = fadeOutro, OnReady = applyTablet.Apply });
+    }
+
+    /// <summary>Lets a session apply the player's tablet area once gameplay is ready, and report when it has ended.</summary>
+    private sealed class GameplaySessionHooks(Action apply, Action finished)
+    {
+        public void Apply() => apply();
+        public void Finished() => finished();
+    }
+
+    private void launchGameplaySession(TrainerSettings settings, bool mouseButtons, WorkingBeatmap map, Mod[] mods,
+        Action release, Action closed, Func<GameplaySessionHooks, IPracticeGameplaySession> create)
+    {
         WorkingBeatmap previousMap = Beatmap.Value;
         var previousRuleset = Ruleset.Value;
         var previousMods = SelectedMods.Value;
@@ -165,7 +188,12 @@ public partial class AimModGame
                 new osu.Game.Graphics.Containers.ScalingContainer(LocalConfig.Get<ScalingMode>(OsuSetting.Scaling) == ScalingMode.Everything
                     ? ScalingMode.Everything : ScalingMode.ExcludeOverlays) { Child = stack }] });
         bool finished = false;
-        trainerPlayer = new NativeTrainerPlayer(settings, result => Schedule(() =>
+        var session = create(new GameplaySessionHooks(() =>
+        {
+            if (trainerOsuSettings?.Input?.Tablet is {} mapping)
+                foreach (var device in Host.AvailableInputHandlers.OfType<ITabletHandler>())
+                { device.OutputAreaSize.Value = mapping.OutputSize; device.OutputAreaOffset.Value = mapping.OutputOffset; }
+        }, () => Schedule(() =>
         {
             if (finished) return;
             finished = true;
@@ -175,15 +203,11 @@ public partial class AimModGame
             restoreTrainerSettings?.Invoke();
             if (previousCursor is {} cursor && Host.Window is {} window) window.CursorState = cursor;
             content.Show(); header.Show();
-            complete(result);
+            closed();
             // Player disposal is deferred by the framework. Release its private audio afterwards.
             Scheduler.AddDelayed(release, 1000);
-        })) { SeekTime = seekTime, OutroProgress = fadeOutro, OnReady = () =>
-        {
-            if (trainerOsuSettings?.Input?.Tablet is {} mapping)
-                foreach (var device in Host.AvailableInputHandlers.OfType<ITabletHandler>())
-                { device.OutputAreaSize.Value = mapping.OutputSize; device.OutputAreaOffset.Value = mapping.OutputOffset; }
-        } };
-        stack.Push(trainerPlayer);
+        })));
+        trainerPlayer = session;
+        stack.Push(session);
     }
 }

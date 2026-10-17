@@ -10,7 +10,9 @@ public sealed record PracticeCollectionResult(IReadOnlyList<string> InstalledHas
 public static class PracticeCollectionSync
 {
     public const string CollectionName = "AimMod coaching";
-    private const ulong schemaVersion = 51;
+    // ppy.osu.Game 2026.916.0 declares RealmAccess.schema_version = 52. Dynamic access accepts older and newer
+    // lazer databases with additive changes and never rewrites the stored version.
+    private const ulong schemaVersion = 52;
     private const int retained_journal_entries = 8;
 
     public static PracticeCollectionResult Lazer(string root, string journalDirectory, IEnumerable<string> active, IEnumerable<string> retired)

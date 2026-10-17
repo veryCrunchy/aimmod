@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
   "distribution": "aimmod-osu",
-  "dotnetSdk": "8.0.424",
+  "dotnetSdk": "10.0.401",
   "packages": [
     {
       "id": "ppy.osu.Game",
-      "version": "2026.730.0",
+      "version": "2026.916.0",
       "usedBy": [
         "src/AimMod.Desktop/AimMod.Desktop.csproj",
         "src/AimMod.Osu.Worker/AimMod.Osu.Worker.csproj"
@@ -13,7 +13,7 @@
     },
     {
       "id": "ppy.osu.Game.Rulesets.Osu",
-      "version": "2026.730.0",
+      "version": "2026.916.0",
       "usedBy": [
         "src/AimMod.Desktop/AimMod.Desktop.csproj",
         "src/AimMod.Osu.Worker/AimMod.Osu.Worker.csproj"
@@ -21,7 +21,7 @@
     },
     {
       "id": "ppy.osu.Game.Rulesets.Taiko",
-      "version": "2026.730.0",
+      "version": "2026.916.0",
       "usedBy": [
         "src/AimMod.Desktop/AimMod.Desktop.csproj",
         "src/AimMod.Osu.Worker/AimMod.Osu.Worker.csproj"
@@ -29,7 +29,7 @@
     },
     {
       "id": "ppy.osu.Game.Rulesets.Catch",
-      "version": "2026.730.0",
+      "version": "2026.916.0",
       "usedBy": [
         "src/AimMod.Desktop/AimMod.Desktop.csproj",
         "src/AimMod.Osu.Worker/AimMod.Osu.Worker.csproj"
@@ -37,7 +37,7 @@
     },
     {
       "id": "ppy.osu.Game.Rulesets.Mania",
-      "version": "2026.730.0",
+      "version": "2026.916.0",
       "usedBy": [
         "src/AimMod.Desktop/AimMod.Desktop.csproj",
         "src/AimMod.Osu.Worker/AimMod.Osu.Worker.csproj"
@@ -45,8 +45,8 @@
     }
   ],
   "containerFallback": {
-    "image": "mcr.microsoft.com/dotnet/sdk:8.0",
-    "requiredSdk": "8.0.424",
+    "image": "mcr.microsoft.com/dotnet/sdk:10.0",
+    "requiredSdk": "10.0.401",
     "pull": false
   }
 }

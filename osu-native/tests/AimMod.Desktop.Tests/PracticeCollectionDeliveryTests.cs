@@ -71,6 +71,36 @@ public class PracticeCollectionDeliveryTests
         });
     }
 
+    // Users run lazer releases on either side of AimMod's pinned osu! version. Dynamic access must work on
+    // both and must never rewrite the stored schema version, or lazer would re-run its own migrations.
+    [TestCase(51UL)]
+    [TestCase(52UL)]
+    public async Task LazerCollectionSyncLeavesTheInstalledSchemaVersionUnchanged(ulong installed)
+    {
+        await Task.Run(() =>
+        {
+            var schema = new RealmSchema.Builder
+            {
+                new ObjectSchema.Builder("BeatmapCollection")
+                {
+                    Property.Primitive("ID", RealmValueType.Guid, isPrimaryKey: true), Property.Primitive("Name", RealmValueType.String),
+                    Property.Primitive("LastModified", RealmValueType.Date), Property.PrimitiveList("BeatmapMD5Hashes", RealmValueType.String),
+                },
+                new ObjectSchema.Builder("Beatmap") { Property.Primitive("MD5Hash", RealmValueType.String) },
+            }.Build();
+            string path = Path.Combine(root, "client.realm");
+            using (var realm = Realm.GetInstance(new RealmConfiguration(path) { IsDynamic = true, SchemaVersion = installed, Schema = schema }))
+                realm.Write(() => realm.DynamicApi.CreateObject("Beatmap").DynamicApi.Set("MD5Hash", first));
+
+            var result = PracticeCollectionSync.Lazer(root, Path.Combine(root, "journal"), [first], []);
+
+            Assert.That(result.InstalledHashes, Is.EqualTo(new[] { first }));
+            ulong? stored = null;
+            using (Realm.GetInstance(new RealmConfiguration(path) { SchemaVersion = installed + 100, Schema = schema, MigrationCallback = (_, old) => stored = old })) { }
+            Assert.That(stored, Is.EqualTo(installed));
+        });
+    }
+
     [Test]
     public void StableCollectionPreservesUnrelatedDataAndDefersWhileGameIsRunning()
     {

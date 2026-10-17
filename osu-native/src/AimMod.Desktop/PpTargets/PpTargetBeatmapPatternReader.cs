@@ -8,7 +8,6 @@ using AimMod.Desktop.LocalLibrary;
 using osu.Game.Rulesets.Mods;
 using osu.Game.Rulesets.Osu;
 using osu.Game.Rulesets.Osu.Objects;
-using osu.Game.Tests.Beatmaps;
 
 namespace AimMod.Desktop.PpTargets;
 

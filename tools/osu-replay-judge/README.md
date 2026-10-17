@@ -2,7 +2,7 @@
 
 This sidecar runs a local osu!standard replay through the official lazer replay player and ruleset score processor. Its JSON output uses one clock: beatmap gameplay milliseconds. Replay frames, hit-object times, judgement times, and pause times are not rebased to the first recorded cursor frame.
 
-The project pins `ppy.osu.Game` and `ppy.osu.Game.Rulesets.Osu` to `2026.730.0`. That is the newest official ppy NuGet release available as of 2026-09-02, and the nearest published build to the locally installed lazer `2026.804.2`. Both packages stay on the same version so replay decoding and judgement rules cannot drift apart.
+The project pins `ppy.osu.Game` and `ppy.osu.Game.Rulesets.Osu` to `2026.916.0`, the newest official ppy NuGet release available as of 2026-10-02. Both packages stay on the same version so replay decoding and judgement rules cannot drift apart.
 
 Usage:
 

@@ -16,7 +16,6 @@ using osu.Game.Scoring.Legacy;
 using osu.Game.Screens;
 using osu.Game.Screens.Play;
 using osu.Game.Tests;
-using osu.Game.Tests.Beatmaps;
 using osuTK;
 
 var jsonOptions = new JsonSerializerOptions
@@ -78,6 +77,17 @@ catch (Exception error)
     return 4;
 }
 
+/// <summary>Supplies an already decoded beatmap with a virtual track and no skin or files.</summary>
+sealed class JudgeWorkingBeatmap(IBeatmap beatmap, osu.Framework.Audio.AudioManager audio) : WorkingBeatmap(beatmap.BeatmapInfo, audio)
+{
+    public override bool BeatmapLoaded => true;
+    protected override IBeatmap GetBeatmap() => beatmap;
+    protected override osu.Game.Skinning.ISkin? GetSkin() => null;
+    public override Stream? GetStream(string storagePath) => null;
+    public override osu.Framework.Graphics.Textures.Texture? GetBackground() => null;
+    protected override osu.Framework.Audio.Track.Track? GetBeatmapTrack() => null;
+}
+
 sealed class SuppliedBeatmapScoreDecoder : LegacyScoreDecoder
 {
     private readonly WorkingBeatmap beatmap;
@@ -127,7 +137,7 @@ sealed partial class ReplayJudgeGame : OsuGameBase
             Audio.VolumeTrack.Value = 0;
             Audio.VolumeSample.Value = 0;
 
-            var workingBeatmap = new TestWorkingBeatmap(sourceBeatmap, audioManager: Audio);
+            var workingBeatmap = new JudgeWorkingBeatmap(sourceBeatmap, Audio);
             workingBeatmap.LoadTrack();
             using (var replayStream = File.OpenRead(replayPath))
                 score = new SuppliedBeatmapScoreDecoder(workingBeatmap).Parse(replayStream);
@@ -331,6 +341,6 @@ sealed record ReplayJudgeResponse(
 
 static class ReplayJudgeProtocol
 {
-    public const string EngineVersion = "ppy.osu.Game/2026.730.0";
+    public const string EngineVersion = "ppy.osu.Game/2026.916.0";
     public static readonly TimeSpan WallClockTimeout = TimeSpan.FromMinutes(2);
 }

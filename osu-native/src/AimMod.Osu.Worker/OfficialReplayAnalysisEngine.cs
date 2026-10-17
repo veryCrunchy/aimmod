@@ -25,7 +25,6 @@ using osu.Game.Scoring.Legacy;
 using osu.Game.Screens;
 using osu.Game.Screens.Play;
 using osu.Game.Tests;
-using osu.Game.Tests.Beatmaps;
 using osuTK;
 
 namespace AimMod.Osu.Worker;
@@ -201,7 +200,7 @@ internal sealed partial class ReplayAnalysisGame : OsuGameBase
             cancellationToken.ThrowIfCancellationRequested();
 
             // These values are defensive. HeadlessGameHost already has no sound
-            // device and TestWorkingBeatmap supplies a TrackVirtual rather than
+            // device and AnalysisWorkingBeatmap supplies a virtual track rather than
             // opening the beatmap's audio file.
             Audio.Volume.Value = 0;
             Audio.VolumeTrack.Value = 0;
@@ -322,18 +321,26 @@ internal sealed class HeadlessRulesetConfigCache : IRulesetConfigCache
         configs.GetOrAdd(ruleset.ShortName, _ => ruleset.CreateConfig(null));
 }
 
-internal sealed class AnalysisWorkingBeatmap : TestWorkingBeatmap
+/// <summary>Supplies an already decoded beatmap with no skin, storyboard assets or audio file.</summary>
+internal sealed class AnalysisWorkingBeatmap : WorkingBeatmap
 {
+    private readonly IBeatmap beatmap;
     private readonly double trackLength;
     private readonly IClock analysisClock;
 
     public AnalysisWorkingBeatmap(IBeatmap beatmap, osu.Framework.Audio.AudioManager? audioManager, IClock? analysisClock = null)
-        : base(beatmap, audioManager: audioManager)
+        : base(beatmap.BeatmapInfo, audioManager)
     {
+        this.beatmap = beatmap;
         this.analysisClock = analysisClock ?? new StopwatchClock();
         trackLength = Math.Max(1_000, beatmap.HitObjects.Select(hitObject => hitObject.GetEndTime()).DefaultIfEmpty(0).Max() + 10_000);
     }
 
+    public override bool BeatmapLoaded => true;
+    protected override IBeatmap GetBeatmap() => beatmap;
+    protected override osu.Game.Skinning.ISkin? GetSkin() => null;
+    public override Stream? GetStream(string storagePath) => null;
+    public override osu.Framework.Graphics.Textures.Texture? GetBackground() => null;
     protected override Track GetBeatmapTrack() => new HeadlessAnalysisTrack(trackLength, analysisClock);
 }
 

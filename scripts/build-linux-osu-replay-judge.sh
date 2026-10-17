@@ -30,7 +30,7 @@ if command -v dotnet >/dev/null 2>&1 && [[ -n "$(dotnet --list-sdks 2>/dev/null)
     --self-contained true \
     --output "$publish_dir" \
     --nologo
-elif command -v podman >/dev/null 2>&1 && podman image exists mcr.microsoft.com/dotnet/sdk:8.0; then
+elif command -v podman >/dev/null 2>&1 && podman image exists mcr.microsoft.com/dotnet/sdk:10.0; then
   mkdir -p -- "$repo_root/.cache/dotnet-home/.nuget/packages"
   container_output="/workspace/${publish_dir#"$repo_root/"}"
   podman run --rm \
@@ -40,7 +40,7 @@ elif command -v podman >/dev/null 2>&1 && podman image exists mcr.microsoft.com/
     --env NUGET_PACKAGES=/workspace/.cache/dotnet-home/.nuget/packages \
     --volume "$repo_root:/workspace" \
     --workdir /workspace \
-    mcr.microsoft.com/dotnet/sdk:8.0 \
+    mcr.microsoft.com/dotnet/sdk:10.0 \
     dotnet publish tools/osu-replay-judge/osu-replay-judge.csproj \
       --configuration Release \
       --runtime linux-x64 \
