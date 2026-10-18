@@ -51,14 +51,14 @@ public partial class NativeStatisticsWorkspace
         var timing = summary.Timing;
         if (timing.UnstableRate is { } ur && timing.MeanOffsetMs is { } offset)
         {
-            body.Add(line("Timing", $"UR {ci(ur, "0")} · {bias(offset)} · {timing.EarlyShare:P0} of {timing.Hits:N0} hits early · {plays(ur.Plays)}"));
+            body.Add(line("Timing", $"UR {ci(ur, "0")} · {bias(offset)} · {(timing.EarlyShare ?? 0) * 100:0}% of {timing.Hits:N0} hits early · {plays(ur.Plays)}"));
         }
         else body.Add(line("Timing", "Not enough timed hits yet."));
 
         if (summary.Keys.Count > 0)
         {
             foreach (var key in summary.Keys)
-                body.Add(line($"{key.Key} key", $"{key.Share:P0} of hits"
+                body.Add(line($"{key.Key} key", $"{key.Share * 100:0}% of hits"
                     + (key.MeanOffsetMs is { } m ? $" · {bias(m)}" : "")
                     + (key.UnstableRate is { } u ? $" · UR {ci(u, "0")}" : "")
                     + $" · {plays(key.MeanOffsetMs?.Plays ?? 0)}"));
@@ -71,7 +71,7 @@ public partial class NativeStatisticsWorkspace
         {
             body.Add(label("PATTERNS · EARLIER HALF → RECENT HALF"));
             foreach (var p in summary.Patterns)
-                body.Add(line(p.Pattern, $"accuracy {pair(p.EarlierAccuracy, p.RecentAccuracy, v => v.ToString("P1", CultureInfo.InvariantCulture))}"
+                body.Add(line(p.Pattern, $"accuracy {pair(p.EarlierAccuracy, p.RecentAccuracy, v => (v * 100).ToString("0.0", CultureInfo.InvariantCulture) + "%")}"
                     + $" · misses {pair(p.EarlierMissRate, p.RecentMissRate, v => (v * 100).ToString("0.0", CultureInfo.InvariantCulture) + "/100")}"
                     + (p.RecentUnstableRate is not null ? $" · UR {pair(p.EarlierUnstableRate, p.RecentUnstableRate, v => v.ToString("0", CultureInfo.InvariantCulture))}" : "")
                     + $" · {plays(p.Plays)}"));

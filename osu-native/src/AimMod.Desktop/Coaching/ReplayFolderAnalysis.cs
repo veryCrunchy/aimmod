@@ -18,6 +18,9 @@ public sealed record Estimate(double Mean, double Low, double High, int Plays)
         return new(mean, mean - half, mean + half, v.Length);
     }
 
+    /// <summary>The interval cut to the values the measure can take, such as accuracy between 0 and 1.</summary>
+    public Estimate Within(double minimum, double maximum) => this with { Low = Math.Max(minimum, Low), High = Math.Min(maximum, High) };
+
     private static readonly double[] t_table = [12.706, 4.303, 3.182, 2.776, 2.571, 2.447, 2.365, 2.306, 2.262, 2.228,
         2.201, 2.179, 2.160, 2.145, 2.131, 2.120, 2.110, 2.101, 2.093, 2.086, 2.080, 2.074, 2.069, 2.064, 2.060, 2.056, 2.052, 2.048, 2.045, 2.042];
 
@@ -90,10 +93,10 @@ public static class ReplayFolderAnalysis
 
         int keyedHits = keyHits.Values.Sum();
         var keys = keyHits.OrderBy(k => k.Key, StringComparer.Ordinal).Select(k => new FolderKey(k.Key, k.Value, k.Value / (double)keyedHits,
-            Estimate.Of(keyMeans.GetValueOrDefault(k.Key) ?? []), Estimate.Of(keyUrs.GetValueOrDefault(k.Key) ?? []))).ToArray();
+            Estimate.Of(keyMeans.GetValueOrDefault(k.Key) ?? []), Estimate.Of(keyUrs.GetValueOrDefault(k.Key) ?? [])?.Within(0, double.MaxValue))).ToArray();
 
         return new ReplayFolderSummary(plays.Length, plays.Count(p => !p.Passed), withKeys,
-            new FolderTiming(Estimate.Of(urs), Estimate.Of(means), hits == 0 ? null : early / (double)hits, urs.Count, hits),
+            new FolderTiming(Estimate.Of(urs)?.Within(0, double.MaxValue), Estimate.Of(means), hits == 0 ? null : early / (double)hits, urs.Count, hits),
             keys, patterns(plays, analyses, now), misses(plays, analyses));
     }
 
@@ -109,10 +112,12 @@ public static class ReplayFolderAnalysis
             if (outcomes.Length < 4) continue;
             var earlier = outcomes[..(outcomes.Length / 2)];
             var recent = outcomes[(outcomes.Length / 2)..];
+            Estimate? share(IEnumerable<double> values) => Estimate.Of(values)?.Within(0, 1);
+            Estimate? ur(IEnumerable<PpPatternOutcome> half) => Estimate.Of(half.Select(o => o.UnstableRate ?? double.NaN))?.Within(0, double.MaxValue);
             trends.Add(new FolderPatternTrend(pattern, outcomes.Length,
-                Estimate.Of(earlier.Select(o => o.Accuracy)), Estimate.Of(recent.Select(o => o.Accuracy)),
-                Estimate.Of(earlier.Select(o => o.MissRate)), Estimate.Of(recent.Select(o => o.MissRate)),
-                Estimate.Of(earlier.Select(o => o.UnstableRate ?? double.NaN)), Estimate.Of(recent.Select(o => o.UnstableRate ?? double.NaN))));
+                share(earlier.Select(o => o.Accuracy)), share(recent.Select(o => o.Accuracy)),
+                share(earlier.Select(o => o.MissRate)), share(recent.Select(o => o.MissRate)),
+                ur(earlier), ur(recent)));
         }
         return trends.OrderBy(t => t.Pattern == "Overall" ? 0 : 1).ThenByDescending(t => t.Plays).ToArray();
     }

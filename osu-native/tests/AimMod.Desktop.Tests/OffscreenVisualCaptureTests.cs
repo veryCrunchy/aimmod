@@ -75,6 +75,8 @@ public sealed partial class OffscreenVisualCaptureTests
     [TestCase("statistics", 1100, 760)]
     [TestCase("statistics-populated", 1100, 760)]
     [TestCase("statistics-populated", 1600, 900)]
+    [TestCase("statistics-analysis-populated", 1100, 760)]
+    [TestCase("statistics-analysis-populated", 800, 760)]
     [TestCase("statistics-mods", 1100, 760)]
     [TestCase("statistics-mods", 800, 600)]
     [TestCase("coaching-populated", 1100, 760)]
@@ -168,6 +170,7 @@ public sealed partial class OffscreenVisualCaptureTests
                 "beatmaps-populated" => new CaptureBeatmapGame(host, source, outputPath, width, height, succeeded, failed),
                 "statistics-mods" => new CaptureStatisticsGame(host, source, outputPath, width, height, succeeded, failed),
                 "statistics-populated" => new CaptureStatisticsGame(host, source, outputPath, width, height, succeeded, failed),
+                "statistics-analysis-populated" => new CaptureStatisticsGame(host, source, outputPath, width, height, succeeded, failed),
                 "coaching-populated" => new CaptureCoachingGame(host, source, outputPath, width, height, CoachingCaptureState.Analysing, succeeded, failed),
                 "coaching-complete" => new CaptureCoachingGame(host, source, outputPath, width, height, CoachingCaptureState.Complete, succeeded, failed),
                 "coaching-practice-many" => new CaptureCoachingGame(host, source, outputPath, width, height, CoachingCaptureState.PracticeMany, succeeded, failed),
@@ -1396,7 +1399,42 @@ public sealed partial class OffscreenVisualCaptureTests
                     var menu = (osu.Framework.Graphics.UserInterface.Menu)typeof(osu.Framework.Graphics.UserInterface.Dropdown<string>).GetField("Menu", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(dropdown)!;
                     menu.Open();
                 }, 1000);
-            Scheduler.AddDelayed(capture, 1500);
+            bool analysis = outputPath.Contains("statistics-analysis", StringComparison.Ordinal);
+            if (analysis && source is InMemoryLocalLibrarySource memory)
+            {
+                var replays = (IReadOnlyList<LocalReplay>)typeof(InMemoryLocalLibrarySource).GetField("replays", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(memory)!;
+                workspace.ConfigureReplayAnalysis(replays.ToDictionary(r => r.ScoreId, syntheticAnalysis), (_, _) => { });
+            }
+            if (analysis)
+                Scheduler.AddDelayed(() =>
+                {
+                    var scroll = (osu.Framework.Graphics.Containers.ScrollContainer<osu.Framework.Graphics.Drawable>)typeof(NativeStatisticsWorkspace)
+                        .GetField("runScroll", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(workspace)!;
+                    var section = (osu.Framework.Graphics.Drawable)typeof(NativeStatisticsWorkspace)
+                        .GetField("folderSection", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(workspace)!;
+                    scroll.ScrollIntoView(section, false);
+                }, 4200);
+            Scheduler.AddDelayed(capture, analysis ? 5000 : 1500);
+        }
+
+        /// <summary>Synthetic judgements: alternating keys with a small early bias on one, spread that improves with time.</summary>
+        private static ReplayAnalysisResult syntheticAnalysis(LocalReplay run)
+        {
+            var random = new Random(run.ScoreId.GetHashCode());
+            double spread = 6 + (run.PlayedAt.DayOfYear % 9);
+            var judgements = new List<ReplayObjectJudgement>();
+            for (int i = 0; i < 160; i++)
+            {
+                bool left = i % 2 == 0;
+                double offset = (left ? -4 : 2) + (random.NextDouble() * 2 - 1) * spread;
+                bool miss = random.NextDouble() < .01;
+                double time = 2_000 + i * (i % 16 < 8 ? 110 : 260);
+                judgements.Add(new ReplayObjectJudgement(i, null, "HitCircle", time, time, miss ? "Miss" : Math.Abs(offset) > 30 ? "Ok" : "Great", "Great",
+                    time + offset, offset, 1, new ReplayPoint(80 + i * 37 % 360, 60 + i * 53 % 260), null, i, miss ? 0 : i + 1,
+                    miss ? new ReplayMissAnalysis(ReplayMissReason.LateClick, 30, 40, 20, new ReplayPoint(0, 0), 25, 35, null, 40, true, false, false, 0) : null,
+                    miss ? null : left ? ReplayPressedKey.Left : ReplayPressedKey.Right));
+            }
+            return new ReplayAnalysisResult(ReplayAnalysisProtocol.EngineVersion, "map", true, 0, [], judgements, ReplayJudgementSummary.Empty);
         }
 
         private void capture()
