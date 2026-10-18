@@ -32,6 +32,23 @@ public sealed class OsuHubSyncTests
     }
 
     [Test]
+    public async Task SharedAnalysisLeavesOutWhichKeyPressedEachHit()
+    {
+        (LocalReplay replay, LocalBeatmapSet set, LocalBeatmapDifficulty difficulty) = createLocalData();
+        var judgement = new ReplayObjectJudgement(0, null, "HitCircle", 1_000, 1_000, "Great", "Great", 1_002, 2, 1, null, null, 0, 1,
+            PressedKey: ReplayPressedKey.Left);
+        var analysis = new ReplayAnalysisResult(ReplayAnalysisProtocol.EngineVersion, "map", true, 0, [], [judgement], ReplayJudgementSummary.Empty);
+        var request = await OsuHubContractFactory.CreateAsync(new OsuHubSyncInput(replay, set, difficulty, new OsuHubProfile(42, "player"), analysis,
+            OsuHubVisibility.Public, UploadAnalysis: true));
+        string json = JsonSerializer.Serialize(request, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        Assert.Multiple(() =>
+        {
+            Assert.That(json, Does.Contain("\"comboAfter\":1"), "the analysis is shared");
+            Assert.That(json, Does.Not.Contain("pressedKey"), "the Hub's analysis schema is unchanged");
+        });
+    }
+
+    [Test]
     public async Task SharedScoresKeepWhetherThePlayPassed()
     {
         (LocalReplay replay, LocalBeatmapSet set, LocalBeatmapDifficulty difficulty) = createLocalData();

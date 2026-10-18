@@ -9,6 +9,30 @@ namespace AimMod.Osu.Worker.Tests;
 public sealed class OfficialReplayAnalysisEngineTests
 {
     [Test]
+    public void EachHitIsCreditedToTheKeyThatWentDown()
+    {
+        var frames = new[]
+        {
+            new osu.Game.Rulesets.Osu.Replays.OsuReplayFrame(0, new osuTK.Vector2()),
+            new osu.Game.Rulesets.Osu.Replays.OsuReplayFrame(100, new osuTK.Vector2(), osu.Game.Rulesets.Osu.OsuAction.LeftButton),
+            new osu.Game.Rulesets.Osu.Replays.OsuReplayFrame(180, new osuTK.Vector2(), osu.Game.Rulesets.Osu.OsuAction.LeftButton, osu.Game.Rulesets.Osu.OsuAction.RightButton),
+            new osu.Game.Rulesets.Osu.Replays.OsuReplayFrame(260, new osuTK.Vector2(), osu.Game.Rulesets.Osu.OsuAction.RightButton),
+            new osu.Game.Rulesets.Osu.Replays.OsuReplayFrame(300, new osuTK.Vector2()),
+            new osu.Game.Rulesets.Osu.Replays.OsuReplayFrame(400, new osuTK.Vector2(), osu.Game.Rulesets.Osu.OsuAction.LeftButton, osu.Game.Rulesets.Osu.OsuAction.RightButton),
+        };
+        var presses = AnalysisReplayPlayer.KeyPresses(frames);
+        Assert.Multiple(() =>
+        {
+            Assert.That(presses.Select(p => p.Key), Is.EqualTo(new[] { ReplayPressedKey.Left, ReplayPressedKey.Right, ReplayPressedKey.Both }),
+                "holding a key is not a new press");
+            Assert.That(AnalysisReplayPlayer.PressedKeyAt(presses, 100), Is.EqualTo(ReplayPressedKey.Left));
+            Assert.That(AnalysisReplayPlayer.PressedKeyAt(presses, 190), Is.EqualTo(ReplayPressedKey.Right));
+            Assert.That(AnalysisReplayPlayer.PressedKeyAt(presses, 260), Is.Null, "no press within 50 ms before the hit");
+            Assert.That(AnalysisReplayPlayer.PressedKeyAt(presses, 50), Is.Null);
+        });
+    }
+
+    [Test]
     public void HeadlessTrackUsesTheProvidedClockAndPreservesGameplayRate()
     {
         var clock = new ManualClock();

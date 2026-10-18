@@ -150,6 +150,7 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
                                         RelativeSizeAxes = Axes.X,
                                         Child = trendCard = chartCard(),
                                     },
+                                    createFolderSection(),
                                     new FillFlowContainer
                                     {
                                         RelativeSizeAxes = Axes.X,
@@ -582,6 +583,7 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
     {
         lastModel = model;
         stateCard.Dismiss();
+        renderFolder(model.Runs);
         StatisticsInsights insights = model.Insights;
         string count = model.Runs.Count == allRuns.Count || allRuns.Count == 0
             ? $"{model.Runs.Count:N0} {(model.Runs.Count == 1 ? "play" : "plays")}"

@@ -22,6 +22,6 @@ This is the statement AimMod shows in Settings, under What AimMod reads. A test 
 ## What AimMod shares
 
 - Nothing, unless you link an AimMod Hub account.
-- Scores are shared only when you share them, or when you turn on automatic sharing. They say whether the play passed, and replay files and judgement analysis are only included if you choose to include them.
+- Scores are shared only when you share them, or when you turn on automatic sharing. They say whether the play passed, and replay files and judgement analysis are only included if you choose to include them. Which key pressed each hit is never included.
 - Completed trainer sessions sync to your Hub account while training sync is on (on by default once linked, and can be turned off in Account & sharing). Your keys, offset, file paths and devices never leave the app.
 - Adaptive practice and trainer plays are never shared as scores.

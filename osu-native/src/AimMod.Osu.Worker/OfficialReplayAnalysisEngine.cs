@@ -434,6 +434,7 @@ internal sealed partial class AnalysisReplayPlayer : ReplayPlayer
     private readonly Action<ReplayAnalysisException> fail;
     private readonly double replayEndTime;
     private readonly OsuReplayFrame[] replayFrames;
+    private readonly (double Time, string Key)[] presses;
     private readonly CancellationToken cancellationToken;
     private readonly List<ReplayObjectJudgement> judgements = new();
     private Dictionary<HitObject, ObjectAddress> addresses = new(ReferenceEqualityComparer.Instance);
@@ -460,6 +461,7 @@ internal sealed partial class AnalysisReplayPlayer : ReplayPlayer
                             .Where(frame => double.IsFinite(frame.Time))
                             .OrderBy(frame => frame.Time)
                             .ToArray();
+        presses = KeyPresses(replayFrames);
         replayEndTime = score.Replay.Frames.Select(frame => frame.Time)
                              .Where(time => double.IsFinite(time) && time >= 0)
                              .DefaultIfEmpty(double.PositiveInfinity)
@@ -566,7 +568,37 @@ internal sealed partial class AnalysisReplayPlayer : ReplayPlayer
             cursorPosition is null ? null : new ReplayPoint(cursorPosition.Value.X, cursorPosition.Value.Y),
             result.ComboAtJudgement,
             result.ComboAfterJudgement,
-            missAnalysis));
+            missAnalysis,
+            result.Type.IsHit() && result.HitObject is HitCircle ? PressedKeyAt(presses, result.TimeAbsolute) : null));
+    }
+
+    /// <summary>Every moment a key went down, and which: a frame that holds a key the frame before did not.</summary>
+    internal static (double Time, string Key)[] KeyPresses(IReadOnlyList<OsuReplayFrame> frames)
+    {
+        var pressed = new List<(double, string)>();
+        var held = new List<OsuAction>();
+        foreach (var frame in frames)
+        {
+            bool left = frame.Actions.Contains(OsuAction.LeftButton) && !held.Contains(OsuAction.LeftButton);
+            bool right = frame.Actions.Contains(OsuAction.RightButton) && !held.Contains(OsuAction.RightButton);
+            if (left || right)
+                pressed.Add((frame.Time, left && right ? ReplayPressedKey.Both : left ? ReplayPressedKey.Left : ReplayPressedKey.Right));
+            held = frame.Actions;
+        }
+        return pressed.ToArray();
+    }
+
+    /// <summary>The key whose press made a hit: the latest press up to the hit, at most 50 ms before it.</summary>
+    internal static string? PressedKeyAt((double Time, string Key)[] presses, double hitTime)
+    {
+        int low = 0, high = presses.Length - 1, found = -1;
+        while (low <= high)
+        {
+            int middle = (low + high) / 2;
+            if (presses[middle].Time <= hitTime + 1) { found = middle; low = middle + 1; }
+            else high = middle - 1;
+        }
+        return found >= 0 && hitTime - presses[found].Time <= 50 ? presses[found].Key : null;
     }
 
     private static Dictionary<HitObject, ObjectAddress> indexObjects(IBeatmap beatmap)

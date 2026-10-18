@@ -180,7 +180,8 @@ public static class OsuHubContractFactory
                     input.Analysis.Pauses,
                     input.Analysis.Summary,
                     input.Analysis.ContentIdentity,
-                    input.Analysis.Judgements));
+                    // Which key pressed each hit stays local; the Hub's analysis schema does not carry it.
+                    input.Analysis.Judgements.Select(j => j.PressedKey is null ? j : j with { PressedKey = null }).ToArray()));
 
         return new OsuHubSyncRequest(
             SchemaVersion,

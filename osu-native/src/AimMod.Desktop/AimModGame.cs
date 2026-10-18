@@ -916,6 +916,7 @@ public partial class AimModGame : OsuGameBase
         {
             RelativeSizeAxes = Axes.Both,
         };
+        statisticsScreen.ConfigureReplayAnalysis(replayAnalyses, prepareCatalogReplayMoment);
         switchWorkspaceRoute(NativeRoute.Statistics, statisticsScreen);
         statisticsScreen.RefreshHistory();
     }
