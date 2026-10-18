@@ -66,6 +66,8 @@ public sealed partial class OffscreenVisualCaptureTests
     [TestCase("skins", 1100, 760)]
     [TestCase("settings", 1100, 760)]
     [TestCase("settings", 1600, 900)]
+    [TestCase("settings-reads", 1100, 760)]
+    [TestCase("settings-reads", 800, 760)]
     [TestCase("settings-training", 1100, 760)]
     [TestCase("settings-training", 1600, 900)]
     [TestCase("settings-practice-menu", 1100, 760)]
@@ -471,6 +473,11 @@ public sealed partial class OffscreenVisualCaptureTests
                         var scroll = (AimModScrollContainer)typeof(osu.Framework.Graphics.Containers.CompositeDrawable).GetProperty("InternalChild", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(screen)!;
                         scroll.ScrollTo(620, false);
                     }, 200);
+                }, 1600);
+                if (route == "settings-reads") Scheduler.AddDelayed(() =>
+                {
+                    var screen = (OsuClientSettingsScreen)typeof(AimModGame).GetField("settingsScreen", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(this)!;
+                    typeof(OsuClientSettingsScreen).GetMethod("showSettingsPage", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(screen, [4]);
                 }, 1600);
                 if (route == "settings-practice-menu") Scheduler.AddDelayed(() =>
                 {
