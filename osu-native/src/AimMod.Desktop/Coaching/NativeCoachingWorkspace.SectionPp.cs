@@ -62,6 +62,8 @@ public partial class NativeCoachingWorkspace
                 body.Add(flow($"Goal: a full combo with at most {goal:N0} × 100 is worth more than this play.", 13, coachingAccent));
             var costly = report.Costliest(costliest_sections).ToArray();
             if (costly.Length == 0) body.Add(flow("No section cost this play any pp.", 13, AimModPalette.Success));
+            else if (canStartAdaptive(run) && costly.Length > 1)
+                body.Add(new CoachingButton($"Practise these {costly.Length} sections first", () => playAdaptiveFocused(run, costly.Select(c => c.Section.FirstObject).ToArray()), true, true));
             foreach (var line in costly) body.Add(sectionPpRow(run, line));
             body.Add(flow("Each number is this play recalculated with only that section changed. pp is not additive, so they do not sum to a total.",
                 11, AimModPalette.Muted));

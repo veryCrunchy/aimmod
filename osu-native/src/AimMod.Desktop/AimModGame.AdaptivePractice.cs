@@ -28,7 +28,11 @@ public partial class AimModGame
     }
 
     /// <summary>Plays the original map, slowing the sections the player fails and speeding them up as they clear them.</summary>
-    private async void startAdaptivePractice(LocalReplay run, int? firstObjectIndex)
+    private void startAdaptivePractice(LocalReplay run, int? firstObjectIndex) =>
+        startFocusedAdaptivePractice(run, firstObjectIndex is { } first ? [first] : []);
+
+    /// <param name="focusObjects">First objects of the sections to drill first, most important first.</param>
+    private async void startFocusedAdaptivePractice(LocalReplay run, IReadOnlyList<int> focusObjects)
     {
         if (preparingTrainer || trainerPlayer is not null) return;
         preparingTrainer = true;
@@ -67,9 +71,13 @@ public partial class AimModGame
             // The allowance for 100s follows the play being practised, so it is refreshed every session.
             var progress = AdaptivePracticeCoach.Resume(store.Load(setup.Key), setup.Key, run.Title, run.Difficulty,
                 setup.TargetRate, sections.Count, DateTimeOffset.UtcNow) with { Leniency = setup.Leniency };
-            int? start = firstObjectIndex is { } first && sections.FirstOrDefault(s => first >= s.FirstObject && first <= s.LastObject) is { } chosen
-                ? chosen.Index : null;
-            var plan = new AdaptiveAttemptPlan(sections, progress, AdaptivePracticeCoach.Next(progress, sections, start));
+            int[] focus = focusObjects.Select(first => sections.FirstOrDefault(s => first >= s.FirstObject && first <= s.LastObject)?.Index ?? -1)
+                .Where(i => i >= 0).Distinct().ToArray();
+            // The chosen sections come first this session; a later plain start goes back to map order.
+            progress = progress with { Focus = focus.Length > 1 ? focus : null };
+            int? start = focus.Length > 0 ? focus[0] : null;
+            var timing = playable.ControlPointInfo.TimingPoints.Select(t => new AdaptiveTiming(t.Time, t.BeatLength, t.TimeSignature.Numerator)).ToArray();
+            var plan = new AdaptiveAttemptPlan(sections, progress, AdaptivePracticeCoach.Next(progress, sections, start), timing);
             var working = prepared;
             var sourceLease = lease;
             Schedule(() =>

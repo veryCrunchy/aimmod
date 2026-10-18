@@ -10,13 +10,16 @@ public partial class NativeCoachingWorkspace
 {
     private Func<AdaptivePracticeStore>? adaptiveStore;
     private Action<LocalReplay, int?>? startAdaptive;
+    private Action<LocalReplay, IReadOnlyList<int>>? startFocusedAdaptive;
     private Dictionary<string, AdaptivePracticeProgress> adaptiveProgress = [];
     private int adaptiveLoad;
 
-    public void ConfigureAdaptivePractice(Func<AdaptivePracticeStore> store, Action<LocalReplay, int?> start)
+    public void ConfigureAdaptivePractice(Func<AdaptivePracticeStore> store, Action<LocalReplay, int?> start,
+        Action<LocalReplay, IReadOnlyList<int>>? startFocused = null)
     {
         adaptiveStore = store;
         startAdaptive = start;
+        startFocusedAdaptive = startFocused;
         refreshAdaptiveProgress();
     }
 
@@ -51,6 +54,13 @@ public partial class NativeCoachingWorkspace
     private bool canStartAdaptive(LocalReplay? run) => run is not null && startAdaptive is not null && run.RulesetShortName == "osu";
 
     private void playAdaptive(LocalReplay run, int? firstObjectIndex = null) => startAdaptive?.Invoke(run, firstObjectIndex);
+
+    /// <summary>Drills these sections first, in this order, then the rest of the map as usual.</summary>
+    private void playAdaptiveFocused(LocalReplay run, IReadOnlyList<int> firstObjects)
+    {
+        if (startFocusedAdaptive is { } focused) focused(run, firstObjects);
+        else playAdaptive(run, firstObjects.Count > 0 ? firstObjects[0] : null);
+    }
 
     /// <summary>The first step on a map: play it through, with sections slowing down only where needed.</summary>
     private IEnumerable<Drawable> adaptiveStep(LocalReplay run)
