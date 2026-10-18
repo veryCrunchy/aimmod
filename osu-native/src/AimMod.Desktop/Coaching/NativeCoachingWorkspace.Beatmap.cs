@@ -48,6 +48,7 @@ public partial class NativeCoachingWorkspace
     {
         trainerRunsCache = null;
         mapDetailHost.Clear();
+        sectionPpShown = null;
         mapDetailHost.Spacing = new(12);
         mapDetailHost.Padding = new MarginPadding { Right = 12, Bottom = 12 };
         if (coachingMapId is null && coachingMapRun is { } selected)
@@ -129,6 +130,7 @@ public partial class NativeCoachingWorkspace
             }
             if (coachingMapSection == 0 && run is not null)
             {
+                renderSectionPp(mapDetailHost, run);
                 renderMapTimeline(mapDetailHost, run);
                 renderReplayObservations(mapDetailHost, run, found);
             }
