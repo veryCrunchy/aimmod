@@ -21,9 +21,15 @@ public sealed record SectionPpLine(AdaptiveSection Section, SectionTally Tally, 
 public sealed record SectionPpReport(Guid ScoreId, bool Passed, string Calculator, double? Pp, IReadOnlyList<SectionPpLine> Sections,
     double? SumOfBestPp, int CountedPlays, int? FullComboOkGoal)
 {
-    /// <summary>The sections that cost this play the most pp, worst first.</summary>
-    public IEnumerable<SectionPpLine> Costliest(int count) =>
-        Sections.Where(s => s.Lost is > 0.05).OrderByDescending(s => s.Lost).Take(count);
+    /// <summary>
+    /// The sections that cost this play the most pp, worst first. A section counts when it cost at least half a pp
+    /// and a tenth of the worst one, so a stray 100 does not fill the list.
+    /// </summary>
+    public IEnumerable<SectionPpLine> Costliest(int count)
+    {
+        double worst = Sections.Max(s => s.Lost ?? 0);
+        return Sections.Where(s => s.Lost is { } lost && lost >= Math.Max(.5, worst * .1)).OrderByDescending(s => s.Lost).Take(count);
+    }
 }
 
 public interface ISectionPpService

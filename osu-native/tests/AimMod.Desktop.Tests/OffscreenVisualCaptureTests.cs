@@ -87,6 +87,8 @@ public sealed partial class OffscreenVisualCaptureTests
     [TestCase("coaching-complete", 1600, 900)]
     [TestCase("coaching-practice-many", 1100, 760)]
     [TestCase("coaching-practice-many", 1600, 900)]
+    [TestCase("coaching-pp-map", 1100, 760)]
+    [TestCase("coaching-pp-map", 800, 760)]
     [TestCase("coaching-adaptive-map", 1100, 760)]
     [TestCase("coaching-adaptive-map", 1600, 900)]
     [TestCase("coaching-adaptive-map", 800, 760)]
@@ -177,6 +179,7 @@ public sealed partial class OffscreenVisualCaptureTests
                 "coaching-complete" => new CaptureCoachingGame(host, source, outputPath, width, height, CoachingCaptureState.Complete, succeeded, failed),
                 "coaching-practice-many" => new CaptureCoachingGame(host, source, outputPath, width, height, CoachingCaptureState.PracticeMany, succeeded, failed),
                 "coaching-adaptive-map" => new CaptureCoachingGame(host, source, outputPath, width, height, CoachingCaptureState.AdaptiveMap, succeeded, failed),
+                "coaching-pp-map" => new CaptureCoachingGame(host, source, outputPath, width, height, CoachingCaptureState.AdaptiveMap, succeeded, failed),
                 "coaching-error" => new CaptureCoachingGame(host, source, outputPath, width, height, CoachingCaptureState.Error, succeeded, failed),
                 "coaching-empty" => new CaptureCoachingGame(host, source, outputPath, width, height, CoachingCaptureState.Empty, succeeded, failed),
                 "replays-analysis" => new CaptureReplayAnalysisGame(host, source, outputPath, width, height, succeeded, failed),
@@ -1467,6 +1470,25 @@ public sealed partial class OffscreenVisualCaptureTests
         }
     }
 
+    /// <summary>A synthetic pp breakdown: two costly sections, one with a better best from an earlier play.</summary>
+    private sealed class StubSectionPp(AdaptiveSection[] sections) : ISectionPpService
+    {
+        public Task<SectionPpReport?> CalculateAsync(LocalReplay run, IReadOnlyDictionary<Guid, AimMod.Osu.Runtime.Contracts.ReplayAnalysisResult> analyses,
+            IReadOnlyList<LocalReplay> sameMap, CancellationToken cancellationToken)
+        {
+            SectionTally tally(int miss, int ok, int tail = 0) => new(20 - miss - ok, ok, 0, miss, 4 - tail, tail, 2, 0, miss, ComboRun.Empty.Add(20 - miss), true);
+            var lines = sections.Select((s, i) => i switch
+            {
+                4 => new SectionPpLine(s, tally(2, 3, 1), 14.8, 1.9, 17.6, new SectionBest(tally(0, 2), Guid.NewGuid(), DateTimeOffset.UtcNow.AddDays(-3), 6), 13.2),
+                7 => new SectionPpLine(s, tally(1, 1), 6.1, .7, 6.9, new SectionBest(tally(1, 1), run.ScoreId, run.PlayedAt, 6), 0),
+                9 => new SectionPpLine(s, tally(0, 6), 0, 3.4, 3.4, new SectionBest(tally(0, 2), Guid.NewGuid(), DateTimeOffset.UtcNow.AddDays(-1), 6), 2.2),
+                _ => new SectionPpLine(s, tally(0, 1), 0, .4, .4, null, null),
+            }).ToArray();
+            return Task.FromResult<SectionPpReport?>(new SectionPpReport(run.ScoreId, true, "ppy.osu.Game/2026.916.0, difficulty v20250306",
+                412.6, lines, 447.9, 6, 23));
+        }
+    }
+
     private sealed partial class CaptureCoachingGame : OsuGameBase
     {
         [Cached]
@@ -1549,6 +1571,12 @@ public sealed partial class OffscreenVisualCaptureTests
                 progress = AdaptivePracticeCoach.Fail(progress, sections, 6, 64_000, now);
                 store.Save(progress);
                 workspace.ConfigureAdaptivePractice(() => store, (_, _) => { });
+                if (outputPath.Contains("coaching-pp-map", StringComparison.Ordinal))
+                {
+                    workspace.ConfigureSectionPp(() => new StubSectionPp(sections));
+                    Scheduler.AddDelayed(() => ((AimModScrollContainer[])typeof(NativeCoachingWorkspace)
+                        .GetField("coachingPages", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(workspace)!)[4].ScrollTo(560, false), 2300);
+                }
             }
 
             Add(new osu.Framework.Graphics.Containers.Container
