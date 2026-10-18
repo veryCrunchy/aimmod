@@ -1,5 +1,6 @@
 using AimMod.Desktop.Hub;
 using AimMod.Desktop.Practice;
+using AimMod.Desktop.Privacy;
 using AimMod.Desktop.Onboarding;
 using AimMod.Desktop.Visuals;
 using osu.Framework.Bindables;
@@ -115,6 +116,7 @@ public partial class OsuClientSettingsScreen : CompositeDrawable
         addSettingsPage(items.Skip(4).Take(practiceStart-4));
         addSettingsPage(items.Skip(practiceStart).Take(startupStart-practiceStart));
         addSettingsPage(items.Skip(startupStart));
+        addSettingsPage(dataStatement());
         showSettingsPage(0);
     }
 
@@ -134,7 +136,7 @@ public partial class OsuClientSettingsScreen : CompositeDrawable
         selectedSettingsPage=selected;
         if(settingsTabs.Count==0)
         {
-            foreach(var (name,index) in new[]{"General","Account & sharing","Practice","Startup & tour"}.Select((name,index)=>(name,index)))
+            foreach(var (name,index) in new[]{"General","Account & sharing","Practice","Startup & tour","What AimMod reads"}.Select((name,index)=>(name,index)))
             {
                 var tab=new AimModButton(name,()=>showSettingsPage(index));
                 settingsTabs.Add(tab);
@@ -143,6 +145,15 @@ public partial class OsuClientSettingsScreen : CompositeDrawable
         }
         for(int i=0;i<settingsTabs.Count;i++)settingsTabs[i].SetSelected(i==selected);
         for(int i=0;i<settingsPages.Count;i++)settingsPages[i].Alpha=i==selected?1:0;
+    }
+
+    private static IEnumerable<Drawable> dataStatement()
+    {
+        foreach (var section in AimModDataStatement.Sections)
+        {
+            yield return new SpriteText {Text=section.Title.ToUpperInvariant(),Font=new FontUsage(size:14,weight:"Bold"),Colour=AimModPalette.Cyan};
+            foreach (string point in section.Points) yield return note("•  " + point, 13);
+        }
     }
 
     /// <summary>Muted explanatory copy that wraps instead of running past narrow pages.</summary>

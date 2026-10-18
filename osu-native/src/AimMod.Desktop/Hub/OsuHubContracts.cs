@@ -226,7 +226,7 @@ public static class OsuHubContractFactory
                 statistics.Meh,
                 statistics.Miss,
                 input.Replay.Mods,
-                true),
+                input.Replay.Passed),
             string.IsNullOrWhiteSpace(replaySha256) ? null : new OsuHubReplay(replaySha256, replayFilename, uploadFile),
             analysis);
     }

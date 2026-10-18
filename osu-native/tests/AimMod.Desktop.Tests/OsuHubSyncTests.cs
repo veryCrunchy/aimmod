@@ -32,6 +32,22 @@ public sealed class OsuHubSyncTests
     }
 
     [Test]
+    public async Task SharedScoresKeepWhetherThePlayPassed()
+    {
+        (LocalReplay replay, LocalBeatmapSet set, LocalBeatmapDifficulty difficulty) = createLocalData();
+        var profile = new OsuHubProfile(42, "player");
+
+        var passed = await OsuHubContractFactory.CreateAsync(new OsuHubSyncInput(replay, set, difficulty, profile, null, OsuHubVisibility.Public));
+        var failed = await OsuHubContractFactory.CreateAsync(new OsuHubSyncInput(replay with { Passed = false }, set, difficulty, profile, null, OsuHubVisibility.Public));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(passed.Score.Passed, Is.True);
+            Assert.That(failed.Score.Passed, Is.False, "a failed play must never be shared as a pass");
+        });
+    }
+
+    [Test]
     public async Task ContractUsesDifficultyIdentityAndDefaultsToPrivate()
     {
         (LocalReplay replay, LocalBeatmapSet set, LocalBeatmapDifficulty difficulty) = createLocalData();
