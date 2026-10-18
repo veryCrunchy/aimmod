@@ -67,12 +67,21 @@ public partial class NativeCoachingWorkspace
         if (!string.IsNullOrEmpty(automaticPracticeStatus)) practiceHistoryHost.Add(flow(automaticPracticeStatus, 13, AimModPalette.Muted));
         if (practiceHistoryFailed) practiceHistoryHost.Add(flow("Results could not be refreshed. Try again.",16,AimModPalette.Danger));
         string query = savedPracticeSearch.Current.Value.Trim();
+        var adaptive = showArchivedPractice ? [] : adaptiveMaps(query);
+        if (adaptive.Count > 0)
+        {
+            practiceHistoryHost.Add(new SectionLine("Adaptive practice", $"{adaptive.Count} {(adaptive.Count == 1 ? "map" : "maps")} · most recent first"));
+            foreach (var (run, progress) in adaptive)
+                practiceHistoryHost.Add(new AdaptiveMapRow(run, progress, () => openCoachingMap(null, run, returnPage: 3)));
+        }
         var groups = practiceSets.Where(s => showArchivedPractice ? s.Map.RetiredAt is not null : s.Map.RetiredAt is null).GroupBy(set => CoachingMapKey(set.Map)).ToArray();
         var visible = groups.Where(group => group.Any(set =>
             (set.Map.Title + " " + set.Map.Difficulty + " " + string.Join(" ", set.Map.Tracking?.Difficulties.Select(d => d.Name) ?? []))
                 .Contains(query, StringComparison.OrdinalIgnoreCase))).ToArray();
-        practiceHistoryHost.Add(flow($"{visible.Length} of {groups.Length} beatmaps · {visible.Sum(g => g.Count())} sets",12,AimModPalette.Muted));
-        if (visible.Length == 0)
+        if (groups.Length > 0 || adaptive.Count == 0)
+            practiceHistoryHost.Add(new SectionLine(showArchivedPractice ? "Archived practice sets" : "Practice sets",
+                $"{visible.Length} of {groups.Length} beatmaps · {visible.Sum(g => g.Count())} sets"));
+        if (visible.Length == 0 && adaptive.Count == 0)
         {
             practiceHistoryHost.Add(flow(groups.Length == 0
                 ? showArchivedPractice ? "No archived practice sets." : "Choose a map to start your first practice session. Your exercises and progress will stay together here."
@@ -96,5 +105,55 @@ public partial class NativeCoachingWorkspace
                 () => openCoachingMap(group.Key)));
         }
         if (coachingMapId is not null || coachingMapRun is not null) renderCoachingMap();
+    }
+
+    /// <summary>Maps with saved adaptive practice that match the search, unfinished first, then by last practice.</summary>
+    private IReadOnlyList<(LocalLibrary.LocalReplay Run, AdaptivePracticeProgress Progress)> adaptiveMaps(string query)
+    {
+        if (adaptiveProgress.Count == 0) return [];
+        var runs = new Dictionary<string, LocalLibrary.LocalReplay>();
+        foreach (var run in allReplays.Where(r => r.RulesetShortName == "osu").OrderByDescending(r => r.PlayedAt))
+        {
+            string key = AdaptivePracticeSetup.For(run).Key;
+            if (adaptiveProgress.ContainsKey(key)) runs.TryAdd(key, run);
+        }
+        return adaptiveProgress.Values
+            .Where(p => runs.ContainsKey(p.MapKey) && (p.Title + " " + p.Difficulty).Contains(query, StringComparison.OrdinalIgnoreCase))
+            .OrderBy(p => p.Completed).ThenByDescending(p => p.UpdatedAt)
+            .Select(p => (runs[p.MapKey], p)).ToArray();
+    }
+
+    /// <summary>A map with adaptive practice: where the player is with it, its section strip, and the map page on click.</summary>
+    private sealed partial class AdaptiveMapRow : AimModInteractiveSurface
+    {
+        public AdaptiveMapRow(LocalLibrary.LocalReplay run, AdaptivePracticeProgress progress, Action open)
+        {
+            RelativeSizeAxes = osu.Framework.Graphics.Axes.X; Height = 84; Action = open;
+            var strip = new AdaptiveSectionStrip(progress.Sections.Length) { RelativeSizeAxes = osu.Framework.Graphics.Axes.X, Height = 6, Y = 48 };
+            strip.Set(progress, -1);
+            string state = progress.Completed
+                ? $"Cleared at full speed on {progress.CompletedAt!.Value.ToLocalTime():dd MMM}"
+                : $"{progress.FullSpeedSections} of {progress.Sections.Length} sections at full speed · slowest {AdaptivePracticeCoach.Percent(progress.SlowestSpeed)}";
+            Children = [
+                new osu.Framework.Graphics.Containers.Container {
+                    RelativeSizeAxes = osu.Framework.Graphics.Axes.Both, Padding = new osu.Framework.Graphics.MarginPadding { Horizontal = 14, Top = 10 },
+                    Children = [
+                        new osu.Framework.Graphics.Containers.Container {
+                            RelativeSizeAxes = osu.Framework.Graphics.Axes.Both, Padding = new osu.Framework.Graphics.MarginPadding { Right = 40 },
+                            Children = [
+                                new osu.Game.Graphics.Sprites.TruncatingSpriteText { RelativeSizeAxes = osu.Framework.Graphics.Axes.X, Text = $"{run.Title} [{run.Difficulty}]",
+                                    Font = new osu.Framework.Graphics.Sprites.FontUsage(size: 16, weight: "SemiBold"), Colour = AimModPalette.Text },
+                                new osu.Game.Graphics.Sprites.TruncatingSpriteText { RelativeSizeAxes = osu.Framework.Graphics.Axes.X, Y = 24,
+                                    Text = $"{state} · {progress.Attempts:N0} attempts · {progress.UpdatedAt.ToLocalTime():dd MMM}",
+                                    Font = new osu.Framework.Graphics.Sprites.FontUsage(size: 12), Colour = progress.Completed ? AimModPalette.Success : AimModPalette.Muted },
+                                strip,
+                            ],
+                        },
+                        new osu.Framework.Graphics.Sprites.SpriteIcon { Icon = osu.Framework.Graphics.Sprites.FontAwesome.Solid.ChevronRight, Size = new(12),
+                            Colour = AimModPalette.Muted, Anchor = osu.Framework.Graphics.Anchor.CentreRight, Origin = osu.Framework.Graphics.Anchor.CentreRight, Y = -5 },
+                    ],
+                },
+            ];
+        }
     }
 }

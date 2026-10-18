@@ -46,7 +46,7 @@ public partial class NativeCoachingWorkspace
                 foreach (var (key, known) in adaptiveProgress)
                     if (!loaded.TryGetValue(key, out var stored) || stored.UpdatedAt < known.UpdatedAt) loaded[key] = known;
                 adaptiveProgress = loaded;
-                if (IsLoaded) renderCoachingMap();
+                if (IsLoaded) renderPracticeHistory();
             });
         });
     }
@@ -62,32 +62,5 @@ public partial class NativeCoachingWorkspace
         else playAdaptive(run, firstObjects.Count > 0 ? firstObjects[0] : null);
     }
 
-    /// <summary>The first step on a map: play it through, with sections slowing down only where needed.</summary>
-    private IEnumerable<Drawable> adaptiveStep(LocalReplay run)
-    {
-        var setup = AdaptivePracticeSetup.For(run);
-        var progress = adaptiveProgress.GetValueOrDefault(setup.Key);
-        string mods = setup.Mods.Count == 0 && Math.Abs(setup.TargetRate - 1) < .001 ? "" : $" Full speed is your play's setup: {setup.Label}.";
-        if (progress is null)
-        {
-            yield return startStep("Practise the whole map at your pace",
-                "Play through it. A section you fail repeats a little slower, then speeds back up as you clear it, until you can beat the map at full speed." + mods,
-                new CoachingButton("Start adaptive practice", () => playAdaptive(run), true, true));
-            yield break;
-        }
-        int total = progress.Sections.Length;
-        yield return progress.Completed
-            ? startStep("Cleared at full speed", $"You beat this map at full speed on {progress.CompletedAt!.Value.ToLocalTime():dd MMM}. Play it again to keep it consistent.",
-                new CoachingButton("Play again", () => playAdaptive(run), true, true))
-            : startStep("Continue adaptive practice", $"{progress.FullSpeedSections} of {total} sections cleared at full speed. Slowest section: {AdaptivePracticeCoach.Percent(progress.SlowestSpeed)}." + mods,
-                new CoachingButton("Continue", () => playAdaptive(run), true, true));
-        var strip = new AdaptiveSectionStrip(total) { RelativeSizeAxes = Axes.X, Height = 10 };
-        strip.Set(progress, -1);
-        yield return new CoachingCard(new FillFlowContainer
-        {
-            RelativeSizeAxes = Axes.X, AutoSizeAxes = Axes.Y, Direction = FillDirection.Vertical, Spacing = new(6),
-            Children = [label("Section speeds", 12, AimModPalette.Muted, "SemiBold"), strip,
-                flow("Mint sections are cleared at full speed. Amber to red sections are still slowed down.", 12, AimModPalette.Muted)],
-        }, 12);
-    }
+
 }

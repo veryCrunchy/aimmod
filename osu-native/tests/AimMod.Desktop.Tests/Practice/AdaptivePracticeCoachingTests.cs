@@ -38,8 +38,8 @@ public class AdaptivePracticeCoachingTests
             var captions = buttons.Select(caption).ToList();
 
             Assert.That(captions, Does.Contain("Start adaptive practice"));
-            Assert.That(captions, Does.Contain("Prepare practice set"), "generated practice sets stay available");
-            Assert.That(captions.IndexOf("Start adaptive practice"), Is.LessThan(captions.IndexOf("Prepare practice set")));
+            Assert.That(captions, Does.Contain("Generated drills"), "generated practice sets stay available");
+            Assert.That(captions.IndexOf("Start adaptive practice"), Is.LessThan(captions.IndexOf("Generated drills")));
 
             buttons.First(b => caption(b) == "Start adaptive practice").TriggerClick();
             Assert.That(started?.Run, Is.SameAs(run));
