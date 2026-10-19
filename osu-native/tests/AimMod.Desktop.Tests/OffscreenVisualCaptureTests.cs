@@ -88,6 +88,8 @@ public sealed partial class OffscreenVisualCaptureTests
     [TestCase("coaching-practice-many", 1100, 760)]
     [TestCase("coaching-practice-many", 1600, 900)]
     [TestCase("coaching-my-adaptive", 1100, 760)]
+    [TestCase("coaching-find-adaptive", 1100, 760)]
+    [TestCase("coaching-find-adaptive", 800, 760)]
     [TestCase("coaching-pp-map", 1100, 760)]
     [TestCase("coaching-pp-map", 800, 760)]
     [TestCase("coaching-adaptive-map", 1100, 760)]
@@ -180,6 +182,7 @@ public sealed partial class OffscreenVisualCaptureTests
                 "coaching-complete" => new CaptureCoachingGame(host, source, outputPath, width, height, CoachingCaptureState.Complete, succeeded, failed),
                 "coaching-practice-many" => new CaptureCoachingGame(host, source, outputPath, width, height, CoachingCaptureState.PracticeMany, succeeded, failed),
                 "coaching-adaptive-map" => new CaptureCoachingGame(host, source, outputPath, width, height, CoachingCaptureState.AdaptiveMap, succeeded, failed),
+                "coaching-find-adaptive" => new CaptureCoachingGame(host, source, outputPath, width, height, CoachingCaptureState.AdaptiveMap, succeeded, failed),
                 "coaching-my-adaptive" => new CaptureCoachingGame(host, source, outputPath, width, height, CoachingCaptureState.AdaptiveMap, succeeded, failed),
                 "coaching-pp-map" => new CaptureCoachingGame(host, source, outputPath, width, height, CoachingCaptureState.AdaptiveMap, succeeded, failed),
                 "coaching-error" => new CaptureCoachingGame(host, source, outputPath, width, height, CoachingCaptureState.Error, succeeded, failed),
@@ -1608,6 +1611,7 @@ public sealed partial class OffscreenVisualCaptureTests
                     workspace.SetAnalysisError();
                 if (state == CoachingCaptureState.AdaptiveMap && outputPath.Contains("coaching-my-adaptive", StringComparison.Ordinal))
                     typeof(NativeCoachingWorkspace).GetMethod("showCoachingPage", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(workspace, [3]);
+                else if (state == CoachingCaptureState.AdaptiveMap && outputPath.Contains("coaching-find-adaptive", StringComparison.Ordinal)) { }
                 else if (state == CoachingCaptureState.AdaptiveMap && replays.Length > 0)
                     typeof(NativeCoachingWorkspace).GetMethod("chooseCoachingRun", BindingFlags.Instance | BindingFlags.NonPublic)!
                         .Invoke(workspace, new object[] { replays[0].ScoreId });

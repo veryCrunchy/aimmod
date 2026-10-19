@@ -46,7 +46,7 @@ public partial class NativeCoachingWorkspace
                 foreach (var (key, known) in adaptiveProgress)
                     if (!loaded.TryGetValue(key, out var stored) || stored.UpdatedAt < known.UpdatedAt) loaded[key] = known;
                 adaptiveProgress = loaded;
-                if (IsLoaded) renderPracticeHistory();
+                if (IsLoaded) { renderPracticeHistory(); refreshRunList(); }
             });
         });
     }
