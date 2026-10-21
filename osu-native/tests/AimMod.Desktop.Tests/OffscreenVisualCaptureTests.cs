@@ -1490,7 +1490,7 @@ public sealed partial class OffscreenVisualCaptureTests
                 _ => new SectionPpLine(s, tally(0, 1), 0, .4, .4, null, null),
             }).ToArray();
             return Task.FromResult<SectionPpReport?>(new SectionPpReport(run.ScoreId, true, "ppy.osu.Game/2026.916.0, difficulty v20250306",
-                412.6, lines, 447.9, 6, 23));
+                412.6, lines, 447.9, 6, 23, 440.2));
         }
     }
 

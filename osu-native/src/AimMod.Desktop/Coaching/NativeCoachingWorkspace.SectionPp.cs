@@ -36,20 +36,5 @@ public partial class NativeCoachingWorkspace
         return null;
     }
 
-    private static string describe(SectionTally t) =>
-        (t.Miss + t.SliderBreaks == 0 ? "no misses" : mistakes(t)) + ", " + hundreds(t);
-
-    private static string mistakes(SectionTally t)
-    {
-        var parts = new List<string>();
-        if (t.Miss > 0) parts.Add(t.Miss == 1 ? "1 miss" : $"{t.Miss} misses");
-        if (t.LargeTickMiss > 0) parts.Add(t.LargeTickMiss == 1 ? "1 slider break" : $"{t.LargeTickMiss} slider breaks");
-        if (t.SliderTailMiss > 0) parts.Add(t.SliderTailMiss == 1 ? "1 dropped slider end" : $"{t.SliderTailMiss} dropped slider ends");
-        return string.Join(", ", parts);
-    }
-
-    private static string hundreds(SectionTally t) => t.Meh > 0 ? $"{t.Ok} × 100, {t.Meh} × 50" : $"{t.Ok} × 100";
-
     private static string points(double pp) => pp.ToString("N1", CultureInfo.InvariantCulture) + " pp";
-    private static string gain(double pp) => "+" + Math.Max(0, pp).ToString("N1", CultureInfo.InvariantCulture) + " pp";
 }

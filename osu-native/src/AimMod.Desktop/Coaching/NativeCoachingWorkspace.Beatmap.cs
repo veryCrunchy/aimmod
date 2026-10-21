@@ -108,9 +108,9 @@ public partial class NativeCoachingWorkspace
             }
             bool adaptive = coachingMapSection == 0 && canStartAdaptive(run);
             if (adaptive)
-                mapDetailHost.Add(adaptiveNextStep(run!, sets.Length > 0 ? null : focus is { } issue
+                renderMapOverview(mapDetailHost, run!, found, true, sets.Length > 0 ? null : focus is { } issue
                     ? $"Prefer separate drills? Turn {CoachingIssues.Label(issue.Kind).ToLowerInvariant()} at {AimModCoachTimeline.format(issue.TimeMs)} into generated tapping and aim difficulties."
-                    : "Prefer separate drills? Turn one section into generated tapping and aim difficulties.", sets.Length > 0 ? null : prepare));
+                    : "Prefer separate drills? Turn one section into generated tapping and aim difficulties.", sets.Length > 0 ? null : prepare);
             if (sets.Length == 0 && !adaptive)
                 mapDetailHost.Add(run is null
                     ? startStep("Choose a play first", "Pick a map from Find a map to turn its hardest section into exercises.",
@@ -126,11 +126,8 @@ public partial class NativeCoachingWorkspace
                 if(run is not null)actions.Add(new CoachingButton("New practice set",prepare,false,true));
                 mapDetailHost.Add(actions);
             }
-            if (coachingMapSection == 0 && run is not null)
-            {
-                renderFocusSections(mapDetailHost, run, found);
-                renderMapTimeline(mapDetailHost, run);
-            }
+            if (coachingMapSection == 0 && run is not null && !adaptive)
+                renderMapOverview(mapDetailHost, run, found, false, null, null);
             if (coachingMapSection == 1) renderSectionTable(sets);
             if(coachingMapSection==0 && latest?.Map.Tracking is not null)
             {

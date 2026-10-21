@@ -1,6 +1,6 @@
 # Where the pp went
 
-For an analysed osu!standard play, coaching shows which practice sections cost the play the most pp, and the player's best of every section.
+For an analysed osu!standard play, the coaching map page leads with what the play is worth, what a full combo of the same play would be worth, and a strip of the map showing where pp was lost. Below it, the sections to fix are ranked by the pp they would give back if played clean, each with what went wrong there in plain words and the player's best of that section.
 
 ## How it is worked out
 
@@ -10,7 +10,9 @@ The map is split into the same sections as adaptive practice. Every number comes
 - **100s and 50s:** the section with its 100s and 50s played as 300s. Combo is unchanged.
 - **Your best here:** the section played as well as the player's best of it at the same map, mods and speed.
 
-Each number changes only one section. pp is not additive, so the numbers do not add up to a total, and the card says so.
+The full combo number is the whole play with every miss, slider break and dropped slider end taken back and its 100s kept.
+
+Each section's number changes only that section. pp is not additive, so the numbers do not add up to a total, and the card says so.
 
 ## Section bests
 

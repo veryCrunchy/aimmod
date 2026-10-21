@@ -18,8 +18,9 @@ public sealed record SectionPpLine(AdaptiveSection Section, SectionTally Tally, 
 /// <param name="Calculator">The pp calculator the numbers come from, so they can be checked and compared.</param>
 /// <param name="SumOfBestPp">pp of one play made of the player's best of every section, once every section has a best.</param>
 /// <param name="FullComboOkGoal">The most 100s a full combo can have and still be worth more than this play.</param>
+/// <param name="FullComboPp">This play with every miss, slider break and dropped slider end taken back, its 100s kept.</param>
 public sealed record SectionPpReport(Guid ScoreId, bool Passed, string Calculator, double? Pp, IReadOnlyList<SectionPpLine> Sections,
-    double? SumOfBestPp, int CountedPlays, int? FullComboOkGoal)
+    double? SumOfBestPp, int CountedPlays, int? FullComboOkGoal, double? FullComboPp = null)
 {
     /// <summary>
     /// The sections that cost this play the most pp, worst first. A section counts when it cost at least half a pp
@@ -116,7 +117,9 @@ public sealed class SectionPpService(SectionLedgerStore ledger, Func<LocalReplay
 
             double? sumOfBest = entry.HasEveryBest ? await pp(entry.Bests.Select(b => b!.Tally)).ConfigureAwait(false) : null;
             int? goal = await fullComboGoal(tallies, current, pp).ConfigureAwait(false);
-            return new SectionPpReport(run.ScoreId, true, calculator, current, lines, sumOfBest, entry.Counted.Length, goal);
+            double fullCombo = lines.All(l => l.Tally.Miss + l.Tally.SliderBreaks == 0) ? current
+                : await pp(SectionLedger.Tally(analysis.Judgements, sections, _ => SectionRepair.Breaks)).ConfigureAwait(false);
+            return new SectionPpReport(run.ScoreId, true, calculator, current, lines, sumOfBest, entry.Counted.Length, goal, fullCombo);
         }
         // The breakdown is extra detail on the coaching page; a map or calculator problem only hides it.
         catch (Exception error) when (error is not OperationCanceledException)
