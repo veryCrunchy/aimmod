@@ -119,6 +119,27 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
 
     public void ClosePractice() { if (practiceWorkspace is not null) { practiceWorkspace.Alpha = 0; if (practiceWorkspace.IsShowingSavedPractice) showCoachingPage(coachingMapId is null ? 3 : 4); } refreshPracticeProgress(); }
 
+    /// <summary>Whether background analysis already failed for a play this session.</summary>
+    public Func<Guid, bool>? AnalysisFailed { get; set; }
+
+    /// <summary>Analyses a difficulty's replays now, ahead of the background queue.</summary>
+    public Action<LocalReplay>? AnalyseDifficulty { get; set; }
+
+    /// <summary>A difficulty's replays were just analysed: rebuild the report and the open coaching page.</summary>
+    public void RefreshAfterMapAnalysis()
+    {
+        requestModel(workspace?.SelectedRun?.ScoreId);
+        if (coachingMapRun is not null || coachingMapId is not null) renderCoachingMap();
+    }
+
+    /// <summary>Opens a difficulty's coaching page from one play, analysing its replays first when they are not yet.</summary>
+    private void coachPlay(LocalReplay run)
+    {
+        if (practiceWorkspace is not null) practiceWorkspace.Alpha = 0;
+        openCoachingMap(null, run);
+        if (run.HasReplayFile && !analyses.ContainsKey(run.ScoreId) && AnalysisFailed?.Invoke(run.ScoreId) != true) AnalyseDifficulty?.Invoke(run);
+    }
+
     private (string Title, LocalBeatmapDifficulty Difficulty)? pendingDifficultyFocus;
     private bool historyApplied;
 
@@ -151,8 +172,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         pendingDifficultyFocus = null;
         if (CoachingRunFor(allReplays, focus.Difficulty) is { } run)
         {
-            if (practiceWorkspace is not null) practiceWorkspace.Alpha = 0;
-            openCoachingMap(null, run);
+            coachPlay(run);
             return;
         }
         FocusPracticeMap(focus.Title);
@@ -180,6 +200,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         Func<LocalReplay, CancellationToken, Task>? openBeatmap = null, CoachingTrainingStore? trainingStore = null, PracticeMapLibrary? practiceLibrary = null, Func<int>? accountId = null,
         Action<LocalReplay, double>? openReplayMoment = null, Action? compareMovement = null, Action? openTrainers = null)
     {
+        if (practiceWorkspace is not null) practiceWorkspace.OpenCoaching = run => coachPlay(run);
         this.practiceLibrary = practiceLibrary;
         this.practiceAccountId = accountId ?? (() => 0);
         this.trainingStore = trainingStore;
@@ -537,6 +558,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
             practicePool = pool;
             renderedPracticePage = null;
         }
+        practiceWorkspace?.SetPlayedWithoutDrills(PracticeMapCandidateBuilder.PlayedWithoutDrills(model.History, analyses, pool, AnalysisFailed));
         loadingOverlay.HideLoading();
         updateWorkspace();
         if (pendingCompletion is not null)

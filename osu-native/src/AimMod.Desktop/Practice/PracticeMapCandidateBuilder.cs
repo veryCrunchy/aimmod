@@ -19,6 +19,30 @@ public sealed record PracticeMapCandidate(
         : $"{MissCount:N0} exact {(MissCount == 1 ? "miss" : "misses")} across {AnalysedAttempts:N0} analysed {(AnalysedAttempts == 1 ? "attempt" : "attempts")}";
 }
 
+/// <summary>Why a played difficulty has no drills. Its coaching page still offers adaptive practice.</summary>
+public enum PlayedWithoutDrillsReason { NoReplayFile, NotAnalysed, AnalysisFailed, NoProblemsFound }
+
+/// <summary>A difficulty played in the coaching timeframe that the drills list cannot offer sections for yet.</summary>
+/// <param name="Play">The play its coaching page opens from: the newest passed play, otherwise the newest play.</param>
+public sealed record PlayedDifficultyWithoutDrills(LocalReplay Play, int Plays, PlayedWithoutDrillsReason Reason)
+{
+    public string ReasonLabel => Reason switch
+    {
+        PlayedWithoutDrillsReason.NoReplayFile => "no replay saved",
+        PlayedWithoutDrillsReason.NotAnalysed => "not analysed yet",
+        PlayedWithoutDrillsReason.AnalysisFailed => "analysis failed",
+        _ => "no misses or timing problems found",
+    };
+
+    public string Explanation => Reason switch
+    {
+        PlayedWithoutDrillsReason.NoReplayFile => "Drills are built from replays, and osu! did not save a replay for these plays. Its coaching page still runs adaptive practice on the map.",
+        PlayedWithoutDrillsReason.NotAnalysed => "Its replays have not been analysed yet. Opening its coaching page analyses them now; drills appear here once they show misses or timing problems.",
+        PlayedWithoutDrillsReason.AnalysisFailed => "AimMod could not analyse its replays, usually because the map changed after they were set or its file is missing. Its coaching page still runs adaptive practice.",
+        _ => "Its analysed replays have no misses or timing problems to drill. Its coaching page can still practise the whole map or a chosen part.",
+    };
+}
+
 public sealed record PracticeMapGenerationRequest(
     PracticeMapCandidate Candidate,
     PracticeDrillType DrillType,
@@ -108,6 +132,13 @@ public static class PracticeMapCandidateSearch
         return new PracticeCandidatePage(matches.Take(Math.Clamp(limit, 0, 100)).ToArray(), matches.Length, available.Length);
     }
 
+    /// <summary>The star range and search text, without the evidence filter, for plays that are not drills.</summary>
+    public static bool MatchesPlay(LocalReplay replay, PracticeCandidateQuery query)
+    {
+        PracticeCandidateQuery safe = query.Normalised();
+        return isMatch(new PracticeMapCandidate(replay, [], 0, 0, 0), safe with { Evidence = PracticeEvidenceFilter.AnyEvidence });
+    }
+
     private static bool isMatch(PracticeMapCandidate candidate, PracticeCandidateQuery query)
     {
         LocalReplay replay = candidate.SourceReplay;
@@ -186,6 +217,36 @@ public static class PracticeMapCandidateBuilder
         LocalReplay source = evidence.OrderByDescending(item => item.Run.PlayedAt).First().Run;
         return new PracticeMapCandidate(source, evidence.Select(item => item.Run.ScoreId).ToArray(),
             evidence.Length, misses.Length, score, attemptsWithMisses, averageMissConfidence);
+    }
+
+    /// <summary>
+    /// Locally played difficulties in the history that the drills list has no entry for, with the reason. Grouped the
+    /// same way as drills, one entry per difficulty, newest first.
+    /// </summary>
+    public static IReadOnlyList<PlayedDifficultyWithoutDrills> PlayedWithoutDrills(
+        IEnumerable<LocalReplay> history,
+        IReadOnlyDictionary<Guid, ReplayAnalysisResult> analyses,
+        IEnumerable<PracticeMapCandidate> drills,
+        Func<Guid, bool>? analysisFailed = null)
+    {
+        ArgumentNullException.ThrowIfNull(history);
+        ArgumentNullException.ThrowIfNull(analyses);
+        var drilled = drills.Select(candidate => mapKey(candidate.SourceReplay)).ToHashSet(StringComparer.Ordinal);
+        return history.Where(run => run.IsLocallyStored && validMap(run) && string.Equals(run.RulesetShortName, "osu", StringComparison.OrdinalIgnoreCase))
+            .GroupBy(mapKey, StringComparer.Ordinal)
+            .Where(group => !drilled.Contains(group.Key))
+            .Select(group =>
+            {
+                var plays = group.OrderByDescending(run => run.PlayedAt).ToArray();
+                var withReplay = plays.Where(run => run.HasReplayFile).ToArray();
+                PlayedWithoutDrillsReason reason = withReplay.Length == 0 ? PlayedWithoutDrillsReason.NoReplayFile
+                    : withReplay.Any(run => analyses.GetValueOrDefault(run.ScoreId)?.Judgements is not null) ? PlayedWithoutDrillsReason.NoProblemsFound
+                    : analysisFailed is not null && withReplay.All(run => analysisFailed(run.ScoreId)) ? PlayedWithoutDrillsReason.AnalysisFailed
+                    : PlayedWithoutDrillsReason.NotAnalysed;
+                return new PlayedDifficultyWithoutDrills(plays.FirstOrDefault(run => run.Passed) ?? plays[0], plays.Length, reason);
+            })
+            .OrderByDescending(item => item.Play.PlayedAt)
+            .ToArray();
     }
 
     private static bool validMap(LocalReplay run) => run.BeatmapId != Guid.Empty || !string.IsNullOrWhiteSpace(run.BeatmapHash);

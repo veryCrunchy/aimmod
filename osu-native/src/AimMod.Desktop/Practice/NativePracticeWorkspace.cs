@@ -198,6 +198,21 @@ public partial class NativePracticeWorkspace : CompositeDrawable
         showEmpty();
     }
 
+    private IReadOnlyList<PlayedDifficultyWithoutDrills> playedWithoutDrills = [];
+    private const string played_key_prefix = "played:";
+
+    /// <summary>Opens a difficulty's coaching page from one of its plays, analysing its replays if they are not yet.</summary>
+    public Action<LocalReplay>? OpenCoaching { get; set; }
+
+    /// <summary>Played difficulties without drills, listed after the drills so they are not silently missing.</summary>
+    public void SetPlayedWithoutDrills(IReadOnlyList<PlayedDifficultyWithoutDrills> values)
+    {
+        if (ReferenceEquals(playedWithoutDrills, values)) return;
+        playedWithoutDrills = values;
+        dataRevision++;
+        if (Alpha > 0) refreshList();
+    }
+
     public void SetCandidates(IReadOnlyList<PracticeMapCandidate> values)
     {
         if (ReferenceEquals(candidates, values)) return;
@@ -281,11 +296,21 @@ public partial class NativePracticeWorkspace : CompositeDrawable
         {
             PracticeCandidatePage page = PracticeMapCandidateSearch.Search(candidates.Where(c=>CoachingRunKeys.Matches(c.SourceReplay,modSelection.Value)).ToArray(),
                 new PracticeCandidateQuery(search.Current.Value, sort.Value, evidence.Value, minimumStars.Value, maximumStars.Value));
-            count.Text = $"Find drills / {page.Total} matching maps / {candidates.Count} in coaching timeframe";
+            // Played difficulties without drills follow, unless an evidence filter asks for drills only.
+            var query = new PracticeCandidateQuery(search.Current.Value, sort.Value, evidence.Value, minimumStars.Value, maximumStars.Value);
+            var played = evidence.Value != PracticeEvidenceFilter.AnyEvidence ? []
+                : playedWithoutDrills.Where(item => CoachingRunKeys.Matches(item.Play, modSelection.Value) && PracticeMapCandidateSearch.MatchesPlay(item.Play, query))
+                    .Take(100).ToArray();
+            count.Text = $"Find drills / {page.Total} matching maps / {candidates.Count} in coaching timeframe"
+                + (played.Length > 0 ? $" / {played.Length} played without drills" : "");
             foreach (PracticeMapCandidate candidate in page.Items)
                 rows.Add(new(candidate.SourceReplay.ScoreId.ToString(), candidate.SourceReplay.Title, candidate.SourceReplay.Difficulty,
                     $"{candidate.SourceReplay.StarRating:0.00}* / {candidate.MissCount} misses / {candidate.AnalysedAttempts} attempts",
                     candidate.SourceReplay.BackgroundPath, selectRow));
+            foreach (PlayedDifficultyWithoutDrills item in played)
+                rows.Add(new(played_key_prefix + item.Play.ScoreId, item.Play.Title, item.Play.Difficulty,
+                    $"{item.Play.StarRating:0.00}* / {item.Plays} {(item.Plays == 1 ? "play" : "plays")} / Played, no drills yet: {item.ReasonLabel}",
+                    item.Play.BackgroundPath, selectRow));
         }
         list.SetRows(rows);
         if (rows.Count == 0)
@@ -307,11 +332,30 @@ public partial class NativePracticeWorkspace : CompositeDrawable
             var map = savedMaps.FirstOrDefault(item => item.Id == key);
             if (map is not null) showSaved(map);
         }
+        else if (key.StartsWith(played_key_prefix, StringComparison.Ordinal))
+        {
+            string id = key[played_key_prefix.Length..];
+            if (playedWithoutDrills.FirstOrDefault(item => item.Play.ScoreId.ToString() == id) is { } played) showPlayed(played);
+        }
         else
         {
             var candidate = candidates.FirstOrDefault(item => item.SourceReplay.ScoreId.ToString() == key);
             if (candidate is not null) select(candidate);
         }
+    }
+
+    /// <summary>Why a played difficulty has no drills, and the way to coach it anyway.</summary>
+    private void showPlayed(PlayedDifficultyWithoutDrills item)
+    {
+        if (generating) return;
+        selected = null; choice = null;
+        detail.Clear();
+        detail.Add(text(item.Play.Title, 20));
+        detail.Add(text($"{item.Play.Difficulty} / {item.Play.StarRating:0.00}* / {item.Plays} {(item.Plays == 1 ? "play" : "plays")} in the coaching timeframe", 13, AimModPalette.Cyan));
+        detail.Add(text($"No drills yet: {item.ReasonLabel}", 15));
+        detail.Add(paragraph(item.Explanation));
+        if (OpenCoaching is { } open)
+            detail.Add(new Button("Open coaching for this difficulty", FontAwesome.Solid.Crosshairs, () => open(item.Play), true));
     }
 
     private async Task reloadLibraryAsync(bool selectNewest = false)

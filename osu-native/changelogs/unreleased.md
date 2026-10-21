@@ -9,3 +9,4 @@
 - PP targets scan about twice as fast after your skill profile changes, and use more of your CPU on machines with many cores.
 - On Windows, PP targets can exclude its two scan folders from Microsoft Defender, after explaining why and with Windows' permission, so scans stop waiting for a malware check on every beatmap file. It can be undone in Settings. See [scan speed](../docs/pp-target-scan-speed.md).
 - Practice in the beatmap browser opens coaching for the difficulty you selected, instead of a list of the set's difficulties that might not include it.
+- Find drills lists the difficulties you played that have no drills yet, with the reason (not analysed yet, no replay saved, analysis failed, or nothing to drill), and opens their coaching page in one click, analysing their replays first if needed. See [find drills](../docs/find-drills.md).

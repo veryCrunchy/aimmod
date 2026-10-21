@@ -979,6 +979,8 @@ public partial class AimModGame : OsuGameBase
             prepareCatalogReplayMoment, () => { showTrainers(); trainersWorkspace?.StartGuidedPractice(TrainerGuidedFocus.MovementComparison); }, showTrainers)
         {
             RelativeSizeAxes = Axes.Both,
+            AnalysisFailed = replayAnalysisFailures.Contains,
+            AnalyseDifficulty = run => _ = analyseForCoachingAsync(run),
             CancelAnalysisRequested = () =>
             {
                 stopReplayLibraryAnalysis();
@@ -1844,6 +1846,15 @@ public partial class AimModGame : OsuGameBase
 
     private static bool isReplayAnalysisRoute(NativeRoute route) =>
         route is NativeRoute.Replays or NativeRoute.Coaching or NativeRoute.PpTargets;
+
+    /// <summary>Analyses one difficulty's replays for its coaching page, then refreshes coaching.</summary>
+    private async Task analyseForCoachingAsync(LocalReplay run)
+    {
+        try { await analyseMatchingMapReplays(run, appLifetime.Token).ConfigureAwait(false); }
+        catch (OperationCanceledException) { return; }
+        catch (Exception error) { Console.Error.WriteLine($"[AimMod] Coaching replay analysis failed: {error.Message}"); }
+        if (!IsDisposed) Schedule(() => coachingWorkspace?.RefreshAfterMapAnalysis());
+    }
 
     private async Task analyseMatchingMapReplays(LocalReplay selected, CancellationToken cancellationToken)
     {
