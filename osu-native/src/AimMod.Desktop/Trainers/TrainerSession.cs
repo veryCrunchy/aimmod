@@ -92,7 +92,7 @@ public sealed record TrainerResult(Guid Id, DateTimeOffset CompletedAt, TrainerS
     TrainerGuidedRun? GuidedRun = null, int? JudgementMisses = null, bool Assisted = false,
     ReactionSummary? Reaction = null, ReadingWindowResult[]? ReadingWindows = null,
     SpinnerPracticeSummary? SpinnerPractice = null, int? TapTargets = null, TrainerWarmupRun? WarmupRun = null,
-    int[]? OffsetHistogram = null)
+    int[]? OffsetHistogram = null, TrainerLadderRun? LadderRun = null)
 {
     public const int HistogramBinMs = 5;
     public const int HistogramRangeMs = 60;

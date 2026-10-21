@@ -1,13 +1,13 @@
 # Trainers
 
-Open **Trainers** in the Improve section of the desktop sidebar. Choose a focus from the exercise buttons, set the session length and tempo, then select **Start practice**. **Controls & audio** expands the key, offset and volume controls. Sessions last 15, 30 or 60 seconds. Completed sessions are saved locally per account; stopping, leaving the page or switching away from AimMod ends the attempt without recording it as a completed session.
+Open **Trainers** in the Improve section of the desktop sidebar. Choose a focus from the exercise buttons, set the session length and tempo, then select **Start practice**. **Controls & audio** expands the key, offset and volume controls. Sessions last 15 or 30 seconds, or 1, 2 or 3 minutes. Completed sessions are saved locally per account; stopping, leaving the page or switching away from AimMod ends the attempt without recording it as a completed session.
 
 ## Exercises
 
 | Exercise | What to do | What to compare |
 | --- | --- | --- |
 | Tapping accuracy | Follow an even two-tap-per-beat rhythm. | On-time percentage, early/late offset and spread. |
-| Alternating | Alternate your two keys at four taps per beat. | Accuracy, early/late offset and timing spread. |
+| Streams & alternating | Alternate your two keys at four taps per beat: full streams, 8- or 24-note streams, or building into streams. | Accuracy, early/late offset and timing spread. |
 | Burst control | Play three-note bursts with recovery gaps. | Even spacing through each burst. |
 | Rhythm changes | Switch between two and four taps per beat every bar. | Timing through the changes and missed notes. |
 | Aim control | Move to each circle and tap after landing. | Accuracy, missed notes and timing spread. |
@@ -40,4 +40,14 @@ Use the same window size, display and external driver profile as osu! when compa
 
 ## Workspace and progress
 
-The workspace shows progress for the selected exercise. Timing spread charts use up to 12 completed sessions with matching exercise, tempo, duration, controls and pattern version; missing values are omitted. Select a recent session to inspect its results. **Repeat exercise** reuses its exercise, tempo and duration with your current controls; **Try 10 BPM slower** lowers the tempo before starting.
+The workspace shows progress for the selected exercise. The chart shows accuracy and timing spread for up to 30 recent sessions made with your current keys and offset, with each session's tempo in a strip below; missing values are omitted. Select a recent session to inspect its results. **Repeat exercise** reuses its exercise, tempo and duration with your current controls; **Try 10 BPM slower** lowers the tempo before starting.
+
+## Stream ladder
+
+Open **Trainers > Stream ladder** to measure the fastest stream you can play cleanly. Each step is 15 seconds of full streams with click cues, starting 20 BPM below the chosen **edge tempo**. A clean step, with no misses and timing spread at or below the **spread limit**, adds 10 BPM. The ladder ends at the first step that is not clean, or after a clean step at 240 BPM. Its result is the **highest clean BPM**.
+
+Every step uses the same drill: adaptive difficulty and randomised patterns are off, the layout is fixed and only the tempo changes. A new ladder repeats the previous ladder's start and limit so results stay comparable. Without an earlier ladder the limit is 1.25 × the median timing spread of recent clean stream runs (20 ms without them) and the edge tempo is their median tempo. Both can be changed before starting.
+
+Steps are saved in the normal per-account trainer history with a ladder marker, and are left out of adaptive difficulty, warmup and skill-limit evidence, because a ladder fails on purpose. Escape stops a step without counting it. **Finish here** keeps the steps played, but the ladder is listed as finished early and stays out of the trend, since its highest clean tempo is only a lower bound.
+
+The ladder page and the Streams & alternating progress panel chart the highest clean BPM of every complete ladder, together with the timing spread on each ladder's first step, which is played at the same tempo every time.

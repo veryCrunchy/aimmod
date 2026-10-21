@@ -8,7 +8,7 @@ public static class TrainerAdaptiveDifficulty
         if (!settings.AdaptiveDifficulty) return TrainerSkillProfile.Apply(settings,
             TrainerSkillProfile.Build(settings.Kind, history, evidence, now));
         var runs = history.Where(r => r.Settings.Kind == settings.Kind && r.Settings.AdaptiveDifficulty
-            && !r.Assisted && r.WarmupRun is null && r.CompletedAt >= now.AddDays(-30) && r.CompletedAt <= now)
+            && !r.Assisted && r.WarmupRun is null && r.LadderRun is null && r.CompletedAt >= now.AddDays(-30) && r.CompletedAt <= now)
             .DistinctBy(r => r.Id).OrderByDescending(r => r.CompletedAt).Take(12).ToArray();
         if (settings.Kind == TrainerKind.Reaction)
         {

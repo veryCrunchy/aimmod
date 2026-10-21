@@ -20,7 +20,7 @@ public sealed class TrainerWarmup
         IEnumerable<TrainerSkillEvidence> evidence, DateTimeOffset now)
     {
         if (minutes is not (2 or 4 or 8)) throw new ArgumentOutOfRangeException(nameof(minutes));
-        var runs = history.Where(r => r.WarmupRun is null && !r.Assisted && r.UsesOsuJudgements
+        var runs = history.Where(r => r.WarmupRun is null && r.LadderRun is null && !r.Assisted && r.UsesOsuJudgements
             && r.CompletedAt >= now.AddDays(-30) && r.CompletedAt <= now && r.Notes >= 12
             && r.Hits >= 0 && r.Hits <= r.Notes && r.Misses >= 0 && r.Misses <= r.Notes * .05
             && r.Accuracy is >= 80 and <= 100 && TrainerPerformance.IsCompleted(r, now))

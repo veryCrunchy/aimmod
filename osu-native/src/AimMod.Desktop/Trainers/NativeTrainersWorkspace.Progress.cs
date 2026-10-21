@@ -60,7 +60,7 @@ public partial class NativeTrainersWorkspace
             : spinnerKind ? ["WHEN", "LENGTH", "RPM", "HELD", "VARIATION"] : ["WHEN", "LENGTH", "TEMPO", "ACCURACY", "SPREAD"], header: true));
         foreach (var run in runs.Take(8))
         {
-            string when = $"{run.CompletedAt.LocalDateTime:d MMM HH:mm}{(run.WarmupRun is null ? "" : " · warmup")}";
+            string when = $"{run.CompletedAt.LocalDateTime:d MMM HH:mm}{(run.WarmupRun is not null ? " · warmup" : run.LadderRun is not null ? " · ladder" : "")}";
             string length = $"{run.PlayedSeconds ?? run.Settings.Seconds:0} s";
             string[] cells = reactionKind
                 ? [when, length, ReactionSession.Name(run.Settings.ReactionMode), ms(run.Reaction?.MedianMs ?? run.ResponseMs), $"{run.Hits}/{run.Notes}"]
@@ -72,6 +72,7 @@ public partial class NativeTrainersWorkspace
             row.AutoSizeAxes = Axes.None; row.RelativeSizeAxes = Axes.X;
             recent.Add(row);
         }
+        if (kind == TrainerKind.Alternating) addLadderProgress(recent, TrainerStreamLadder.Outcomes(history().Load()), showOpen: true);
         var more = flow();
         more.Add(new AimModButton("Try it on a beatmap", openCoaching) { Height = AimModVisualStyle.CompactControlHeight });
         recent.Add(more);
