@@ -25,6 +25,10 @@ internal sealed class PpTargetBeatmapPatternReader(string cacheDirectory, int ma
     private readonly object geometryLock = new();
     private readonly Dictionary<string, PpTargetBeatmapPatternGeometry> geometries = new();
     private int retainedPoints;
+    private readonly object trimLock = new();
+    // Running size of the cache folder, so a write does not list the whole folder. Null until first counted.
+    private int? cachedFiles;
+    private long cachedBytes;
 
     internal async Task<PpTargetBeatmapFile?> TryGetCachedFileAsync(int beatmapId, string? expectedHash, CancellationToken cancellationToken)
     {
@@ -74,7 +78,7 @@ internal sealed class PpTargetBeatmapPatternReader(string cacheDirectory, int ma
             await using (FileStream target = new(temporaryPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 81920, true))
                 await source.CopyToAsync(target, cancellationToken).ConfigureAwait(false);
             File.Move(temporaryPath, destination, true);
-            trimCache(destination);
+            trimCache(new FileInfo(destination).Length, destination);
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException)
         {
@@ -120,7 +124,7 @@ internal sealed class PpTargetBeatmapPatternReader(string cacheDirectory, int ma
             await using (FileStream stream = new(temporaryPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 81920, true))
                 await JsonSerializer.SerializeAsync(stream, new GeometryDocument(Version, file.ContentHash, modKey, result), json_options, cancellationToken).ConfigureAwait(false);
             File.Move(temporaryPath, path, true);
-            trimCache(path, file.Path);
+            trimCache(new FileInfo(path).Length, path, file.Path);
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException or NotSupportedException)
         {
@@ -254,20 +258,40 @@ internal sealed class PpTargetBeatmapPatternReader(string cacheDirectory, int ma
         }
     }
 
-    private void trimCache(params string[] protectedPaths)
+    /// <summary>
+    /// Keeps the folder within its limits. Writes only update a running count; the folder is listed when the count is
+    /// first needed and when it goes over a limit, and then trimmed a tenth below the limits so the next trim is far off.
+    /// Overwrites count as additions, which only makes the next listing come sooner.
+    /// </summary>
+    private void trimCache(long writtenBytes, params string[] protectedPaths)
     {
-        var files = new DirectoryInfo(cacheDirectory).EnumerateFiles()
-            .Where(file => file.Extension is ".osu" or ".json").OrderBy(file => file.LastWriteTimeUtc).ToArray();
-        long bytes = files.Sum(file => file.Length);
-        int count = files.Length;
-        foreach (FileInfo file in files)
+        lock (trimLock)
         {
-            if (count <= maximumFiles && bytes <= maximumBytes) break;
-            if (protectedPaths.Any(path => file.FullName.Equals(Path.GetFullPath(path), StringComparison.OrdinalIgnoreCase))) continue;
-            long length = file.Length;
-            file.Delete();
-            count--;
-            bytes -= length;
+            if (cachedFiles is { } known)
+            {
+                cachedFiles = known + 1;
+                cachedBytes += writtenBytes;
+                if (cachedFiles <= maximumFiles && cachedBytes <= maximumBytes) return;
+            }
+            var files = new DirectoryInfo(cacheDirectory).EnumerateFiles()
+                .Where(file => file.Extension is ".osu" or ".json").OrderBy(file => file.LastWriteTimeUtc).ToArray();
+            long bytes = files.Sum(file => file.Length);
+            int count = files.Length;
+            bool over = count > maximumFiles || bytes > maximumBytes;
+            int fileTarget = over ? maximumFiles - maximumFiles / 10 : maximumFiles;
+            long byteTarget = over ? maximumBytes - maximumBytes / 10 : maximumBytes;
+            foreach (FileInfo file in files)
+            {
+                if (count <= fileTarget && bytes <= byteTarget) break;
+                if (protectedPaths.Any(path => file.FullName.Equals(Path.GetFullPath(path), StringComparison.OrdinalIgnoreCase))) continue;
+                long length = file.Length;
+                try { file.Delete(); }
+                catch (Exception error) when (error is IOException or UnauthorizedAccessException) { continue; }
+                count--;
+                bytes -= length;
+            }
+            cachedFiles = count;
+            cachedBytes = bytes;
         }
     }
     private static void deleteTemporary(string path)

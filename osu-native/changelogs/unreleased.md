@@ -6,3 +6,4 @@
 - Coaching's "Where your misses come from" counts misses inside streams as stream control, and shows whether stream drift is getting more or less frequent.
 - PP targets can find maps by skillset: streams, bursts, jumps or sharp angles, measured from each map's own notes, with likely stream maps measured first. Every target shows its main pattern.
 - PP targets keep showing your previous targets while a new scan catches up after your skill profile changes, instead of clearing the list.
+- PP targets scan about twice as fast after your skill profile changes, and use more of your CPU on machines with many cores.

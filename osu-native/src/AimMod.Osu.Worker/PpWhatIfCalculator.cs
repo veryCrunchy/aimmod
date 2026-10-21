@@ -119,6 +119,8 @@ internal sealed class OfficialPpWhatIfCalculator : IPpWhatIfCalculator
     private const int maximum_cached_difficulties = 64;
 
     private readonly ConcurrentDictionary<DifficultyKey, CachedDifficulty> difficultyCache = new();
+    // A scan asks for several scores on one map in a row; decoding the .osu once per map instead of once per score.
+    private readonly ConcurrentDictionary<string, FlatWorkingBeatmap> beatmapCache = new(StringComparer.Ordinal);
 
     public ValueTask<PpWhatIfResult> CalculateAsync(ValidatedPpInput input, CancellationToken cancellationToken)
     {
@@ -135,11 +137,9 @@ internal sealed class OfficialPpWhatIfCalculator : IPpWhatIfCalculator
             if (mods.Select(m=>m.Acronym).Distinct().Count()!=mods.Length ||
                 mods.Any(m=>m.IncompatibleMods.Any(type=>mods.Any(other=>other!=m && type.IsInstanceOfType(other)))))
                 throw new RuntimeCommandException("incompatible_mods", "These mods cannot be used together.");
-            var workingBeatmap = new FlatWorkingBeatmap(input.BeatmapPath);
-            var difficultyKey = new DifficultyKey(
-                Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(input.BeatmapPath))),
-                input.RulesetId,
-                difficultyModsKey(mods));
+            string contentHash = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(input.BeatmapPath)));
+            var workingBeatmap = getOrDecodeBeatmap(contentHash, input.BeatmapPath);
+            var difficultyKey = new DifficultyKey(contentHash, input.RulesetId, difficultyModsKey(mods));
             if (input.RulesetId != 0) {
                 var modeStatistics = input.Statistics ?? throw new RuntimeCommandException("statistics_required", "This mode requires the score's exact judgements.");
                 var stats = new Dictionary<HitResult,int> {
@@ -227,6 +227,17 @@ internal sealed class OfficialPpWhatIfCalculator : IPpWhatIfCalculator
 
     private static string difficultyModsKey(Mod[] mods) =>
         string.Join('|', mods.Select(mod => mod.Acronym + ":" + JsonConvert.SerializeObject(new APIMod(mod).Settings)).Order(StringComparer.Ordinal));
+
+    private FlatWorkingBeatmap getOrDecodeBeatmap(string contentHash, string path)
+    {
+        if (beatmapCache.TryGetValue(contentHash, out FlatWorkingBeatmap? cached))
+            return cached;
+        var decoded = new FlatWorkingBeatmap(path);
+        if (beatmapCache.Count >= maximum_cached_difficulties)
+            beatmapCache.Clear();
+        beatmapCache[contentHash] = decoded;
+        return decoded;
+    }
 
     private CachedDifficulty getOrCalculateDifficulty(DifficultyKey key, DifficultyCalculator calculator, Mod[] mods, CancellationToken cancellationToken)
     {

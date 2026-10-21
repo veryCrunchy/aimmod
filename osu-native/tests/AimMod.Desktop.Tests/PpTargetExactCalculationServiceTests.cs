@@ -78,6 +78,33 @@ public sealed class PpTargetExactCalculationServiceTests
     }
 
     [Test]
+    public void DefaultWorkerCountFollowsProcessorsAndMemory()
+    {
+        const long gigabyte = 1L << 30;
+        Assert.Multiple(() =>
+        {
+            Assert.That(PpTargetExactCalculationService.DefaultConcurrency(20, 32 * gigabyte), Is.EqualTo(6));
+            Assert.That(PpTargetExactCalculationService.DefaultConcurrency(8, 32 * gigabyte), Is.EqualTo(4));
+            Assert.That(PpTargetExactCalculationService.DefaultConcurrency(16, 6 * gigabyte), Is.EqualTo(3), "one worker per 2 GB");
+            Assert.That(PpTargetExactCalculationService.DefaultConcurrency(2, 1 * gigabyte), Is.EqualTo(1));
+            Assert.That(PpTargetExactCalculationService.DefaultConcurrency(12, 0), Is.EqualTo(6), "unknown memory");
+        });
+    }
+
+    [Test]
+    public async Task WorkersAreReusedAcrossBatches()
+    {
+        int started = 0;
+        var service = new PpTargetExactCalculationService(temporaryDirectory, Path.Combine(temporaryDirectory, "pooled.json"),
+            new ConcurrentDifficultyClient(), Path.Combine(temporaryDirectory, "pooled"),
+            () => { Interlocked.Increment(ref started); return SidecarRuntimeClient.Start(desktopExecutablePath()); }, 1);
+        var first = await service.CalculateAsync([new PpTargetExactRequest(900, null, [], .94, .5)]);
+        var second = await service.CalculateAsync([new PpTargetExactRequest(901, null, [], .94, .5)]);
+        Assert.That((first.Count, second.Count), Is.EqualTo((1, 1)));
+        Assert.That(started, Is.EqualTo(1), "the second batch must reuse the idle worker");
+    }
+
+    [Test]
     public void ConfiguredModsHaveSeparateCalculationCaches() {
         var request=new PpTargetExactRequest(42,null,["DT"],.98,.5);
         var configured=request with { ModsJson="[{\"acronym\":\"DT\",\"settings\":{\"speed_change\":1.2}}]" };
