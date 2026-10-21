@@ -738,7 +738,10 @@ public partial class AimModGame : OsuGameBase
     {
         homeScreen ??= new Home.NativeHomeDashboard(createHomeSources(), new Home.HomeDashboardActions(
             showBeatmaps, showSkins, showReplays, showStatistics, showCoaching, showPpTargets, showTrainers, showSettings,
-            () => { showTrainers(); trainersWorkspace?.ResumeGuidedPractice(); }, openBeatmapPractice, prepareCatalogReplay), updateService!);
+            () => { showTrainers(); trainersWorkspace?.ResumeGuidedPractice(); }, openBeatmapPractice, prepareCatalogReplay)
+        {
+            OpenTrainer = kind => { showTrainers(); trainersWorkspace?.ShowExercise(kind); },
+        }, updateService!);
         switchWorkspaceRoute(NativeRoute.Home, homeScreen);
         homeScreen.Refresh();
     }
@@ -755,7 +758,10 @@ public partial class AimModGame : OsuGameBase
             () => new TrainerHistoryStore(accountPath("trainers/history-{0}.json")).LoadGuidedPlan(),
             () => new TrainerHistoryStore(accountPath("trainers/history-{0}.json")).Load(),
             () => new PpTargetWorkspaceCache(Storage.GetFullPath("cache/pp-target-workspace-v1.json", true)).Load(),
-            () => localScorePpHydrationService);
+            () => localScorePpHydrationService)
+        {
+            ReplayAnalyses = () => replayAnalyses.ToDictionary(pair => pair.Key, pair => pair.Value),
+        };
     }
 
     private void showBeatmaps()

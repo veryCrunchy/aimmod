@@ -3,6 +3,7 @@ using AimMod.Desktop.LocalLibrary;
 using AimMod.Desktop.PpTargets;
 using AimMod.Desktop.ScoreHistory;
 using AimMod.Osu.Runtime;
+using AimMod.Osu.Runtime.Contracts;
 
 namespace AimMod.Desktop.Home;
 
@@ -32,10 +33,35 @@ internal static class HomeDashboardLoader
             profile = fetched;
         HomeProfileChange? change = profile is null ? null : safely(() => sources.RecordProfile(profile));
 
+        PpTargetWorkspaceSnapshot? targets = safely(sources.PpTargets);
         var inputs = new HomeDashboardInputs(runs, profile, change,
-            safely(sources.CoachingPlan), safely(sources.GuidedPlan), safely(sources.TrainerHistory) ?? [], safely(sources.PpTargets));
+            safely(sources.CoachingPlan), safely(sources.GuidedPlan), safely(sources.TrainerHistory) ?? [], targets)
+        {
+            Patterns = patterns(runs, profile, targets, sources, now),
+        };
         token.ThrowIfCancellationRequested();
         return HomeDashboardBuilder.Build(inputs, now);
+    }
+
+    /// <summary>
+    /// The player's last 30 days of analysed plays, measured like PP targets: circle sizes from the cached local maps and
+    /// earlier measurements from the cached profile, so plays without an analysis in memory still count.
+    /// </summary>
+    private static PpPatternProfile? patterns(IReadOnlyList<LocalReplay> runs, OsuProfile? profile, PpTargetWorkspaceSnapshot? targets,
+        HomeDashboardSources sources, DateTimeOffset now)
+    {
+        string? player = HomeDashboardBuilder.SelectPlayer(runs, profile);
+        var own = runs.Where(run => player is null || !run.IsLocallyStored || string.Equals(run.Player, player, StringComparison.OrdinalIgnoreCase)).ToArray();
+        var analyses = sources.ReplayAnalyses?.Invoke() ?? new Dictionary<Guid, ReplayAnalysisResult>();
+        var cached = targets?.Profile.PatternProfile ?? targets?.PendingPatternProfile;
+        try
+        {
+            return PpTargetPatternModel.BuildProfile(own, analyses, now: now, localSets: targets?.LocalSets, cachedProfile: cached);
+        }
+        catch (ArgumentException)
+        {
+            return cached;
+        }
     }
 
     private static async Task<OnlineAccountScoreHistoryResult?> loadOnlineAsync(ScoreHistorySession history, IAccountScoreHistoryService? service, CancellationToken token)

@@ -59,6 +59,9 @@ internal sealed record HomeDashboardData(
     IReadOnlyList<HomeRecommendation> Recommendations)
 {
     public bool HasPlays => TotalPlays > 0;
+
+    /// <summary>Best and weakest pattern classes from analysed replays; null until some plays are analysed.</summary>
+    public HomeSkillsets? Skillsets { get; init; }
 }
 
 /// <summary>Everything the dashboard reads, gathered off the update thread.</summary>
@@ -69,7 +72,11 @@ internal sealed record HomeDashboardInputs(
     CoachingTrainingPlan? CoachingPlan,
     TrainerGuidedPlan? GuidedPlan,
     IReadOnlyList<TrainerResult> TrainerHistory,
-    PpTargetWorkspaceSnapshot? PpTargets);
+    PpTargetWorkspaceSnapshot? PpTargets)
+{
+    /// <summary>Recent per-pattern replay evidence, the same profile PP targets uses.</summary>
+    public PpPatternProfile? Patterns { get; init; }
+}
 
 internal static class HomeDashboardBuilder
 {
@@ -91,7 +98,10 @@ internal static class HomeDashboardBuilder
         double? baseline = average(runs.Where(run => run.Passed && run.PlayedAt >= now.AddDays(-30)).Select(run => run.Accuracy));
 
         return new HomeDashboardData(inputs.Profile, inputs.ProfileChange, inputs.Profile?.Username ?? player, runs.Length,
-            week, month, recent, baseline, Recommend(inputs, runs, now));
+            week, month, recent, baseline, Recommend(inputs, runs, now))
+        {
+            Skillsets = HomeSkillsetBuilder.Build(inputs.Patterns),
+        };
     }
 
     /// <summary>The account holder when known, otherwise the name on most local plays (downloaded replays belong to others).</summary>
