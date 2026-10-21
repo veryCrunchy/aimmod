@@ -24,3 +24,7 @@ A pattern needs at least 3 plays and 60 of its notes before it can be called str
 ## Data
 
 Home uses the replay analyses held in memory and the PP target cache's installed maps and earlier measurements, so plays analysed in an earlier session still count. Nothing new is stored and nothing is shared.
+
+## Finding maps by skillset
+
+**PP targets > Skillset** keeps only maps that are mostly one pattern: **Streams** (at least 20% of notes in streams), **Bursts** (15% in bursts), **Jumps** (40% of moves are jumps) or **Sharp angles** (30% of turns are 60° or more). The shares come from each difficulty's own objects, measured as its PP is calculated, so only maps the scan has reached can match; widening the star range lets the scan measure more. Every row shows the chosen pattern's share, or with any skillset its most prominent pattern, next to the stars and BPM. The other filters and the sort still apply, so a weak skillset can be practised on the maps that still fit the player best.

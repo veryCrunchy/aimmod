@@ -84,6 +84,9 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
     private readonly Container searchGroup;
     private readonly Container categoryGroup;
     private readonly Container lengthGroup;
+    private readonly Container skillsetGroup;
+    private readonly PpTargetDropdown<PpTargetSkillset> skillsetDropdown;
+    private readonly Bindable<PpTargetSkillset> skillset = new(PpTargetSkillset.Any);
     private readonly Container sortGroup;
     private readonly Container modsGroup;
     private readonly PpTargetDropdown<string> modsDropdown;
@@ -312,6 +315,11 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
                                 DefaultStringUpperBound = "1000+",
                                 NubWidth = 52,
                             },
+                            skillsetGroup = dropdownGroup("SKILLSET", skillsetDropdown = new PpTargetDropdown<PpTargetSkillset>(PpTargetSkillsets.Label)
+                            {
+                                Items = PpTargetSkillsets.Choices,
+                                Current = skillset,
+                            }),
                             categoryGroup = dropdownGroup("MAP STATUS", categoryDropdown = new PpTargetDropdown<OfficialBeatmapCategory>(CategoryLabel)
                             {
                                 Items = new[] { OfficialBeatmapCategory.Ranked, OfficialBeatmapCategory.Loved, OfficialBeatmapCategory.Pending, OfficialBeatmapCategory.Any },
@@ -456,11 +464,8 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
             placeSlider(expectedPpSlider, content_inset, 65, columnWidth);
             placeSlider(maximumPpSlider, secondColumnX, 65, columnWidth);
 
-            float dropdownWidth = (width - 60) / 4;
-            placeGroup(categoryGroup, content_inset, 126, dropdownWidth, 55);
-            placeGroup(lengthGroup, 24 + dropdownWidth, 126, dropdownWidth, 55);
-            placeGroup(sortGroup, 36 + dropdownWidth * 2, 126, dropdownWidth, 55);
-            placeGroup(modsGroup, 48 + dropdownWidth * 3, 126, dropdownWidth, 55);
+            placeDropdowns(width, 126);
+
             status.Position = new(0, 296);
             resultCount.Position = new(0, 296);
         }
@@ -477,11 +482,8 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
             placeSlider(expectedPpSlider, expectedX, 3, sliderWidth);
             placeSlider(maximumPpSlider, maximumX, 3, sliderWidth);
 
-            float dropdownWidth = (width - 60) / 4;
-            placeGroup(categoryGroup, content_inset, 64, dropdownWidth, 55);
-            placeGroup(lengthGroup, 24 + dropdownWidth, 64, dropdownWidth, 55);
-            placeGroup(sortGroup, 36 + dropdownWidth * 2, 64, dropdownWidth, 55);
-            placeGroup(modsGroup, 48 + dropdownWidth * 3, 64, dropdownWidth, 55);
+            placeDropdowns(width, 64);
+
             status.Position = new(0, 224);
             resultCount.Position = new(0, 224);
         }
@@ -500,6 +502,16 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
         detailViewport.Width = DrawWidth > 0 ? paneWidth / DrawWidth : 1;
         detailViewport.X = sidebar ? DrawWidth - paneWidth : 0;
         selectedDetails?.SetBackVisible(!sidebar);
+    }
+
+    /// <summary>The filter dropdowns share one row, evenly spaced.</summary>
+    private void placeDropdowns(float width, float y)
+    {
+        Container[] groups = [skillsetGroup, categoryGroup, lengthGroup, sortGroup, modsGroup];
+        const float gap = 12;
+        float dropdownWidth = (width - content_inset * 2 - gap * (groups.Length - 1)) / groups.Length;
+        for (int i = 0; i < groups.Length; i++)
+            placeGroup(groups[i], content_inset + i * (dropdownWidth + gap), y, dropdownWidth, 55);
     }
 
     private static void placeSlider(Drawable slider, float x, float y, float width)
@@ -554,6 +566,7 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
             saveSnapshot();
         }));
         length.BindValueChanged(_ => filterChanged(renderResults));
+        skillset.BindValueChanged(_ => filterChanged(renderResults));
         sort.BindValueChanged(_ => { if (!suppressFilterEvents) { renderResults(); saveSnapshot(); } });
 
         _ = restoreSnapshotAsync(renderGeneration);
@@ -1349,6 +1362,7 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
         var currentCatalog = catalog;
         var estimates = exactEstimates;
         var ordering = sort.Value;
+        var chosenSkillset = skillset.Value;
         var modSelection = selectedMods.Value;
         var history = patternHistory;
         var observed = observedModSetups.GetValueOrDefault(modSelection);
@@ -1356,9 +1370,10 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
         {
             var ranked = PpTargetRanker.Rank(ResolveModProfile(currentProfile, modSelection, history, observed), currentCatalog, filters, estimates, token);
             token.ThrowIfCancellationRequested();
-            return OrderTargets(ranked.Candidates.Where(candidate => estimates.Count == 0 || candidate.Estimate is not null), ordering)
+            return OrderTargets(ranked.Candidates.Where(candidate => (estimates.Count == 0 || candidate.Estimate is not null)
+                        && PpTargetSkillsets.Matches(candidate.Estimate?.Features, chosenSkillset)), ordering)
                 .Take(200)
-                .Select(candidate => new RankedTarget(candidate, RowKey(candidate, ordering)))
+                .Select(candidate => new RankedTarget(candidate, RowKey(candidate, ordering) + "|" + chosenSkillset))
                 .ToArray();
         }, visibleCandidates =>
         {
@@ -1416,7 +1431,7 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
                     continue;
                 }
 
-                var row = new PpTargetRow(candidate, set, importSet, openBeatmap, sort.Value, isInstalled(candidate), item.Key)
+                var row = new PpTargetRow(candidate, set, importSet, openBeatmap, sort.Value, isInstalled(candidate), item.Key, skillset.Value)
                 {
                     Action = () => selectTarget(candidate, set, true),
                 };
@@ -1445,7 +1460,9 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
         {
             bool ppRange = minimumExpectedPp.Value > 0 || maximumExpectedPp.Value < 1000;
             workspaceState.ShowState(FontAwesome.Solid.Filter, "No matching beatmaps",
-                ppRange
+                skillset.Value != PpTargetSkillset.Any
+                    ? $"No measured map is mostly {PpTargetSkillsets.Label(skillset.Value).ToLowerInvariant()} yet. Maps are measured as their PP is calculated, so widen the star range or wait for the scan to finish."
+                    : ppRange
                     ? "First try PP needs a finished PP calculation. Clear the PP range to include maps still being calculated."
                     : "Try widening the star, PP, status, or length filters.",
                 "Reset filters", resetFilters);
@@ -1531,7 +1548,7 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
         search.Current.Value = string.Empty; minimumStars.Value = 0; maximumStars.Value = 10;
         minimumExpectedPp.Value = 0; maximumExpectedPp.Value = 1000;
         minimumMaximumPp.Value = 0; maximumMaximumPp.Value = 1000;
-        category.Value = OfficialBeatmapCategory.Ranked; length.Value = TargetLength.Any;
+        category.Value = OfficialBeatmapCategory.Ranked; length.Value = TargetLength.Any; skillset.Value = PpTargetSkillset.Any;
         sort.Value = TargetSort.BestFit; selectedMods.Value = "Automatic";
         scheduleCatalogSearch();
     }
