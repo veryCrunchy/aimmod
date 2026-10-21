@@ -50,6 +50,9 @@ public sealed class SectionPpServiceTests
             Assert.That(report.SumOfBestPp, Is.GreaterThan(report.Pp!.Value));
             Assert.That(report.CountedPlays, Is.EqualTo(2));
             Assert.That(report.FullComboOkGoal, Is.GreaterThan(2));
+            Assert.That(report.FullComboPp, Is.GreaterThan(report.Pp!.Value), "taking back the miss is worth pp");
+            Assert.That(report.FullComboPp, Is.GreaterThanOrEqualTo(report.Pp!.Value + second.LostToMisses!.Value - .01),
+                "a full combo is the play with its one miss taken back");
         });
     }
 
