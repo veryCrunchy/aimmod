@@ -34,7 +34,7 @@ public partial class OsuClientSettingsScreen : CompositeDrawable
         IOsuHubUploadQueue? uploadQueue,
         IHubSharingPreferenceStore? preferenceStore,
         Action<Uri>? openUrl,
-        Action<string>? copyText, AutomaticPracticeStore? automaticPractice = null, UserSetupStore? setupStore = null, Action? reopenSetup = null, Action? previewSound = null, bool inline = false, Func<string>? trainingStatus = null, Drawable? creatorSettings = null)
+        Action<string>? copyText, AutomaticPracticeStore? automaticPractice = null, UserSetupStore? setupStore = null, Action? reopenSetup = null, Action? previewSound = null, bool inline = false, Func<string>? trainingStatus = null, Drawable? creatorSettings = null, Drawable? defenderSettings = null)
     {
         this.destinationService = destinationService ?? throw new ArgumentNullException(nameof(destinationService));
         destination = new Bindable<string>(label(destinationService.Destination));
@@ -112,7 +112,7 @@ public partial class OsuClientSettingsScreen : CompositeDrawable
         content.Spacing=new(14);
         content.Add(items[0]);
         content.Add(settingsNavigation);
-        addSettingsPage(items.Skip(1).Take(3).Concat(creatorSettings is null ? [] : new[] { creatorSettings }));
+        addSettingsPage(items.Skip(1).Take(3).Concat(creatorSettings is null ? [] : new[] { creatorSettings }).Concat(defenderSettings is null ? [] : new[] { defenderSettings }));
         addSettingsPage(items.Skip(4).Take(practiceStart-4));
         addSettingsPage(items.Skip(practiceStart).Take(startupStart-practiceStart));
         addSettingsPage(items.Skip(startupStart));

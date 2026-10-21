@@ -1178,8 +1178,16 @@ public partial class AimModGame : OsuGameBase
         {
             RelativeSizeAxes = Axes.Both,
         };
+        ppTargetsWorkspace.DefenderExclusion = defenderScanExclusion();
         switchWorkspaceRoute(NativeRoute.PpTargets, ppTargetsWorkspace);
     }
+
+    private DefenderScanExclusion? defenderExclusion;
+
+    /// <summary>The Defender exclusion offer for the PP target scan folders. Null until PP calculation is available.</summary>
+    private DefenderScanExclusion? defenderScanExclusion() => ppTargetExactCalculationService is PpTargetExactCalculationService service
+        ? defenderExclusion ??= new DefenderScanExclusion(service.ScanFolders, Storage.GetFullPath("settings/defender-exclusion.json"))
+        : null;
 
     private void switchWorkspaceRoute(NativeRoute route, Drawable screen)
     {

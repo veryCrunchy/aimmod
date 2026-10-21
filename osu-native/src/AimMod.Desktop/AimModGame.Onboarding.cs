@@ -21,7 +21,9 @@ public partial class AimModGame
         beatmapDestinationService!,hubDeviceLinkClient,hubCredentialStore,hubUploadQueue,hubSharingPreferenceStore,
         openHubUrl,copyHubText,new AutomaticPracticeStore(Storage.GetFullPath("practice-maps",true)),userSetupStore,
         inSetup?null:showUserSetup,()=>playTheme(true), inline:inSetup, trainingStatus:()=>hubTrainingSyncService?.Status ?? "Training sync is unavailable.",
-        creatorSettings: inSetup ? null : new Creator.CreatorSettingsPanel(creatorSettingsStore, creatorToolsEnabled, setCreatorToolsEnabled, showCreatorTools));
+        creatorSettings: inSetup ? null : new Creator.CreatorSettingsPanel(creatorSettingsStore, creatorToolsEnabled, setCreatorToolsEnabled, showCreatorTools),
+        defenderSettings: !inSetup && PpTargets.DefenderScanExclusion.Supported && defenderScanExclusion() is { } defender
+            ? new PpTargets.DefenderExclusionPanel(defender, inSettings: true) : null);
 
     private void showFirstRunSetup()
     {

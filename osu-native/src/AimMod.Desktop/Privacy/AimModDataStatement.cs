@@ -20,6 +20,9 @@ public static class AimModDataStatement
             "One collection, \"AimMod coaching\", with a backup kept before every change. osu!stable's collections are only written after osu! is closed.",
             "AimMod's own skin packages, if you install any. Other skins are never changed or removed.",
         ]),
+        new("Microsoft Defender", [
+            "Only on Windows, and only if you choose to: AimMod can add its two PP target cache folders to Microsoft Defender's exclusions, so scans do not wait for Defender to check each beatmap file. Windows asks for permission first, the command runs in a PowerShell window you can see, and you can remove the exclusions again in Settings. Nothing else is excluded.",
+        ]),
         new("Practice", [
             "Adaptive practice and trainers run in AimMod's own player, not in osu!. Those plays are never submitted to osu! and are not saved as osu! scores.",
             "Generated practice sets are beatmaps installed into osu! when you choose to. They are unranked, so playing them never gives pp or leaderboard places.",

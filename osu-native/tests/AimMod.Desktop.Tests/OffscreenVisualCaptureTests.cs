@@ -106,6 +106,9 @@ public sealed partial class OffscreenVisualCaptureTests
     [TestCase("ppTargets-menu", 1600, 900)]
     [TestCase("ppTargets-menu", 800, 760)]
     [TestCase("ppTargets-skillset", 1600, 900)]
+    [TestCase("ppTargets-defender", 1600, 900)]
+    [TestCase("ppTargets-defender", 800, 760)]
+    [TestCase("ppTargets-defender-confirm", 1100, 760)]
     [TestCase("ppTargets-skillset-menu", 1600, 900)]
     [TestCase("ppTargets-skillset-menu", 800, 760)]
     [TestCase("ppTargets-evidence", 1600, 900)]
@@ -177,7 +180,7 @@ public sealed partial class OffscreenVisualCaptureTests
         await WindowsPrivateDesktopCapture.CaptureAsync(
             (host, succeeded, failed) => route switch
             {
-                "ppTargets" or "ppTargets-filters" or "ppTargets-populated" or "ppTargets-details" or "ppTargets-menu" or "ppTargets-skillset" or "ppTargets-skillset-menu" or "ppTargets-evidence" or "ppTargets-tooltip" => new CapturePpTargetsGame(host, ppCache!, outputPath, width, height, succeeded, failed, route == "ppTargets-details"),
+                "ppTargets" or "ppTargets-filters" or "ppTargets-populated" or "ppTargets-details" or "ppTargets-menu" or "ppTargets-skillset" or "ppTargets-skillset-menu" or "ppTargets-defender" or "ppTargets-defender-confirm" or "ppTargets-evidence" or "ppTargets-tooltip" => new CapturePpTargetsGame(host, ppCache!, outputPath, width, height, succeeded, failed, route == "ppTargets-details"),
                 "beatmaps-populated" => new CaptureBeatmapGame(host, source, outputPath, width, height, succeeded, failed),
                 "statistics-mods" => new CaptureStatisticsGame(host, source, outputPath, width, height, succeeded, failed),
                 "statistics-populated" => new CaptureStatisticsGame(host, source, outputPath, width, height, succeeded, failed),
@@ -1181,6 +1184,20 @@ public sealed partial class OffscreenVisualCaptureTests
                         dropdown.Current.Value = PpTargetSkillset.Streams;
                     }
                 }, outputPath.Contains("ppTargets-skillset-menu", StringComparison.Ordinal) ? 300 : 1200);
+            if (outputPath.Contains("ppTargets-defender", StringComparison.Ordinal))
+                Scheduler.AddDelayed(() =>
+                {
+                    const BindingFlags flags = BindingFlags.Instance | BindingFlags.NonPublic;
+                    workspace.DefenderExclusion = new DefenderScanExclusion(
+                        [@"C:\Users\Player\AppData\Roaming\AimMod\cache\pp-target-exact-v2.json.beatmaps", @"C:\Users\Player\AppData\Roaming\AimMod\downloads\pp-target-difficulties"],
+                        Path.Combine(Path.GetTempPath(), $"aimmod-defender-capture-{Guid.NewGuid():N}.json"), (_, _) => Task.FromResult(0));
+                    typeof(NativePpTargetsWorkspace).GetMethod("offerDefenderExclusion", flags)!.Invoke(workspace, null);
+                    var card = typeof(NativePpTargetsWorkspace).GetField("defenderCard", flags)!.GetValue(workspace);
+                    Assert.That(card, Is.Not.Null, "Defender runs on the capture machine, so the card must be offered.");
+                    if (outputPath.Contains("ppTargets-defender-confirm", StringComparison.Ordinal))
+                        typeof(DefenderExclusionPanel).GetField("confirming", flags)!.SetValue(card, true);
+                    typeof(DefenderExclusionPanel).GetMethod("render", flags)!.Invoke(card, null);
+                }, 300);
             if (outputPath.Contains("ppTargets-tooltip", StringComparison.Ordinal))
                 Scheduler.AddDelayed(showTooltip, 300);
             Scheduler.AddDelayed(capture, outputPath.Contains("ppTargets-filters", StringComparison.Ordinal) || outputPath.Contains("ppTargets-skillset-1", StringComparison.Ordinal) ? 2200 : 1000);
@@ -1249,9 +1266,9 @@ public sealed partial class OffscreenVisualCaptureTests
                 }
                 var rows = (osu.Framework.Graphics.Containers.FillFlowContainer<osu.Framework.Graphics.Drawable>)
                     typeof(NativePpTargetsWorkspace).GetField("results", flags)!.GetValue(workspace)!;
-                Assert.That(rows.Count, Is.EqualTo(outputPath.Contains("ppTargets-skillset-1", StringComparison.Ordinal) ? 4 : 8), "Capture must show PP target rows, never Home or a loading placeholder.");
+                Assert.That(rows.Children.Count(row => row.GetType().Name == "PpTargetRow"), Is.EqualTo(outputPath.Contains("ppTargets-skillset-1", StringComparison.Ordinal) ? 4 : 8), "Capture must show PP target rows, never Home or a loading placeholder.");
                 var list = (AimModScrollContainer)typeof(NativePpTargetsWorkspace).GetField("resultScroll", flags)!.GetValue(workspace)!;
-                foreach (var row in list.Alpha > 0 ? rows.Children : [])
+                foreach (var row in list.Alpha > 0 ? rows.Children.Where(row => row.GetType().Name == "PpTargetRow") : [])
                 {
                     Assert.That(row, Is.Not.InstanceOf<osu.Framework.Graphics.Cursor.IHasTooltip>(), "Rows show the visual popover, not a text tooltip.");
                     Assert.That(((osu.Framework.Graphics.Cursor.IHasCustomTooltip<PpTargetCandidate>)row).TooltipContent, Is.Not.Null);

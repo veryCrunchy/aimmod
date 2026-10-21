@@ -1666,6 +1666,27 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
         status.Text = total > 0 ? $"{message}  /  {completed:N0} of {total:N0}" : message;
         scanHint.Alpha = 1;
         if (!hasVisibleSnapshot) loadingOverlay.SetProgress(message, completed, total);
+        if (total > 0) offerDefenderExclusion();
+    }
+
+    /// <summary>Speeds up scans on Windows by excluding the scan folders from Defender, if the player agrees. Offered once per session.</summary>
+    public DefenderScanExclusion? DefenderExclusion { get; set; }
+    private DefenderExclusionPanel? defenderCard;
+    private bool defenderOffered;
+
+    private void offerDefenderExclusion()
+    {
+        if (defenderOffered || DefenderExclusion is not { } exclusion) return;
+        defenderOffered = true;
+        if (!DefenderExclusionPanel.ShouldOffer(exclusion)) return;
+        results.Add(defenderCard = new DefenderExclusionPanel(exclusion, inSettings: false));
+        results.SetLayoutPosition(defenderCard, -2);
+        defenderCard.Closed += () => Schedule(() =>
+        {
+            if (defenderCard is null) return;
+            results.Remove(defenderCard, true);
+            defenderCard = null;
+        });
     }
 
     private void hideRefresh()

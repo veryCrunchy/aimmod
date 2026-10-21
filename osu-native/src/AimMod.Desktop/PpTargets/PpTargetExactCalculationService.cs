@@ -50,6 +50,10 @@ public sealed class PpTargetExactCalculationService : IPpTargetExactCalculationS
     private readonly Dictionary<string, double> calibrationCache;
     private readonly PpTargetBeatmapPatternReader patternReader;
     private readonly int maximumConcurrency;
+    private readonly string patternDirectory;
+
+    /// <summary>The folders a scan writes beatmap files to: the pattern cache and the per-scan scratch folder.</summary>
+    public IReadOnlyList<string> ScanFolders => [patternDirectory, difficultyDownloadDirectory];
     private static readonly TimeSpan worker_idle_lifetime = TimeSpan.FromSeconds(90);
     private readonly object idleLock = new();
     private readonly Stack<SidecarRuntimeClient> idleWorkers = new();
@@ -134,8 +138,8 @@ public sealed class PpTargetExactCalculationService : IPpTargetExactCalculationS
         cache = loadCache(this.cachePath);
         performanceCache = loadPerformanceCache(this.cachePath);
         calibrationCache = loadCalibrationCache(this.cachePath);
-        patternReader = new PpTargetBeatmapPatternReader(Directory.Exists(this.cachePath)
-            ? Path.Combine(this.cachePath, "beatmap-patterns") : this.cachePath + ".beatmaps");
+        patternDirectory = Directory.Exists(this.cachePath) ? Path.Combine(this.cachePath, "beatmap-patterns") : this.cachePath + ".beatmaps";
+        patternReader = new PpTargetBeatmapPatternReader(patternDirectory);
     }
 
     /// <summary>Estimates keyed by beatmap id. When several variants of one beatmap are requested, the first requested variant wins.</summary>
