@@ -66,6 +66,8 @@ public sealed partial class OffscreenVisualCaptureTests
     [TestCase("skins", 1100, 760)]
     [TestCase("settings", 1100, 760)]
     [TestCase("settings", 1600, 900)]
+    [TestCase("settings-reads", 1100, 760)]
+    [TestCase("settings-reads", 800, 760)]
     [TestCase("settings-training", 1100, 760)]
     [TestCase("settings-training", 1600, 900)]
     [TestCase("settings-practice-menu", 1100, 760)]
@@ -75,6 +77,8 @@ public sealed partial class OffscreenVisualCaptureTests
     [TestCase("statistics", 1100, 760)]
     [TestCase("statistics-populated", 1100, 760)]
     [TestCase("statistics-populated", 1600, 900)]
+    [TestCase("statistics-analysis-populated", 1100, 760)]
+    [TestCase("statistics-analysis-populated", 800, 760)]
     [TestCase("statistics-mods", 1100, 760)]
     [TestCase("statistics-mods", 800, 600)]
     [TestCase("coaching-populated", 1100, 760)]
@@ -83,6 +87,11 @@ public sealed partial class OffscreenVisualCaptureTests
     [TestCase("coaching-complete", 1600, 900)]
     [TestCase("coaching-practice-many", 1100, 760)]
     [TestCase("coaching-practice-many", 1600, 900)]
+    [TestCase("coaching-my-adaptive", 1100, 760)]
+    [TestCase("coaching-find-adaptive", 1100, 760)]
+    [TestCase("coaching-find-adaptive", 800, 760)]
+    [TestCase("coaching-pp-map", 1100, 760)]
+    [TestCase("coaching-pp-map", 800, 760)]
     [TestCase("coaching-adaptive-map", 1100, 760)]
     [TestCase("coaching-adaptive-map", 1600, 900)]
     [TestCase("coaching-adaptive-map", 800, 760)]
@@ -168,10 +177,14 @@ public sealed partial class OffscreenVisualCaptureTests
                 "beatmaps-populated" => new CaptureBeatmapGame(host, source, outputPath, width, height, succeeded, failed),
                 "statistics-mods" => new CaptureStatisticsGame(host, source, outputPath, width, height, succeeded, failed),
                 "statistics-populated" => new CaptureStatisticsGame(host, source, outputPath, width, height, succeeded, failed),
+                "statistics-analysis-populated" => new CaptureStatisticsGame(host, source, outputPath, width, height, succeeded, failed),
                 "coaching-populated" => new CaptureCoachingGame(host, source, outputPath, width, height, CoachingCaptureState.Analysing, succeeded, failed),
                 "coaching-complete" => new CaptureCoachingGame(host, source, outputPath, width, height, CoachingCaptureState.Complete, succeeded, failed),
                 "coaching-practice-many" => new CaptureCoachingGame(host, source, outputPath, width, height, CoachingCaptureState.PracticeMany, succeeded, failed),
                 "coaching-adaptive-map" => new CaptureCoachingGame(host, source, outputPath, width, height, CoachingCaptureState.AdaptiveMap, succeeded, failed),
+                "coaching-find-adaptive" => new CaptureCoachingGame(host, source, outputPath, width, height, CoachingCaptureState.AdaptiveMap, succeeded, failed),
+                "coaching-my-adaptive" => new CaptureCoachingGame(host, source, outputPath, width, height, CoachingCaptureState.AdaptiveMap, succeeded, failed),
+                "coaching-pp-map" => new CaptureCoachingGame(host, source, outputPath, width, height, CoachingCaptureState.AdaptiveMap, succeeded, failed),
                 "coaching-error" => new CaptureCoachingGame(host, source, outputPath, width, height, CoachingCaptureState.Error, succeeded, failed),
                 "coaching-empty" => new CaptureCoachingGame(host, source, outputPath, width, height, CoachingCaptureState.Empty, succeeded, failed),
                 "replays-analysis" => new CaptureReplayAnalysisGame(host, source, outputPath, width, height, succeeded, failed),
@@ -468,6 +481,11 @@ public sealed partial class OffscreenVisualCaptureTests
                         var scroll = (AimModScrollContainer)typeof(osu.Framework.Graphics.Containers.CompositeDrawable).GetProperty("InternalChild", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(screen)!;
                         scroll.ScrollTo(620, false);
                     }, 200);
+                }, 1600);
+                if (route == "settings-reads") Scheduler.AddDelayed(() =>
+                {
+                    var screen = (OsuClientSettingsScreen)typeof(AimModGame).GetField("settingsScreen", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(this)!;
+                    typeof(OsuClientSettingsScreen).GetMethod("showSettingsPage", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(screen, [4]);
                 }, 1600);
                 if (route == "settings-practice-menu") Scheduler.AddDelayed(() =>
                 {
@@ -1396,7 +1414,42 @@ public sealed partial class OffscreenVisualCaptureTests
                     var menu = (osu.Framework.Graphics.UserInterface.Menu)typeof(osu.Framework.Graphics.UserInterface.Dropdown<string>).GetField("Menu", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(dropdown)!;
                     menu.Open();
                 }, 1000);
-            Scheduler.AddDelayed(capture, 1500);
+            bool analysis = outputPath.Contains("statistics-analysis", StringComparison.Ordinal);
+            if (analysis && source is InMemoryLocalLibrarySource memory)
+            {
+                var replays = (IReadOnlyList<LocalReplay>)typeof(InMemoryLocalLibrarySource).GetField("replays", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(memory)!;
+                workspace.ConfigureReplayAnalysis(replays.ToDictionary(r => r.ScoreId, syntheticAnalysis), (_, _) => { });
+            }
+            if (analysis)
+                Scheduler.AddDelayed(() =>
+                {
+                    var scroll = (osu.Framework.Graphics.Containers.ScrollContainer<osu.Framework.Graphics.Drawable>)typeof(NativeStatisticsWorkspace)
+                        .GetField("runScroll", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(workspace)!;
+                    var section = (osu.Framework.Graphics.Drawable)typeof(NativeStatisticsWorkspace)
+                        .GetField("folderSection", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(workspace)!;
+                    scroll.ScrollIntoView(section, false);
+                }, 4200);
+            Scheduler.AddDelayed(capture, analysis ? 5000 : 1500);
+        }
+
+        /// <summary>Synthetic judgements: alternating keys with a small early bias on one, spread that improves with time.</summary>
+        private static ReplayAnalysisResult syntheticAnalysis(LocalReplay run)
+        {
+            var random = new Random(run.ScoreId.GetHashCode());
+            double spread = 6 + (run.PlayedAt.DayOfYear % 9);
+            var judgements = new List<ReplayObjectJudgement>();
+            for (int i = 0; i < 160; i++)
+            {
+                bool left = i % 2 == 0;
+                double offset = (left ? -4 : 2) + (random.NextDouble() * 2 - 1) * spread;
+                bool miss = random.NextDouble() < .01;
+                double time = 2_000 + i * (i % 16 < 8 ? 110 : 260);
+                judgements.Add(new ReplayObjectJudgement(i, null, "HitCircle", time, time, miss ? "Miss" : Math.Abs(offset) > 30 ? "Ok" : "Great", "Great",
+                    time + offset, offset, 1, new ReplayPoint(80 + i * 37 % 360, 60 + i * 53 % 260), null, i, miss ? 0 : i + 1,
+                    miss ? new ReplayMissAnalysis(ReplayMissReason.LateClick, 30, 40, 20, new ReplayPoint(0, 0), 25, 35, null, 40, true, false, false, 0) : null,
+                    miss ? null : left ? ReplayPressedKey.Left : ReplayPressedKey.Right));
+            }
+            return new ReplayAnalysisResult(ReplayAnalysisProtocol.EngineVersion, "map", true, 0, [], judgements, ReplayJudgementSummary.Empty);
         }
 
         private void capture()
@@ -1419,6 +1472,25 @@ public sealed partial class OffscreenVisualCaptureTests
                     host.Exit();
                 }
             }, TaskScheduler.Default);
+        }
+    }
+
+    /// <summary>A synthetic pp breakdown: two costly sections, one with a better best from an earlier play.</summary>
+    private sealed class StubSectionPp(AdaptiveSection[] sections) : ISectionPpService
+    {
+        public Task<SectionPpReport?> CalculateAsync(LocalReplay run, IReadOnlyDictionary<Guid, AimMod.Osu.Runtime.Contracts.ReplayAnalysisResult> analyses,
+            IReadOnlyList<LocalReplay> sameMap, CancellationToken cancellationToken)
+        {
+            SectionTally tally(int miss, int ok, int tail = 0) => new(20 - miss - ok, ok, 0, miss, 4 - tail, tail, 2, 0, miss, ComboRun.Empty.Add(20 - miss), true);
+            var lines = sections.Select((s, i) => i switch
+            {
+                4 => new SectionPpLine(s, tally(2, 3, 1), 14.8, 1.9, 17.6, new SectionBest(tally(0, 2), Guid.NewGuid(), DateTimeOffset.UtcNow.AddDays(-3), 6), 13.2),
+                7 => new SectionPpLine(s, tally(1, 1), 6.1, .7, 6.9, new SectionBest(tally(1, 1), run.ScoreId, run.PlayedAt, 6), 0),
+                9 => new SectionPpLine(s, tally(0, 6), 0, 3.4, 3.4, new SectionBest(tally(0, 2), Guid.NewGuid(), DateTimeOffset.UtcNow.AddDays(-1), 6), 2.2),
+                _ => new SectionPpLine(s, tally(0, 1), 0, .4, .4, null, null),
+            }).ToArray();
+            return Task.FromResult<SectionPpReport?>(new SectionPpReport(run.ScoreId, true, "ppy.osu.Game/2026.916.0, difficulty v20250306",
+                412.6, lines, 447.9, 6, 23, 440.2));
         }
     }
 
@@ -1504,6 +1576,12 @@ public sealed partial class OffscreenVisualCaptureTests
                 progress = AdaptivePracticeCoach.Fail(progress, sections, 6, 64_000, now);
                 store.Save(progress);
                 workspace.ConfigureAdaptivePractice(() => store, (_, _) => { });
+                if (outputPath.Contains("coaching-pp-map", StringComparison.Ordinal))
+                {
+                    workspace.ConfigureSectionPp(() => new StubSectionPp(sections));
+                    Scheduler.AddDelayed(() => ((AimModScrollContainer[])typeof(NativeCoachingWorkspace)
+                        .GetField("coachingPages", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(workspace)!)[4].ScrollTo(560, false), 2300);
+                }
             }
 
             Add(new osu.Framework.Graphics.Containers.Container
@@ -1531,7 +1609,10 @@ public sealed partial class OffscreenVisualCaptureTests
                     workspace.ApplyNewAnalyses(3, 0);
                 else if (state == CoachingCaptureState.Error)
                     workspace.SetAnalysisError();
-                if (state == CoachingCaptureState.AdaptiveMap && replays.Length > 0)
+                if (state == CoachingCaptureState.AdaptiveMap && outputPath.Contains("coaching-my-adaptive", StringComparison.Ordinal))
+                    typeof(NativeCoachingWorkspace).GetMethod("showCoachingPage", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(workspace, [3]);
+                else if (state == CoachingCaptureState.AdaptiveMap && outputPath.Contains("coaching-find-adaptive", StringComparison.Ordinal)) { }
+                else if (state == CoachingCaptureState.AdaptiveMap && replays.Length > 0)
                     typeof(NativeCoachingWorkspace).GetMethod("chooseCoachingRun", BindingFlags.Instance | BindingFlags.NonPublic)!
                         .Invoke(workspace, new object[] { replays[0].ScoreId });
             }, 1200);

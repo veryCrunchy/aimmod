@@ -113,6 +113,13 @@ public partial class NativeCoachingWorkspace
             return;
         }
 
+        // Unfinished adaptive practice comes first, so picking up where the player left off is one click.
+        if (terms.Length == 0 && adaptiveMaps("").Where(m => !m.Progress.Completed).Take(2).ToArray() is { Length: > 0 } unfinished)
+        {
+            runList.Add(new SectionLine("Continue practising", "adaptive practice in progress"));
+            foreach (var (run, progress) in unfinished)
+                runList.Add(new AdaptiveMapRow(run, progress, () => openCoachingRun(run)));
+        }
         runList.Add(new SectionLine("Maps to practise", matching.Length == 1 ? "1 map" : $"{matching.Length:N0} maps · most to gain first"));
         DateTimeOffset now = DateTimeOffset.UtcNow;
         foreach (CoachingMapCandidate map in matching.Take(shownMapCount))
@@ -148,47 +155,50 @@ public partial class NativeCoachingWorkspace
         findLayout.ShowSide = skills.AnalysedPlays > 0;
         if (skills.AnalysedPlays == 0) return;
 
-        var items = new FillFlowContainer<Drawable>
+        var bar = new Container { RelativeSizeAxes = Axes.X, Height = 10, Masking = true, CornerRadius = 5,
+            Child = new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.PanelRaised } };
+        var legend = new FillFlowContainer<Drawable> { RelativeSizeAxes = Axes.X, AutoSizeAxes = Axes.Y, Direction = FillDirection.Full, Spacing = new(18, 8) };
+        float offset = 0;
+        foreach (CoachingSkillLine line in skills.Lines.Where(l => l.Share > 0))
         {
-            RelativeSizeAxes = Axes.X, AutoSizeAxes = Axes.Y, Direction = FillDirection.Full, Spacing = new(0, 10),
-        };
-        void addBar(Drawable bar)
-        {
-            int column = items.Count % columns;
-            items.Add(new Container
-            {
-                RelativeSizeAxes = Axes.X, AutoSizeAxes = Axes.Y, Width = 1f / columns,
-                Padding = new MarginPadding { Right = column < columns - 1 ? AimModVisualStyle.SectionSpacing : 0 }, Child = bar,
-            });
+            bar.Add(new Box { RelativeSizeAxes = Axes.Both, RelativePositionAxes = Axes.X, X = offset, Width = (float)line.Share, Colour = FamilyColour(line.Family) });
+            offset += (float)line.Share;
+            legend.Add(legendItem(CoachingIssues.FamilyLabel(line.Family), $"{line.Share:P0}", FamilyColour(line.Family), line.Change));
         }
-        foreach (CoachingSkillLine line in skills.Lines)
-            addBar(new AimModCoachSkillBar(CoachingIssues.FamilyLabel(line.Family), $"{line.Share:P0} of misses", (float)line.Share,
-                FamilyColour(line.Family), line.Change));
-        if (skills.DriftShare is { } drift && drift > 0)
-            addBar(new AimModCoachSkillBar(CoachingIssues.FamilyLabel(CoachingIssueFamily.Tapping), $"drift in {drift:P0} of plays", (float)drift,
-                FamilyColour(CoachingIssueFamily.Tapping), skills.DriftChange));
+        var notes = new List<string>();
+        if (skills.DriftShare is { } drift && drift > 0) notes.Add($"Stream drift in {drift:P0} of plays");
+        if (skills.MeanOffsetMs is { } mean && skills.SpreadMs is { } spread)
+            notes.Add(Math.Abs(mean) < 1 ? $"taps on the beat, ±{spread:0} ms" : $"taps {Math.Abs(mean):0} ms {(mean < 0 ? "early" : "late")}, ±{spread:0} ms");
 
         var body = new FillFlowContainer<Drawable>
         {
-            RelativeSizeAxes = Axes.X, AutoSizeAxes = Axes.Y, Direction = FillDirection.Vertical, Spacing = new(AimModVisualStyle.RelatedSpacing),
+            RelativeSizeAxes = Axes.X, AutoSizeAxes = Axes.Y, Direction = FillDirection.Vertical, Spacing = new(10),
         };
         body.Add(new SectionLine("Where your misses come from", $"{skills.AnalysedPlays:N0} analysed plays"));
-        body.Add(items);
-        if (!stacked && skills.MeanOffsetMs is { } mean && skills.SpreadMs is { } spread)
+        body.Add(bar);
+        body.Add(legend);
+        if (notes.Count > 0)
         {
-            body.Add(new Container
-            {
-                RelativeSizeAxes = Axes.X, Height = 18, Margin = new MarginPadding { Top = 6 },
-                Children =
-                [
-                    label("Tap timing", 13, AimModPalette.Text),
-                    label(Math.Abs(mean) < 1 ? $"on beat · ±{spread:0} ms" : $"{Math.Abs(mean):0} ms {(mean < 0 ? "early" : "late")} · ±{spread:0} ms", 11,
-                        AimModPalette.Text, "SemiBold").With(t => { t.Anchor = Anchor.TopRight; t.Origin = Anchor.TopRight; }),
-                ],
-            });
-            body.Add(new AimModCoachOffsetGauge(mean, spread));
+            string text = string.Join(" · ", notes);
+            body.Add(flow(char.ToUpperInvariant(text[0]) + text[1..], 12, AimModPalette.Muted));
         }
         profileHost.Add(new CoachingCard(body, 16));
+    }
+
+    /// <summary>A coloured dot, the family, its share of misses and how that share changed recently.</summary>
+    private static Drawable legendItem(string title, string share, Colour4 colour, double? change)
+    {
+        var item = new FillFlowContainer { AutoSizeAxes = Axes.Both, Direction = FillDirection.Horizontal, Spacing = new(6) };
+        item.Add(new Circle { Size = new(8), Colour = colour, Anchor = Anchor.CentreLeft, Origin = Anchor.CentreLeft });
+        item.Add(label(title, 13, AimModPalette.Text).With(t => { t.Anchor = Anchor.CentreLeft; t.Origin = Anchor.CentreLeft; }));
+        item.Add(label(share, 13, AimModPalette.Text, "SemiBold").With(t => { t.Anchor = Anchor.CentreLeft; t.Origin = Anchor.CentreLeft; }));
+        if (change is { } delta && Math.Abs(delta) >= 0.05)
+        {
+            bool better = delta < 0;
+            item.Add(label($"{(better ? "↓" : "↑")}{Math.Abs(delta) * 100:0}%", 11, better ? AimModPalette.Success : AimModPalette.Yellow, "SemiBold")
+                .With(t => { t.Anchor = Anchor.CentreLeft; t.Origin = Anchor.CentreLeft; }));
+        }
+        return item;
     }
 
     private static string relativeTime(DateTimeOffset when, DateTimeOffset now)
@@ -297,13 +307,11 @@ public partial class NativeCoachingWorkspace
     /// <summary>One difficulty: accuracy room, attempts and the main recurring issue. The whole row opens its coaching.</summary>
     private sealed partial class CoachingCandidateRow : AimModInteractiveSurface
     {
-        private const float chevron = 16, gain_width = 84, issue_width = 196, range_width = 170, gap = 20, edge = 14;
+        private const float chevron = 16, gain_width = 84, issue_width = 196, gap = 24, edge = 14;
         private readonly WorkspaceFocusRing focusRing;
         private readonly Container titleBlock;
-        private readonly Drawable range;
         private readonly Drawable issue;
         private readonly Drawable gain;
-        private readonly OsuSpriteText compactAccuracy;
         private readonly TruncatingSpriteText titleText;
         private readonly OsuSpriteText difficultyText;
         private (float Width, float Difficulty) layoutWidth = (-1, -1);
@@ -332,36 +340,6 @@ public partial class NativeCoachingWorkspace
             LocalReplay latest = map.Latest;
             (string gainValue, string gainCaption) = Gain(map);
             Anchor right = Anchor.CentreRight;
-            range = new FillFlowContainer
-            {
-                Width = range_width, AutoSizeAxes = Axes.Y, Direction = FillDirection.Vertical, Spacing = new(6),
-                Anchor = right, Origin = right,
-                Children =
-                [
-                    new Container
-                    {
-                        RelativeSizeAxes = Axes.X, Height = 16,
-                        Children =
-                        [
-                            new FillFlowContainer
-                            {
-                                AutoSizeAxes = Axes.Both, Direction = FillDirection.Horizontal, Spacing = new(4),
-                                Children =
-                                [
-                                    new OsuSpriteText { Text = $"{map.TypicalAccuracy:P1}", Font = new FontUsage(size: 13, weight: "SemiBold"), Colour = AimModPalette.Text },
-                                    new OsuSpriteText { Text = "typical", Font = new FontUsage(size: 11), Colour = AimModPalette.Muted, Anchor = Anchor.BottomLeft, Origin = Anchor.BottomLeft },
-                                ],
-                            },
-                            new OsuSpriteText
-                            {
-                                Text = $"best {map.BestAccuracy:P1}", Font = new FontUsage(size: 11, weight: "SemiBold"), Colour = AimModPalette.Accent,
-                                Anchor = Anchor.BottomRight, Origin = Anchor.BottomRight,
-                            },
-                        ],
-                    },
-                    new AimModCoachRangeBar(map.TypicalAccuracy, map.BestAccuracy),
-                ],
-            };
             issue = map.TopIssue is { } top
                 ? new FillFlowContainer
                 {
@@ -432,19 +410,14 @@ public partial class NativeCoachingWorkspace
                                 new AimModDifficultyPill(latest.StarRating) { Anchor = Anchor.CentreLeft, Origin = Anchor.CentreLeft },
                                 new OsuSpriteText
                                 {
-                                    Text = $"{map.Attempts:N0} {(map.Attempts == 1 ? "play" : "plays")} · {relativeTime(latest.PlayedAt, now)}",
+                                    Text = $"{map.Attempts:N0} {(map.Attempts == 1 ? "play" : "plays")} · {relativeTime(latest.PlayedAt, now)} · "
+                                        + (map.AccuracyGap >= .0005 ? $"{map.TypicalAccuracy:P1} typical, best {map.BestAccuracy:P1}" : $"{map.TypicalAccuracy:P1} typical"),
                                     Font = new FontUsage(size: 12), Colour = AimModPalette.Muted, Anchor = Anchor.CentreLeft, Origin = Anchor.CentreLeft,
-                                },
-                                compactAccuracy = new OsuSpriteText
-                                {
-                                    Text = $"· typical {map.TypicalAccuracy:P1}", Font = new FontUsage(size: 12), Colour = AimModPalette.Muted,
-                                    Anchor = Anchor.CentreLeft, Origin = Anchor.CentreLeft, Alpha = 0,
                                 },
                             ],
                         },
                     ],
                 },
-                range,
                 issue,
                 gain,
                 new SpriteIcon
@@ -461,18 +434,14 @@ public partial class NativeCoachingWorkspace
             base.Update();
             if (layoutWidth == (DrawWidth, difficultyText.DrawWidth)) return;
             layoutWidth = (DrawWidth, difficultyText.DrawWidth);
-            // Drop the least essential column first: the accuracy bar, then the issue; the gain and title always stay.
-            bool showRange = DrawWidth >= 720, showIssue = DrawWidth >= 500;
+            // The issue goes first on narrow rows; the gain and title always stay.
+            bool showIssue = DrawWidth >= 560;
             float x = edge + chevron + 12;
             gain.X = -x;
             x += gain_width + gap;
             issue.Alpha = showIssue ? 1 : 0;
             issue.X = -x;
             if (showIssue) x += issue_width + gap;
-            range.Alpha = showRange ? 1 : 0;
-            range.X = -x;
-            if (showRange) x += range_width + gap;
-            compactAccuracy.Alpha = showRange ? 0 : 1;
             titleBlock.Padding = new MarginPadding { Left = 18, Right = x };
             // The title truncates first so the difficulty name always stays visible next to it.
             titleText.MaxWidth = Math.Max(60, DrawWidth - 18 - x - difficultyText.DrawWidth - 6);

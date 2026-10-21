@@ -318,7 +318,9 @@ public class AdaptivePracticeTests
     public void SavedProgressResumesOnlyForTheSameSplitAndTarget()
     {
         var saved = fail(progress(5), 2);
-        Assert.That(AdaptivePracticeCoach.Resume(saved, "map", "Title", "Hard", 1, 5, now), Is.EqualTo(saved));
+        var resumed = AdaptivePracticeCoach.Resume(saved, "map", "Title", "Hard", 1, 5, now);
+        Assert.That(resumed with { Sections = saved.Sections }, Is.EqualTo(saved));
+        Assert.That(resumed.Sections, Is.EqualTo(saved.Sections.Select(s => s with { Loops = 0 })), "a new session only restarts the loop count");
         Assert.That(AdaptivePracticeCoach.Resume(saved, "map", "Title", "Hard", 1, 6, now).Fails, Is.Zero);
         Assert.That(AdaptivePracticeCoach.Resume(saved, "map", "Title", "Hard", 1.5, 5, now).Fails, Is.Zero);
         Assert.That(AdaptivePracticeCoach.Resume(null, "map", "Title", "Hard", 1, 5, now).Sections, Has.Length.EqualTo(5));

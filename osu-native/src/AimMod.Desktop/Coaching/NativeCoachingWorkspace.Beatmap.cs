@@ -29,12 +29,12 @@ public partial class NativeCoachingWorkspace
         return t.AccountId + ":" + t.Player + ":" + source;
     }
 
-    private void openCoachingMap(string? id, LocalReplay? run = null)
+    private void openCoachingMap(string? id, LocalReplay? run = null, int? returnPage = null)
     {
         coachingMapId = id;
         coachingMapRun = run;
         // A chosen play came from Find a map; a saved practice map came from My coaching.
-        detailReturnPage = run is null ? 3 : 2;
+        detailReturnPage = returnPage ?? (run is null ? 3 : 2);
         if (run is not null)
             coachingMapId = practiceSets.FirstOrDefault(s => s.Map.Tracking is { } t && PracticeProgressTracker.SameSource(run,t) && PracticeProgressTracker.SamePlayer(run,t.Player)) is { } set
                 ? CoachingMapKey(set.Map) : null;
@@ -48,7 +48,8 @@ public partial class NativeCoachingWorkspace
     {
         trainerRunsCache = null;
         mapDetailHost.Clear();
-        mapDetailHost.Spacing = new(12);
+        sectionPpShown = null;
+        mapDetailHost.Spacing = new(16);
         mapDetailHost.Padding = new MarginPadding { Right = 12, Bottom = 12 };
         if (coachingMapId is null && coachingMapRun is { } selected)
             coachingMapId = practiceSets.FirstOrDefault(s => s.Map.Tracking is { } t && PracticeProgressTracker.SameSource(selected,t) && PracticeProgressTracker.SamePlayer(selected,t.Player)) is { } matched
@@ -57,7 +58,7 @@ public partial class NativeCoachingWorkspace
         var latest = sets.FirstOrDefault(s => s.Map.Id == viewedPracticeSets.GetValueOrDefault(coachingMapId ?? "")) ?? sets.FirstOrDefault();
         var run = coachingMapRun ?? (latest?.Map.Tracking is { } tracking
             ? allReplays.FirstOrDefault(r => eligibleForCoaching(r) && PracticeProgressTracker.SameSource(r,tracking) && PracticeProgressTracker.SamePlayer(r,tracking.Player)) : null);
-        mapDetailHost.Add(mapHeader(latest, run));
+        mapDetailHost.Add(mapIdentity(latest, run));
 
         // Tabs only help once there is practice history to switch between.
         if (sets.Length == 0) coachingMapSection = 0;
@@ -107,12 +108,10 @@ public partial class NativeCoachingWorkspace
             }
             bool adaptive = coachingMapSection == 0 && canStartAdaptive(run);
             if (adaptive)
-                foreach (var step in adaptiveStep(run!)) mapDetailHost.Add(step);
-            if (sets.Length == 0 && adaptive)
-                mapDetailHost.Add(drillAlternative(focus is { } issue
+                renderMapOverview(mapDetailHost, run!, found, true, sets.Length > 0 ? null : focus is { } issue
                     ? $"Prefer separate drills? Turn {CoachingIssues.Label(issue.Kind).ToLowerInvariant()} at {AimModCoachTimeline.format(issue.TimeMs)} into generated tapping and aim difficulties."
-                    : "Prefer separate drills? Turn one section into generated tapping and aim difficulties.", prepare));
-            else if (sets.Length == 0)
+                    : "Prefer separate drills? Turn one section into generated tapping and aim difficulties.", sets.Length > 0 ? null : prepare);
+            if (sets.Length == 0 && !adaptive)
                 mapDetailHost.Add(run is null
                     ? startStep("Choose a play first", "Pick a map from Find a map to turn its hardest section into exercises.",
                         new CoachingButton("Find a map", () => showCoachingPage(2), true, true))
@@ -120,18 +119,15 @@ public partial class NativeCoachingWorkspace
                             ? $"Turn {CoachingIssues.Label(top.Kind).ToLowerInvariant()} at {AimModCoachTimeline.format(top.TimeMs)} into tapping and aim exercises."
                             : "Pick a section, practise tapping and aim separately, then retest the full map.",
                         new CoachingButton("Prepare practice set", prepare, true, true)));
-            else
+            else if (sets.Length > 0)
             {
                 var actions=new FillFlowContainer<Drawable>{RelativeSizeAxes=Axes.X,AutoSizeAxes=Axes.Y,Direction=FillDirection.Full,Spacing=new(8)};
                 if(coachingMapSection == 1 && latest is { Map.PayloadRemoved: false } && practiceWorkspace is not null)actions.Add(new CoachingButton("Open practice set",()=>practiceWorkspace.OpenSaved(latest.Map),true,true));
                 if(run is not null)actions.Add(new CoachingButton("New practice set",prepare,false,true));
                 mapDetailHost.Add(actions);
             }
-            if (coachingMapSection == 0 && run is not null)
-            {
-                renderMapTimeline(mapDetailHost, run);
-                renderReplayObservations(mapDetailHost, run, found);
-            }
+            if (coachingMapSection == 0 && run is not null && !adaptive)
+                renderMapOverview(mapDetailHost, run, found, false, null, null);
             if (coachingMapSection == 1) renderSectionTable(sets);
             if(coachingMapSection==0 && latest?.Map.Tracking is not null)
             {
@@ -185,68 +181,6 @@ public partial class NativeCoachingWorkspace
                    analyses, DateTimeOffset.UtcNow).Maps.FirstOrDefault();
     }
 
-    /// <summary>Map identity, where to go back to, and this map's numbers against the player's usual level.</summary>
-    private Drawable mapHeader(PracticeSetProgress? latest, LocalReplay? run)
-    {
-        string title = latest?.Map.Title ?? run?.Title ?? "Beatmap coaching";
-        string difficulty = latest?.Map.Difficulty ?? run?.Difficulty ?? "Select a beatmap to begin";
-        double stars = run?.StarRating ?? 0;
-        CoachingMapCandidate? map = run is null ? null : candidateFor(run);
-        var identity = new FillFlowContainer
-        {
-            AutoSizeAxes = Axes.Both, Direction = FillDirection.Horizontal, Spacing = new(8),
-            Children =
-            [
-                new AimModDifficultyPill(stars) { Anchor = Anchor.CentreLeft, Origin = Anchor.CentreLeft, Alpha = run is null ? 0 : 1 },
-                label(map is null ? difficulty : $"{difficulty} · {map.Attempts:N0} {(map.Attempts == 1 ? "play" : "plays")}", 13, AimModPalette.Muted)
-                    .With(t => { t.Anchor = Anchor.CentreLeft; t.Origin = Anchor.CentreLeft; }),
-            ],
-        };
-        var header = new FillFlowContainer<Drawable> { RelativeSizeAxes = Axes.X, AutoSizeAxes = Axes.Y, Direction = FillDirection.Vertical, Spacing = new(12) };
-        header.Add(new Container
-        {
-            RelativeSizeAxes = Axes.X, Height = 52,
-            Children =
-            [
-                new Box { RelativeSizeAxes = Axes.Y, Width = 4, Colour = run is null ? coachingAccent : AimModVisualStyle.DifficultyColour(stars) },
-                new Container
-                {
-                    RelativeSizeAxes = Axes.Both, Padding = new MarginPadding { Left = 16, Right = 150 },
-                    Children =
-                    [
-                        new TruncatingSpriteText { RelativeSizeAxes = Axes.X, Text = title, Font = new FontUsage(size: 22, weight: "SemiBold"), Colour = AimModPalette.Text },
-                        identity.With(d => d.Y = 30),
-                    ],
-                },
-                new CoachingButton(detailReturnPage == 2 ? "‹ Find a map" : "‹ My coaching", () => showCoachingPage(detailReturnPage), compact: true)
-                    { Anchor = Anchor.TopRight, Origin = Anchor.TopRight },
-            ],
-        });
-        if (map is null) return header;
-
-        double? average = workspace?.Global.MedianAccuracy;
-        var tiles = new CoachingTileRow();
-        tiles.Add(statTile("Typical accuracy", $"{map.TypicalAccuracy:P1}", average is { } avg
-            ? ($"{(map.TypicalAccuracy - avg) * 100:+0.0;-0.0;0.0} vs your usual {avg:P1}", map.TypicalAccuracy >= avg ? AimModPalette.Success : AimModPalette.Yellow)
-            : null));
-        tiles.Add(statTile("Best", $"{map.BestAccuracy:P1}", map.AccuracyGap >= 0.001
-            ? ($"{map.AccuracyGap * 100:0.0} above typical", AimModPalette.Accent) : null));
-        tiles.Add(statTile("Misses per play", $"{map.TypicalMisses:0.#}", ($"typical · best {map.BestMisses}", AimModPalette.Muted)));
-        if (map.TopIssue is { } issue)
-            tiles.Add(new CoachingCard(new FillFlowContainer
-            {
-                AutoSizeAxes = Axes.Both, Direction = FillDirection.Vertical, Spacing = new(4),
-                Children =
-                [
-                    label("Main issue", 11, AimModPalette.Muted, "SemiBold"),
-                    new AimModCoachIssueChip(CoachingIssues.Label(issue.Kind), IssueColour(issue.Kind)),
-                    label(CoachingCandidateRow.IssueDetail(map, issue), 11, AimModPalette.Muted),
-                ],
-            }, 10) { RelativeSizeAxes = Axes.None, AutoSizeAxes = Axes.None, Size = new(210, 76) });
-        header.Add(tiles);
-        return header;
-    }
-
     private static Drawable statTile(string title, string value, (string Text, Colour4 Colour)? note) => new CoachingCard(new FillFlowContainer
     {
         AutoSizeAxes = Axes.Both, Direction = FillDirection.Vertical, Spacing = new(2),
@@ -280,18 +214,6 @@ public partial class NativeCoachingWorkspace
             float width = (DrawWidth - Spacing.X * (columns - 1)) / columns - 0.5f;
             foreach (var tile in Children) tile.Width = width;
         }
-    }
-
-    /// <summary>A single numbered next step with its one primary action.</summary>
-    /// <summary>The generated practice-set route, offered beside adaptive practice rather than instead of it.</summary>
-    private static Drawable drillAlternative(string detail, Action prepare)
-    {
-        var action = new CoachingButton("Prepare practice set", prepare, false, true) { Anchor = Anchor.CentreRight, Origin = Anchor.CentreRight };
-        return new Container
-        {
-            RelativeSizeAxes = Axes.X, AutoSizeAxes = Axes.Y, Padding = new MarginPadding { Horizontal = 14 },
-            Children = [flow(detail, 12, AimModPalette.Muted).With(f => { f.Anchor = Anchor.CentreLeft; f.Origin = Anchor.CentreLeft; f.Padding = new MarginPadding { Right = 200 }; }), action],
-        };
     }
 
     private static Drawable startStep(string title, string detail, CoachingButton action)

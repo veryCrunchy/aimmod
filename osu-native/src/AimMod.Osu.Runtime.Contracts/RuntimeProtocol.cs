@@ -124,7 +124,15 @@ public sealed record ReplayObjectJudgement(
     ReplayPoint? CursorPosition,
     int ComboBefore,
     int ComboAfter,
-    ReplayMissAnalysis? MissAnalysis = null);
+    ReplayMissAnalysis? MissAnalysis = null,
+    // Left out when unknown, so analyses and Hub payloads without key data serialise exactly as before.
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? PressedKey = null);
+
+/// <summary>Which osu! key pressed a hit circle or slider head. Analyses made before keys were recorded have none.</summary>
+public static class ReplayPressedKey
+{
+    public const string Left = "Left", Right = "Right", Both = "Both";
+}
 
 public enum ReplayMissReason
 {

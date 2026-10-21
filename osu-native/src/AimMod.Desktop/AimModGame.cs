@@ -916,6 +916,7 @@ public partial class AimModGame : OsuGameBase
         {
             RelativeSizeAxes = Axes.Both,
         };
+        statisticsScreen.ConfigureReplayAnalysis(replayAnalyses, prepareCatalogReplayMoment);
         switchWorkspaceRoute(NativeRoute.Statistics, statisticsScreen);
         statisticsScreen.RefreshHistory();
     }
@@ -977,7 +978,8 @@ public partial class AimModGame : OsuGameBase
         };
         coachingWorkspace.ConfigurePracticeSessions(new CoachingPracticeSessionStore(Storage.GetFullPath($"coaching/practice-sessions-{currentOsuProfile?.UserId ?? 0}.json", true)),
             () => new TrainerHistoryStore(Storage.GetFullPath($"trainers/history-{currentOsuProfile?.UserId ?? 0}.json", true)).Load());
-        coachingWorkspace.ConfigureAdaptivePractice(adaptivePracticeStore, startAdaptivePractice);
+        coachingWorkspace.ConfigureAdaptivePractice(adaptivePracticeStore, startAdaptivePractice, startFocusedAdaptivePractice);
+        coachingWorkspace.ConfigureSectionPp(currentSectionPpService);
         switchWorkspaceRoute(NativeRoute.Coaching, coachingWorkspace);
         coachingWorkspace.RefreshHistory();
         coachingWorkspace.SetAutomaticPracticeStatus(automaticPracticeStatus);

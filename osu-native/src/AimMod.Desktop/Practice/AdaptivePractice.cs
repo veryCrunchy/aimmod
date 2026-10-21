@@ -20,22 +20,28 @@ public sealed record AdaptiveSection(int Index, double StartMs, double EndMs, in
 /// </summary>
 public sealed record AdaptiveSectionProgress(double Speed = 1, int Fails = 0, int ConsecutiveFails = 0, int Clears = 0,
     bool Tried = false, bool ClearedAtFullSpeed = false, int CleanStreak = 0, double? LastFailMs = null,
-    double? SpotStartMs = null, double? SpotEndMs = null, int SpotClears = 0)
+    double? SpotStartMs = null, double? SpotEndMs = null, int SpotClears = 0,
+    int Loops = 0, bool Parked = false, DateTimeOffset? SolidAt = null, double ReviewDays = 0, bool Review = false)
 {
     public bool HasSpot => SpotStartMs is not null && SpotEndMs is not null;
+
+    /// <summary>Still to drill this session: not solid yet, or solid but due for a review.</summary>
+    public bool NeedsWork => !ClearedAtFullSpeed || Review;
 }
 
 /// <param name="Leniency">The player's usual share of 100s and 50s among their hits, from the play being practised.</param>
 public sealed record AdaptivePracticeProgress(string MapKey, string Title, string Difficulty, double TargetRate,
     AdaptiveSectionProgress[] Sections, DateTimeOffset UpdatedAt, int Attempts = 0, int Fails = 0,
-    DateTimeOffset? CompletedAt = null, int? ConnectTo = null, double Leniency = AdaptivePracticeCoach.DefaultLeniency)
+    DateTimeOffset? CompletedAt = null, int? ConnectTo = null, double Leniency = AdaptivePracticeCoach.DefaultLeniency,
+    int[]? Focus = null)
 {
     public int FullSpeedSections => Sections.Count(s => s.ClearedAtFullSpeed);
     public bool Completed => CompletedAt is not null;
     public double SlowestSpeed => Sections.Length == 0 ? 1 : Sections.Min(s => s.Speed);
 }
 
-public enum AdaptiveDrillKind { Section, Spot, Connect, FullRun }
+/// <summary>A review is one full-speed run of a section that was solid in an earlier session.</summary>
+public enum AdaptiveDrillKind { Section, Spot, Connect, FullRun, Review }
 
 /// <summary>
 /// How the focused part of an attempt went. <see cref="Notes"/> are hits judged 300/100/50 (circles, slider heads,
@@ -116,6 +122,10 @@ public static class AdaptivePracticeCoach
     /// <summary>Misses within this window are one spot; a spot drill is never shorter than the minimum.</summary>
     public const double SpotWindowMs = 4_000, SpotMinimumMs = 2_500, SpotLeadMs = 1_500, SpotTailMs = 1_000;
     public const int SpotClearsNeeded = 2;
+    /// <summary>Tries on one section before it is parked and the others come first, so a mind block can settle.</summary>
+    public const int LoopCap = 8;
+    /// <summary>Days before a section that took work is reviewed; each clean review doubles it.</summary>
+    public const double FirstReviewDays = 1;
     /// <summary>Share of 100s and 50s assumed when the practised play has no hit counts.</summary>
     public const double DefaultLeniency = .15;
 
@@ -123,11 +133,26 @@ public static class AdaptivePracticeCoach
         new(key, title, difficulty, targetRate, Enumerable.Repeat(new AdaptiveSectionProgress(), sections).ToArray(), now);
 
     /// <summary>The player keeps their saved speeds unless the map now splits differently.</summary>
+    /// <remarks>
+    /// A new session clears parking, and sections that took work and have been solid for their review interval are
+    /// due for one full-speed review before anything else.
+    /// </remarks>
     public static AdaptivePracticeProgress Resume(AdaptivePracticeProgress? saved, string key, string title, string difficulty,
-        double targetRate, int sections, DateTimeOffset now) =>
-        saved is not null && saved.MapKey == key && saved.Sections.Length == sections && Math.Abs(saved.TargetRate - targetRate) < .001
-            ? saved with { Title = title, Difficulty = difficulty }
-            : Create(key, title, difficulty, targetRate, sections, now);
+        double targetRate, int sections, DateTimeOffset now)
+    {
+        if (saved is null || saved.MapKey != key || saved.Sections.Length != sections || Math.Abs(saved.TargetRate - targetRate) >= .001)
+            return Create(key, title, difficulty, targetRate, sections, now);
+        var fresh = saved.Sections.Select(s => s with
+        {
+            Loops = 0, Parked = false,
+            Review = s.Review || s.ClearedAtFullSpeed && s.SolidAt is { } solid && s.ReviewDays > 0 && (now - solid).TotalDays >= s.ReviewDays,
+        }).ToArray();
+        return saved with
+        {
+            Title = title, Difficulty = difficulty, ConnectTo = null,
+            Sections = fresh.SequenceEqual(saved.Sections) ? saved.Sections : fresh,
+        };
+    }
 
     /// <summary>Clean full-speed clears in a row a section needs: one, plus one for every two fails, up to four.</summary>
     public static int RequiredStreak(AdaptiveSectionProgress section) => 1 + Math.Min(3, section.Fails / 2);
@@ -141,15 +166,30 @@ public static class AdaptivePracticeCoach
         if (progress.ConnectTo is { } to && to > 0 && to <= last)
             return new(AdaptiveDrillKind.Connect, to - 1, to, sections[to - 1].StartMs, sections[to].EndMs,
                 Math.Min(progress.Sections[to - 1].Speed, progress.Sections[to].Speed));
-        int focus = Array.FindIndex(progress.Sections, s => !s.ClearedAtFullSpeed);
+        int focus = Order(progress).FirstOrDefault(-1);
         return focus < 0
             ? new(AdaptiveDrillKind.FullRun, 0, last, sections[0].StartMs, sections[last].EndMs, 1)
             : drill(progress, sections, focus);
     }
 
+    /// <summary>
+    /// Sections still to drill, in the order they come: reviews first, then the chosen focus sections (the ones that
+    /// cost the play most), then the map in order. Parked sections wait until nothing else is left.
+    /// </summary>
+    public static IEnumerable<int> Order(AdaptivePracticeProgress progress)
+    {
+        var all = progress.Sections;
+        var focus = (progress.Focus ?? []).Where(i => i >= 0 && i < all.Length);
+        return Enumerable.Range(0, all.Length).Where(i => all[i].Review)
+            .Concat(focus).Concat(Enumerable.Range(0, all.Length)).Distinct()
+            .Where(i => all[i].NeedsWork).OrderBy(i => all[i].Parked);
+    }
+
     private static AdaptiveDrill drill(AdaptivePracticeProgress progress, IReadOnlyList<AdaptiveSection> sections, int focus)
     {
         var state = progress.Sections[focus];
+        if (state.ClearedAtFullSpeed && state.Review)
+            return new(AdaptiveDrillKind.Review, focus, focus, sections[focus].StartMs, sections[focus].EndMs, 1);
         return state.HasSpot
             ? new(AdaptiveDrillKind.Spot, focus, focus, state.SpotStartMs!.Value, state.SpotEndMs!.Value, state.Speed)
             : new(AdaptiveDrillKind.Section, focus, focus, sections[focus].StartMs, sections[focus].EndMs, state.Speed);
@@ -170,7 +210,8 @@ public static class AdaptivePracticeCoach
         all[drill.Focus] = all[drill.Focus] with
         {
             Speed = 1, Tried = true, ClearedAtFullSpeed = true, ConsecutiveFails = 0, CleanStreak = 0,
-            SpotStartMs = null, SpotEndMs = null, SpotClears = 0,
+            SpotStartMs = null, SpotEndMs = null, SpotClears = 0, Loops = 0, Parked = false, Review = false,
+            SolidAt = all[drill.Focus].SolidAt ?? now,
         };
         return progress with { Sections = all, ConnectTo = null, UpdatedAt = now };
     }
@@ -187,7 +228,9 @@ public static class AdaptivePracticeCoach
         {
             Speed = Math.Max(MinimumSpeed, round(current.Speed - drop)), Fails = current.Fails + 1, ConsecutiveFails = streak,
             Tried = true, ClearedAtFullSpeed = false, CleanStreak = 0, LastFailMs = atMs, SpotClears = 0,
+            Review = false, SolidAt = null, ReviewDays = 0,
         };
+        next = loop(next, progress, section);
         if (!current.HasSpot && streak >= 2 && current.LastFailMs is { } previous && Math.Abs(previous - atMs) <= 2_000)
             next = withSpot(next, sections[section], Math.Min(previous, atMs), Math.Max(previous, atMs));
         all[section] = next;
@@ -202,7 +245,7 @@ public static class AdaptivePracticeCoach
         AdaptiveDrill drill, AdaptiveResult result, DateTimeOffset now)
     {
         var grade = Grade(result, progress.Leniency);
-        if (drill.Kind is AdaptiveDrillKind.Section or AdaptiveDrillKind.Spot && grade == AdaptiveGrade.Struggled)
+        if (drill.Kind is AdaptiveDrillKind.Section or AdaptiveDrillKind.Spot or AdaptiveDrillKind.Review && grade == AdaptiveGrade.Struggled)
             return Fail(progress, sections, drill.Focus, result.MissTimes.Count > 0 ? result.MissTimes[0] : drill.StartMs, now);
         var missTimes = result.MissTimes;
         progress = progress with { Attempts = progress.Attempts + 1, UpdatedAt = now };
@@ -216,14 +259,24 @@ public static class AdaptivePracticeCoach
         var all = progress.Sections.ToArray();
         var current = all[drill.Focus];
         bool comfortable = grade == AdaptiveGrade.Clean;
+        if (drill.Kind == AdaptiveDrillKind.Review)
+        {
+            // A clean review waits twice as long for the next; a shaky one comes back after the first interval.
+            all[drill.Focus] = current with
+            {
+                Review = false, SolidAt = now, Clears = current.Clears + 1,
+                ReviewDays = comfortable ? Math.Max(FirstReviewDays, current.ReviewDays * 2) : FirstReviewDays,
+            };
+            return progress with { Sections = all };
+        }
         current = current with { ConsecutiveFails = 0, Clears = current.Clears + 1, Tried = true };
         if (drill.Kind == AdaptiveDrillKind.Spot)
         {
             // The spot is learned after a few clean repeats; then the whole section is drilled again.
             int clears = comfortable ? current.SpotClears + 1 : 0;
-            all[drill.Focus] = clears >= SpotClearsNeeded
+            all[drill.Focus] = loop(clears >= SpotClearsNeeded
                 ? current with { SpotStartMs = null, SpotEndMs = null, SpotClears = 0 }
-                : current with { SpotClears = clears };
+                : current with { SpotClears = clears }, progress, drill.Focus);
             return progress with { Sections = all };
         }
         int? connect = null;
@@ -237,14 +290,30 @@ public static class AdaptivePracticeCoach
         }
         else if (comfortable && current.CleanStreak + 1 >= RequiredStreak(current))
         {
-            current = current with { CleanStreak = current.CleanStreak + 1, ClearedAtFullSpeed = true };
+            // Only a section that took work is reviewed in later sessions.
+            current = current with
+            {
+                CleanStreak = current.CleanStreak + 1, ClearedAtFullSpeed = true, SolidAt = now, Loops = 0, Parked = false,
+                ReviewDays = current.Fails >= 2 ? FirstReviewDays : 0,
+            };
             if (drill.Focus > 0) connect = drill.Focus;
         }
         else current = current with { CleanStreak = comfortable ? current.CleanStreak + 1 : 0 };
         if (result.ComboBreaks > 0 && missTimes.Count is > 0 and <= 3 && missTimes.Max() - missTimes.Min() <= SpotWindowMs)
             current = withSpot(current, sections[drill.Focus], missTimes.Min(), missTimes.Max());
-        all[drill.Focus] = current;
+        all[drill.Focus] = current.ClearedAtFullSpeed ? current : loop(current, progress, drill.Focus);
         return progress with { Sections = all, ConnectTo = connect };
+    }
+
+    /// <summary>
+    /// Counts a try on a section that is not solid yet. After <see cref="LoopCap"/> tries it is parked while another
+    /// section still needs work; a parked section that is drilled again starts a fresh count.
+    /// </summary>
+    private static AdaptiveSectionProgress loop(AdaptiveSectionProgress state, AdaptivePracticeProgress progress, int section)
+    {
+        int loops = state.Parked ? 1 : state.Loops + 1;
+        bool elsewhere = progress.Sections.Where((s, i) => i != section && s.NeedsWork && !s.Parked).Any();
+        return loops >= LoopCap && elsewhere ? state with { Loops = 0, Parked = true } : state with { Loops = loops, Parked = false };
     }
 
     private static AdaptiveSectionProgress withSpot(AdaptiveSectionProgress state, AdaptiveSection section, double first, double last)

@@ -199,7 +199,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         var savedActions = new FillFlowContainer<Drawable> {
             RelativeSizeAxes = Axes.X, AutoSizeAxes = Axes.Y, Direction = FillDirection.Full, Spacing = new(8),
             Children = [
-                new CoachingButton("Create a practice set", () => showCoachingPage(2), true, true),
+                new CoachingButton("Find a map to practise", () => showCoachingPage(2), true, true),
                 new CoachingButton("Refresh results", reloadHistory, compact:true),
                 new AimModResetButton(() => savedPracticeSearch.Current.Value = string.Empty, "Clear search"),
             ],
@@ -410,6 +410,8 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
             practiceWorkspace?.SetSourceHistory(nextReplays);
             modDropdown.SetChoices(choices);
             trainingPlanCache = null;
+            // Adaptive practice rows need the plays they were started from.
+            if (adaptiveProgress.Count > 0) renderPracticeHistory();
         }
         refreshPracticeProgress();
         requestModel(workspace?.SelectedRun?.ScoreId);

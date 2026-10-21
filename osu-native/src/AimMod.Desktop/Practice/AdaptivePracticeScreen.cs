@@ -22,6 +22,7 @@ public sealed record AdaptiveBreather(string Title, string Detail, bool Finished
         AdaptiveDrillKind.FullRun => "Full run",
         AdaptiveDrillKind.Connect => $"Sections {drill.FirstSection + 1}–{drill.LastSection + 1}",
         AdaptiveDrillKind.Spot => $"Spot in section {drill.Focus + 1} of {sections}",
+        AdaptiveDrillKind.Review => $"Review: section {drill.Focus + 1} of {sections}",
         _ => $"Section {drill.Focus + 1} of {sections}",
     };
 
@@ -30,18 +31,28 @@ public sealed record AdaptiveBreather(string Title, string Detail, bool Finished
         AdaptiveDrillKind.FullRun => "Full run from the start",
         AdaptiveDrillKind.Connect => $"Connect sections {drill.FirstSection + 1} and {drill.LastSection + 1}",
         AdaptiveDrillKind.Spot => $"Spot in section {drill.Focus + 1} at {AdaptivePracticeCoach.Percent(drill.Speed)}",
+        AdaptiveDrillKind.Review => $"Review section {drill.Focus + 1} at full speed",
         _ => $"Section {drill.Focus + 1} at {AdaptivePracticeCoach.Percent(drill.Speed)}",
     };
 
     public static AdaptiveBreather Opening(AdaptivePracticeProgress progress, AdaptiveDrill drill) => new(title(drill), progress.Attempts == 0
         ? "Short drills on the parts you need, each at one steady speed. Fail and it repeats a little slower; clear it cleanly and it speeds back up."
-        : "Picking up where you left off.");
+        : drill.Kind == AdaptiveDrillKind.Review
+            ? "Picking up where you left off. Sections that took work last time get one run at full speed first, to check they still hold."
+            : "Picking up where you left off.");
+
+    /// <summary>Said when the section just tried was parked, instead of the usual line.</summary>
+    private static string? parked(AdaptivePracticeProgress progress, int section, AdaptiveDrill next) =>
+        progress.Sections[section].Parked && next.Focus != section
+            ? $"That was {AdaptivePracticeCoach.LoopCap} tries on section {section + 1} in a row. It is parked for now: you come back to it after the other sections, with fresh eyes."
+            : null;
 
     /// <param name="missed">How the attempt went, when it survived but had too many misses to count as a clear.</param>
     public static AdaptiveBreather AfterFail(AdaptivePracticeProgress progress, int section, AdaptiveDrill next, AdaptiveResult? missed = null)
     {
         var state = progress.Sections[section];
         var reason = missed is null ? "" : AdaptivePracticeCoach.Describe(missed, progress.Leniency) + " ";
+        if (parked(progress, section, next) is { } rest) return new(title(next), reason + rest);
         string detail = next.Kind == AdaptiveDrillKind.Spot && next.Focus == section && state.ConsecutiveFails >= 2 && state.SpotClears == 0
             ? "Failed at the same place again. Drilling just that part."
             : state.ConsecutiveFails switch
@@ -74,6 +85,15 @@ public sealed record AdaptiveBreather(string Title, string Detail, bool Finished
     {
         if (justCompleted)
             return new("Full speed clear", $"You played the whole map at full speed without failing. {progress.Attempts} attempts, {progress.Fails} fails along the way.", true);
+        if (previous.Kind == AdaptiveDrillKind.Review)
+        {
+            double days = progress.Sections[previous.Focus].ReviewDays;
+            return new(title(next), days > AdaptivePracticeCoach.FirstReviewDays
+                ? $"Section {previous.Focus + 1} still holds. Next review in {days:0} days."
+                : $"Section {previous.Focus + 1} held, with some mistakes. It comes back for review tomorrow.", PauseMs: Short);
+        }
+        if (previous.Kind is AdaptiveDrillKind.Section or AdaptiveDrillKind.Spot && parked(progress, previous.Focus, next) is { } rest)
+            return new(title(next), rest);
         if (next.Kind == AdaptiveDrillKind.FullRun)
             return new(title(next), previous.Kind == AdaptiveDrillKind.FullRun ? "Again from the start." : "Every section is solid at full speed. Now play the whole map.");
         if (next.Kind == AdaptiveDrillKind.Connect)

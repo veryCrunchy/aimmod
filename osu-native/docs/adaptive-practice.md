@@ -10,11 +10,12 @@ The playable beatmap is split at musical boundaries. Breaks and gaps of three se
 
 ## Drills
 
-Each attempt is a fresh osu! player on the original map, trimmed to the drill: objects before and after it are removed, and play starts three seconds of music before its first object. Combo numbers, hit windows and approach rate are the map's own. Every attempt plays at **one constant speed**; speed never changes under the player mid-run.
+Each attempt is a fresh osu! player on the original map, trimmed to the drill: objects before and after it are removed, and the music starts on the last bar line at least two seconds before its first object, so the player counts in on the downbeat (a beat instead of a bar when bars are very slow, and three seconds when the map has no usable timing). Combo numbers, hit windows and approach rate are the map's own. Every attempt plays at **one constant speed**; speed never changes under the player mid-run.
 
-- **Section:** the first section not yet solid, on its own.
+- **Section:** the next section not yet solid, on its own. Sections come in map order, unless the session was started from the sections that cost a play the most pp ([where the pp went](section-pp.md)); those come first, worst first.
 - **Spot:** a few seconds inside a section, with a short run-up. A section gets a spot when it is cleared with one to three misses within four seconds of each other, or failed twice within two seconds of the same place. Two clean spot runs put the whole section back.
 - **Connect:** a section that has just become solid, played together with the section before it, so the transition is practised too.
+- **Review:** one run at full speed of a section that took work (two or more fails) and was solid in an earlier session, before anything else. See below.
 - **Full run:** once every section is solid, the whole map from the start at full speed.
 
 A fail is osu!'s own, health reaching zero, or a section or spot drill that fell apart: more than two combo breaks (or more than one in ten of its objects, for long sections), or a run of nearly all 50s. A drill starts with full health and lasts seconds, so osu! alone would rarely fail it even when the part was not playable. Connect and full runs only count osu!'s own fail, because getting through them is the point. Instead of the fail animation the attempt stops and a short pause shows what comes next. The next attempt starts automatically, after three seconds following a fail and a second and a half after a clean clear; Space starts it immediately and Escape ends the session. S skips the drill: a section or spot marks that section as solid at full speed, and a connect run is passed over. The full run cannot be skipped, so a section skipped too early fails there and returns to drills.
@@ -29,6 +30,8 @@ Speeds are per section and are a fraction of the play's full speed:
 - At full speed, a section becomes solid after a streak of clean runs. The streak grows with the section's fails: one run, plus one for every two fails, up to four. A run that is not clean restarts the streak.
 - After each section or spot drill the pause says why it counted, for example "No misses, 2 × 100/50 (3 allowed for a clean run).".
 - A fail anywhere, including in a connect or full run, sends that section back to drills.
+- After eight tries on a section that is not solid yet, it is **parked** while another section still needs work: the other sections come first and the parked one returns afterwards with a fresh count. The pause says so. A new session clears parking.
+- A section that took work is **reviewed** a day after it became solid. A clean review doubles the wait before the next one (two days, four, eight...); a shaky review comes back the next day; a struggled review sends it back to drills.
 
 Speed is applied through `AdaptiveSpeedMod`, a Half Time subclass that the ruleset accepts and that keeps pitch.
 
