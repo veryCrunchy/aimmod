@@ -53,7 +53,7 @@ public partial class NativeTrainersWorkspace
         var outcomes = TrainerStreamLadder.Outcomes(saved);
         var plan = ladder;
         ladderBody.Add(new AimModSubsectionHeader(plan is null ? "Stream ladder" : plan.Finished ? "Ladder complete" : $"Stream ladder · step {plan.Results.Count + 1}",
-            "full streams · 15 s a step · +10 BPM"));
+            "full streams · 15 s a step · 10 BPM apart"));
         if (plan is null) renderLadderSetup(saved);
         else if (!plan.Finished) renderLadderStep(plan);
         else renderLadderResult(plan, outcomes.FirstOrDefault(o => o.SessionId != plan.Id && o.Complete));
@@ -65,22 +65,26 @@ public partial class NativeTrainersWorkspace
     {
         var defaults = TrainerStreamLadder.Defaults(saved, settings, DateTimeOffset.UtcNow);
         int edge = ladderEdge ?? defaults.EdgeBpm;
-        double limit = ladderLimit ?? defaults.SpreadLimitMs;
+        double limit = ladderLimit ?? defaults.SpreadLimitPercent;
         bool custom = ladderEdge is not null || ladderLimit is not null;
-        ladderBody.Add(paragraph("Measures the fastest stream you can play cleanly. You play full streams for 15 seconds, starting 20 BPM below your edge tempo, "
-            + "and every clean step adds 10 BPM. The ladder ends at the first step with a miss or with timing spread above your limit. "
+        int start = TrainerStreamLadder.StartFor(edge);
+        ladderBody.Add(paragraph("Finds the fastest stream you can play cleanly. You play full streams for 15 seconds, starting 20 BPM below your edge tempo. "
+            + "A clean step goes 10 BPM faster until a step is not clean. If the first step is not clean, the ladder goes 10 BPM slower until one is. "
+            + "Clean means no misses and even timing: spread within a share of the gap between notes, so slow and fast streams are judged alike. "
             + "Adaptive difficulty is off and the layout never changes, so ladders on different days compare fairly."));
         var steppers = flow(); steppers.Spacing = new(24, 8); ladderBody.Add(steppers);
         steppers.Add(stepper("EDGE TEMPO", $"{edge} BPM", "Where your streams start to fall apart. The ladder starts 20 BPM below it.",
             () => adjustLadder(-TrainerStreamLadder.BpmStep, 0, edge, limit), () => adjustLadder(TrainerStreamLadder.BpmStep, 0, edge, limit),
             edge - TrainerStreamLadder.BpmStep >= TrainerStreamLadder.MinimumBpm + TrainerStreamLadder.StartBelowEdge, edge < TrainerStreamLadder.MaximumBpm));
-        steppers.Add(stepper("SPREAD LIMIT", $"{limit:0} ms", "Highest timing spread a step may have and still count as clean.",
+        steppers.Add(stepper("SPREAD LIMIT", $"{limit:0}% of gap",
+            $"How uneven a step may be and still count as clean. At {start} BPM the notes are {TrainerStreamLadder.NoteGapMs(start):0} ms apart, "
+            + $"so the limit is {TrainerStreamLadder.SpreadLimitMs(start, limit):0.0} ms.",
             () => adjustLadder(0, -1, edge, limit), () => adjustLadder(0, 1, edge, limit),
-            limit - 1 >= TrainerStreamLadder.MinimumSpreadLimitMs, limit + 1 <= TrainerStreamLadder.MaximumSpreadLimitMs));
+            limit - 1 >= TrainerStreamLadder.MinimumSpreadLimitPercent, limit + 1 <= TrainerStreamLadder.MaximumSpreadLimitPercent));
         var chips = flow(); chips.Spacing = new(6); ladderBody.Add(chips);
-        chips.Add(new AimModTrainerChip($"Starts at {TrainerStreamLadder.StartFor(edge)} BPM", FontAwesome.Solid.Music, AimModTrainerChipTone.Accent));
+        chips.Add(new AimModTrainerChip($"Starts at {start} BPM", FontAwesome.Solid.Music, AimModTrainerChipTone.Accent));
         chips.Add(new AimModTrainerChip("15 s a step", FontAwesome.Regular.Clock));
-        chips.Add(new AimModTrainerChip($"Ends on a miss or spread above {limit:0} ms", FontAwesome.Solid.FlagCheckered));
+        chips.Add(new AimModTrainerChip($"Clean: no misses, spread up to {limit:0}% of the note gap", FontAwesome.Solid.FlagCheckered));
         chips.Add(new AimModTrainerChip(custom ? "Your own start and limit" : defaults.Source, FontAwesome.Solid.ChartLine, AimModTrainerChipTone.Info,
             "Keep the same start and limit between ladders so their results compare."));
         chips.Add(new AimModTrainerChip("Your osu! controls", FontAwesome.Solid.Keyboard));
@@ -94,7 +98,7 @@ public partial class NativeTrainersWorkspace
     private void adjustLadder(int bpm, int ms, int edge, double limit)
     {
         ladderEdge = Math.Clamp(edge + bpm, TrainerStreamLadder.MinimumBpm + TrainerStreamLadder.StartBelowEdge, TrainerStreamLadder.MaximumBpm);
-        ladderLimit = Math.Clamp(limit + ms, TrainerStreamLadder.MinimumSpreadLimitMs, TrainerStreamLadder.MaximumSpreadLimitMs);
+        ladderLimit = Math.Clamp(limit + ms, TrainerStreamLadder.MinimumSpreadLimitPercent, TrainerStreamLadder.MaximumSpreadLimitPercent);
         renderLadder();
     }
 
@@ -127,11 +131,14 @@ public partial class NativeTrainersWorkspace
         ladderBody.Add(text($"{plan.CurrentBpm} BPM", 28, AimModPalette.Text));
         ladderBody.Add(paragraph(plan.Results.Count == 0
             ? "Alternate evenly from the first note to the last. The count-in gives you four beats to settle."
-            : "Clean. Take a breath, then go 10 BPM faster. Keep the last notes as even as the first."));
+            : plan.SteppingDown
+                ? "Not clean yet. The ladder goes 10 BPM slower until a step is clean. Relax and keep the gaps even."
+                : "Clean. Take a breath, then go 10 BPM faster. Keep the last notes as even as the first."));
         var chips = flow(); chips.Spacing = new(6); ladderBody.Add(chips);
         chips.Add(new AimModTrainerChip("Full streams", FontAwesome.Solid.Water));
         chips.Add(new AimModTrainerChip("15 s", FontAwesome.Regular.Clock));
-        chips.Add(new AimModTrainerChip($"Clean: no misses, spread up to {plan.SpreadLimitMs:0} ms", FontAwesome.Solid.Check, AimModTrainerChipTone.Accent));
+        chips.Add(new AimModTrainerChip($"Clean: no misses, spread up to {TrainerStreamLadder.SpreadLimitMs(plan.CurrentBpm, plan.SpreadLimitPercent):0.0} ms",
+            FontAwesome.Solid.Check, AimModTrainerChipTone.Accent, $"{plan.SpreadLimitPercent:0}% of the {TrainerStreamLadder.NoteGapMs(plan.CurrentBpm):0} ms between notes at this tempo."));
         chips.Add(new AimModTrainerChip(plan.Keys, FontAwesome.Solid.Keyboard));
         var actions = flow(); ladderBody.Add(actions);
         actions.Add(new AimModButton("Start this step", launchLadder, true));
@@ -151,11 +158,13 @@ public partial class NativeTrainersWorkspace
         kpis.Add(new AimModTrainerKpi("HIGHEST CLEAN BPM", highest is { } value ? $"{value}" : "--", change, delta, AimModTrainerTrend.HigherIsBetter,
             tooltip: "The fastest step with no misses and timing spread within your limit."));
         var top = plan.Results.LastOrDefault(r => r.LadderRun!.Clean);
-        kpis.Add(new AimModTrainerKpi("SPREAD AT THAT TEMPO", ms(top?.SpreadMs), $"limit {plan.SpreadLimitMs:0} ms", tooltip: "Timing spread of your fastest clean step. Lower is steadier."));
+        kpis.Add(new AimModTrainerKpi("SPREAD AT THAT TEMPO", ms(top?.SpreadMs),
+            top is null ? $"limit {plan.SpreadLimitPercent:0}% of gap" : $"limit {TrainerStreamLadder.SpreadLimitMs(top.Settings.Bpm, plan.SpreadLimitPercent):0.0} ms",
+            tooltip: "Timing spread of your fastest clean step. Lower is steadier."));
         kpis.Add(new AimModTrainerKpi("STEPS", $"{plan.Results.Count}", $"from {plan.StartBpm} BPM"));
         ladderBody.Add(paragraph(highest is null
-            ? $"{plan.StopReason}. Lower your edge tempo so the first step is comfortable, then try again."
-            : plan.ReachedTop ? plan.StopReason : $"Ended: {plan.StopReason}."));
+            ? $"{plan.StopReason} Try a higher spread limit, or practise Streams & alternating at a slow tempo first."
+            : plan.ReachedTop || plan.SteppingDown ? plan.StopReason : $"Ended: {plan.StopReason}."));
         var actions = flow(); ladderBody.Add(actions);
         actions.Add(new AimModButton("New ladder", endLadder, true));
         actions.Add(new AimModButton("Back to trainers", showSkillTrainers));
@@ -197,10 +206,12 @@ public partial class NativeTrainersWorkspace
             var best = complete.Where(o => o.HighestCleanBpm is not null).MaxBy(o => o.HighestCleanBpm!.Value);
             double? delta = complete.Length >= 2 && latest.HighestCleanBpm is { } now && complete[1].HighestCleanBpm is { } before ? now - before : null;
             kpis.Add(new AimModTrainerKpi("LATEST", latest.HighestCleanBpm is { } value ? $"{value} BPM" : "--",
-                delta is { } d ? d == 0 ? "same as previous" : $"{d:+0;-0} BPM vs previous" : latest.CompletedAt.LocalDateTime.ToString("d MMM"), delta, AimModTrainerTrend.HigherIsBetter));
+                delta is { } d ? d == 0 ? "same as previous" : $"{d:+0;-0} BPM vs previous"
+                : latest.HighestCleanBpm is null ? $"no clean step · {latest.CompletedAt.LocalDateTime:d MMM}" : latest.CompletedAt.LocalDateTime.ToString("d MMM"),
+                delta, AimModTrainerTrend.HigherIsBetter));
             if (best is not null)
                 kpis.Add(new AimModTrainerKpi("BEST", $"{best.HighestCleanBpm} BPM", best.CompletedAt.LocalDateTime.ToString("d MMM"), best: true));
-            if (complete.Select(o => (o.StartBpm, o.SpreadLimitMs)).Distinct().Count() > 1)
+            if (complete.Select(o => (o.StartBpm, o.SpreadLimitPercent)).Distinct().Count() > 1)
                 host.Add(paragraph("Some ladders used a different start or limit. Compare ladders with the same settings."));
             if (complete.Length >= 2)
                 host.Add(new TrainerProgressTrend(complete.Reverse().Select(o => new TrainerTrendPoint(o.CompletedAt, o.HighestCleanBpm, o.SpreadAtStartMs, null)).ToArray(),
@@ -212,7 +223,8 @@ public partial class NativeTrainersWorkspace
         foreach (var outcome in outcomes.Take(8))
         {
             var row = progressRow([outcome.CompletedAt.LocalDateTime.ToString("d MMM HH:mm"), $"{outcome.StartBpm} BPM",
-                outcome.HighestCleanBpm is { } h ? $"{h} BPM" : "--", $"{outcome.SpreadLimitMs:0} ms", outcome.Complete ? $"{outcome.Rungs} steps" : "finished early"]);
+                outcome.HighestCleanBpm is { } h ? $"{h} BPM" : "no clean step", $"{outcome.SpreadLimitPercent:0}% of gap",
+                outcome.Complete ? $"{outcome.Rungs} {(outcome.Rungs == 1 ? "step" : "steps")}" : "finished early"]);
             host.Add(new Container { RelativeSizeAxes = Axes.X, Height = 34, Child = row });
         }
     }

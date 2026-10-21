@@ -83,17 +83,18 @@ public sealed partial class OffscreenVisualCaptureTests
         for (int i = 0; i < reached.Length; i++)
         {
             var at = now.AddDays(-3 * (reached.Length - i)).AddMinutes(-30);
-            var ladder = new TrainerStreamLadder(180, 18, "Z / X", 16);
+            var ladder = new TrainerStreamLadder(180, 15, "Z / X", 16);
             while (!ladder.Finished)
             {
                 bool clean = ladder.CurrentBpm <= reached[i];
-                var step = ladderStep(ladder.CurrentSettings(), clean ? 12 + (ladder.CurrentBpm - 160) * .2 - i * .4 : 21, at, clean ? 0 : 2);
+                double limit = TrainerStreamLadder.SpreadLimitMs(ladder.CurrentBpm, 15);
+                var step = ladderStep(ladder.CurrentSettings(), clean ? limit * (.86 - i * .03) : limit * 1.3, at, clean ? 0 : 2);
                 ladder.Record(step with { CompletedAt = DateTimeOffset.UtcNow.AddSeconds(-1) });
                 at = at.AddMinutes(1);
             }
             foreach (var step in ladder.Results) yield return step with { CompletedAt = at };
         }
-        var early = new TrainerStreamLadder(180, 18, "Z / X", 16);
+        var early = new TrainerStreamLadder(180, 15, "Z / X", 16);
         early.Record(ladderStep(early.CurrentSettings(), 13, DateTimeOffset.UtcNow.AddSeconds(-1)));
         yield return early.Results[0] with { CompletedAt = now.AddHours(-5) };
     }
@@ -210,8 +211,8 @@ public sealed partial class OffscreenVisualCaptureTests
                 {
                     foreach (var step in SyntheticLadders(now)) store.Add(step);
                     workspace.ShowStreamLadder();
-                    var ladder = new TrainerStreamLadder(190, 18, "Z / X", 16);
-                    foreach (double spread in new[] { 12.8, 14.1, 16.9, 19.4 }) ladder.Record(ladderStep(ladder.CurrentSettings(), spread, now));
+                    var ladder = new TrainerStreamLadder(180, 15, "Z / X", 16);
+                    foreach (double spread in new[] { 11.2, 11.9, 12.1, 13.4 }) ladder.Record(ladderStep(ladder.CurrentSettings(), spread, now));
                     typeof(NativeTrainersWorkspace).GetField("ladder", flags)!.SetValue(workspace, ladder);
                     typeof(NativeTrainersWorkspace).GetField("ladderStore", flags)!.SetValue(workspace, store);
                     typeof(NativeTrainersWorkspace).GetField("ladderAccount", flags)!.SetValue(workspace, workspace.CurrentSkillAccountId?.Invoke());

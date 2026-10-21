@@ -44,10 +44,12 @@ The workspace shows progress for the selected exercise. The chart shows accuracy
 
 ## Stream ladder
 
-Open **Trainers > Stream ladder** to measure the fastest stream you can play cleanly. Each step is 15 seconds of full streams with click cues, starting 20 BPM below the chosen **edge tempo**. A clean step, with no misses and timing spread at or below the **spread limit**, adds 10 BPM. The ladder ends at the first step that is not clean, or after a clean step at 240 BPM. Its result is the **highest clean BPM**.
+Open **Trainers > Stream ladder** to find the fastest stream you can play cleanly. Each step is 15 seconds of full streams with click cues. The ladder starts 20 BPM below the chosen **edge tempo**. A clean first step climbs 10 BPM at a time until a step is not clean; a first step that is not clean steps down 10 BPM at a time, to 60 BPM at the slowest, until one is. A clean step at 240 BPM also ends it. The result is the **highest clean BPM**.
 
-Every step uses the same drill: adaptive difficulty and randomised patterns are off, the layout is fixed and only the tempo changes. A new ladder repeats the previous ladder's start and limit so results stay comparable. Without an earlier ladder the limit is 1.25 × the median timing spread of recent clean stream runs (20 ms without them) and the edge tempo is their median tempo. Both can be changed before starting.
+A step is clean with no misses and a timing spread within the **spread limit**, a share of the gap between notes (four notes a beat): 15% by default, which is 15 ms at 150 BPM and 10 ms at 225 BPM. A fixed limit in milliseconds would ask far more evenness of fast streams than of slow ones, and a player could not get under it by slowing down.
 
-Steps are saved in the normal per-account trainer history with a ladder marker, and are left out of adaptive difficulty, warmup and skill-limit evidence, because a ladder fails on purpose. Escape stops a step without counting it. **Finish here** keeps the steps played, but the ladder is listed as finished early and stays out of the trend, since its highest clean tempo is only a lower bound.
+Every step uses the same drill: adaptive difficulty and randomised patterns are off, the layout is fixed and only the tempo changes. A new ladder repeats the previous ladder's start and limit so results stay comparable. Without an earlier ladder the limit is 1.25 × the median spread, as a share of the note gap, of recent clean stream runs on click cues (15% without them), and the edge tempo is their median tempo. Both can be changed before starting.
+
+Steps are saved in the normal per-account trainer history with a ladder marker, and are left out of adaptive difficulty, warmup and skill-limit evidence, because a ladder fails on purpose. Escape stops a step without counting it. **Finish here** keeps the steps played, but the ladder is listed as finished early and stays out of the trend.
 
 The ladder page and the Streams & alternating progress panel chart the highest clean BPM of every complete ladder, together with the timing spread on each ladder's first step, which is played at the same tempo every time.
