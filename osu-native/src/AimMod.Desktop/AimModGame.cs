@@ -776,6 +776,7 @@ public partial class AimModGame : OsuGameBase
             openBeatmapPractice)
         {
             RelativeSizeAxes = Axes.Both,
+            OpenDifficultyPractice = (set, difficulty) => { showCoaching(); coachingWorkspace!.FocusDifficulty(set.Title, difficulty); },
         };
         switchWorkspaceRoute(NativeRoute.Beatmaps, beatmapsScreen);
     }

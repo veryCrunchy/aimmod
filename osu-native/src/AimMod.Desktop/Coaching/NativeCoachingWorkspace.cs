@@ -119,6 +119,46 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
 
     public void ClosePractice() { if (practiceWorkspace is not null) { practiceWorkspace.Alpha = 0; if (practiceWorkspace.IsShowingSavedPractice) showCoachingPage(coachingMapId is null ? 3 : 4); } refreshPracticeProgress(); }
 
+    private (string Title, LocalBeatmapDifficulty Difficulty)? pendingDifficultyFocus;
+    private bool historyApplied;
+
+    /// <summary>
+    /// Opens coaching for one difficulty: its coaching page from the newest play on it, passed if possible and failed
+    /// otherwise, whether or not that play is analysed yet. Without any play, the map's drills are shown with a note.
+    /// </summary>
+    public void FocusDifficulty(string title, LocalBeatmapDifficulty difficulty)
+    {
+        pendingDifficultyFocus = (title, difficulty);
+        if (historyApplied) applyDifficultyFocus();
+    }
+
+    internal static bool PlaysDifficulty(LocalReplay run, LocalBeatmapDifficulty difficulty) =>
+        !string.IsNullOrEmpty(difficulty.BeatmapHash) && string.Equals(run.BeatmapHash, difficulty.BeatmapHash, StringComparison.OrdinalIgnoreCase)
+        || difficulty.BeatmapId != Guid.Empty && run.BeatmapId == difficulty.BeatmapId
+        || difficulty.OnlineId > 0 && run.OnlineBeatmapId == difficulty.OnlineId;
+
+    /// <summary>The play to coach a difficulty from: the newest passed play, else the newest play of any result.</summary>
+    internal static LocalReplay? CoachingRunFor(IEnumerable<LocalReplay> history, LocalBeatmapDifficulty difficulty)
+    {
+        var plays = history.Where(r => r.RulesetShortName == "osu" && CoachingRunKeys.IsManualPlay(r) && PlaysDifficulty(r, difficulty))
+            .OrderByDescending(r => r.PlayedAt).ToArray();
+        return plays.FirstOrDefault(eligibleForCoaching) ?? plays.FirstOrDefault();
+    }
+
+    private void applyDifficultyFocus()
+    {
+        if (pendingDifficultyFocus is not { } focus) return;
+        pendingDifficultyFocus = null;
+        if (CoachingRunFor(allReplays, focus.Difficulty) is { } run)
+        {
+            if (practiceWorkspace is not null) practiceWorkspace.Alpha = 0;
+            openCoachingMap(null, run);
+            return;
+        }
+        FocusPracticeMap(focus.Title);
+        practiceWorkspace?.SetRunStatus($"You haven't played {focus.Difficulty.Name} yet. Play it once in osu!, then press Practice again to coach exactly that difficulty. Below are this map's difficulties that already have practice sections.");
+    }
+
     public void FocusPracticeMap(string title)
     {
         practiceMinimumStars.SetDefault();
@@ -415,6 +455,8 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         }
         refreshPracticeProgress();
         requestModel(workspace?.SelectedRun?.ScoreId);
+        historyApplied = true;
+        applyDifficultyFocus();
     }
 
     /// <summary>
