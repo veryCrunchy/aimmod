@@ -221,7 +221,7 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
                             search = new AimModSearchBox { PlaceholderText = "Search title, artist, difficulty or mod" },
                             periodControl = new StatisticsSegmentedControl<StatisticsTimeRange>(timeRange,
                             [
-                                (StatisticsTimeRange.Days30, "30 days"), (StatisticsTimeRange.Days90, "90 days"),
+                                (StatisticsTimeRange.Days7, "7 days"), (StatisticsTimeRange.Days30, "30 days"), (StatisticsTimeRange.Days90, "90 days"),
                                 (StatisticsTimeRange.Year, "Year"), (StatisticsTimeRange.All, "All time"),
                             ]),
                             filtersButton = new AimModButton("Filters", toggleFilters) { Anchor = Anchor.TopRight, Origin = Anchor.TopRight },
@@ -583,7 +583,7 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
     {
         lastModel = model;
         stateCard.Dismiss();
-        renderFolder(model.Runs);
+        renderFolder(model);
         StatisticsInsights insights = model.Insights;
         string count = model.Runs.Count == allRuns.Count || allRuns.Count == 0
             ? $"{model.Runs.Count:N0} {(model.Runs.Count == 1 ? "play" : "plays")}"

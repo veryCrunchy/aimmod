@@ -57,6 +57,61 @@ public sealed class ReplayFolderAnalysisTests
         Assert.That(summary.Plays, Is.Zero);
     }
 
+    [Test]
+    public void ADateSplitsTimingKeysAndPatternsIntoBeforeAndSince()
+    {
+        var runs = Enumerable.Range(0, 6).Select(i => run(i, passed: true)).ToArray();
+        var analyses = runs.ToDictionary(r => r.ScoreId, _ => analysis(withKeys: true, missAt: null));
+        var since = now.AddDays(-7);
+
+        var summary = ReplayFolderAnalysis.Build(runs, analyses, now, since: since);
+
+        var comparison = summary.Comparison!;
+        Assert.Multiple(() =>
+        {
+            Assert.That(comparison.Since, Is.EqualTo(since));
+            Assert.That((comparison.PlaysBefore, comparison.PlaysSince), Is.EqualTo((3, 3)), "plays at the cut belong to the later side");
+            Assert.That(comparison.Before.UnstableRate!.Plays, Is.EqualTo(3));
+            Assert.That(comparison.After.UnstableRate!.Plays, Is.EqualTo(3));
+            Assert.That(comparison.KeysBefore.Select(k => k.Key), Is.EquivalentTo(new[] { ReplayPressedKey.Left, ReplayPressedKey.Right }));
+            Assert.That(summary.Patterns.Single(p => p.Pattern == "Overall").Plays, Is.EqualTo(6));
+            Assert.That(summary.Patterns.Single(p => p.Pattern == "Overall").EarlierAccuracy!.Plays, Is.EqualTo(3));
+            Assert.That(summary.Timing.UnstableRate!.Plays, Is.EqualTo(6), "the overall summary still covers every play");
+            Assert.That(ReplayFolderAnalysis.Build(runs, analyses, now).Comparison, Is.Null);
+        });
+    }
+
+    [Test]
+    public void InstalledCircleSizesLetStreamsBeRecognised()
+    {
+        var runs = Enumerable.Range(0, 4).Select(i => run(i, passed: true)).ToArray();
+        var analyses = runs.ToDictionary(r => r.ScoreId, _ => streams());
+        var difficulty = new LocalBeatmapDifficulty(Guid.NewGuid(), 1, "Test", "osu", 5, 180, 60_000, 4, 9, 8, 5, null, BeatmapHash: "synthetic");
+        var set = new LocalBeatmapSet(Guid.NewGuid(), 1, "Synthetic", "AimMod", "Mapper", "", now, now, [difficulty], 4);
+
+        Assert.That(ReplayFolderAnalysis.Build(runs, analyses, now).Patterns.Select(p => p.Pattern), Does.Not.Contain("Streams"),
+            "without a circle size, stream spacing cannot be judged");
+        Assert.That(ReplayFolderAnalysis.Build(runs, analyses, now, [set]).Patterns.Select(p => p.Pattern), Does.Contain("Streams"));
+        var measuredMiss = runs.ToDictionary(r => r.ScoreId, _ => streams(missRadius: 32));
+        Assert.That(ReplayFolderAnalysis.Build(runs, measuredMiss, now).Patterns.Select(p => p.Pattern), Does.Contain("Streams"),
+            "a miss's measured hit radius is enough");
+    }
+
+    /// <summary>Thirty-two circles 90 ms apart and 12 px apart: one long stream.</summary>
+    private static ReplayAnalysisResult streams(double? missRadius = null)
+    {
+        var judgements = new List<ReplayObjectJudgement>();
+        for (int i = 0; i < 32; i++)
+        {
+            double time = 1_000 + i * 90;
+            bool miss = missRadius is not null && i == 20;
+            judgements.Add(new(i, null, "HitCircle", time, time, miss ? "Miss" : "Great", "Great", time + 3, 3, 1,
+                new ReplayPoint(200 + i * 12, 200), null, i, i + 1,
+                miss ? new ReplayMissAnalysis(ReplayMissReason.LateClick, missRadius!.Value, 4, 0, new ReplayPoint(0, 0), 40, 4, null, 4, false, false, false, 0, Confidence: .9) : null));
+        }
+        return new ReplayAnalysisResult(ReplayAnalysisProtocol.EngineVersion, "map", true, 0, [], judgements, ReplayJudgementSummary.Empty);
+    }
+
     private static LocalReplay run(int day, bool passed) => new(Guid.NewGuid(), Guid.Empty, Guid.Empty, "Synthetic", "AimMod", "Test", "osu", "player",
         now.AddDays(day - 10), 5, .95, 1_000_000, 40, 0, null, [], true, BeatmapHash: "synthetic", Passed: passed);
 

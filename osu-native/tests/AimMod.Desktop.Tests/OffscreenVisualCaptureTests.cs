@@ -79,6 +79,7 @@ public sealed partial class OffscreenVisualCaptureTests
     [TestCase("statistics-populated", 1600, 900)]
     [TestCase("statistics-analysis-populated", 1100, 760)]
     [TestCase("statistics-analysis-populated", 800, 760)]
+    [TestCase("statistics-analysis-compare-populated", 1100, 760)]
     [TestCase("statistics-mods", 1100, 760)]
     [TestCase("statistics-mods", 800, 600)]
     [TestCase("coaching-populated", 1100, 760)]
@@ -178,6 +179,7 @@ public sealed partial class OffscreenVisualCaptureTests
                 "statistics-mods" => new CaptureStatisticsGame(host, source, outputPath, width, height, succeeded, failed),
                 "statistics-populated" => new CaptureStatisticsGame(host, source, outputPath, width, height, succeeded, failed),
                 "statistics-analysis-populated" => new CaptureStatisticsGame(host, source, outputPath, width, height, succeeded, failed),
+            "statistics-analysis-compare-populated" => new CaptureStatisticsGame(host, source, outputPath, width, height, succeeded, failed),
                 "coaching-populated" => new CaptureCoachingGame(host, source, outputPath, width, height, CoachingCaptureState.Analysing, succeeded, failed),
                 "coaching-complete" => new CaptureCoachingGame(host, source, outputPath, width, height, CoachingCaptureState.Complete, succeeded, failed),
                 "coaching-practice-many" => new CaptureCoachingGame(host, source, outputPath, width, height, CoachingCaptureState.PracticeMany, succeeded, failed),
@@ -1419,6 +1421,8 @@ public sealed partial class OffscreenVisualCaptureTests
             {
                 var replays = (IReadOnlyList<LocalReplay>)typeof(InMemoryLocalLibrarySource).GetField("replays", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(memory)!;
                 workspace.ConfigureReplayAnalysis(replays.ToDictionary(r => r.ScoreId, syntheticAnalysis), (_, _) => { });
+                if (outputPath.Contains("statistics-analysis-compare", StringComparison.Ordinal))
+                    workspace.CompareSince = DateOnly.FromDateTime(DateTime.Now.AddDays(-14));
             }
             if (analysis)
                 Scheduler.AddDelayed(() =>

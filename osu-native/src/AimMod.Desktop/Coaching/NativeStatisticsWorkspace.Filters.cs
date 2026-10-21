@@ -147,6 +147,7 @@ public partial class NativeStatisticsWorkspace
         if (timeRange.Value != StatisticsTimeRange.All)
             chips.Add(new StatisticsFilterChip(timeRange.Value switch
             {
+                StatisticsTimeRange.Days7 => "Last 7 days",
                 StatisticsTimeRange.Days30 => "Last 30 days",
                 StatisticsTimeRange.Days90 => "Last 90 days",
                 _ => "Last year",

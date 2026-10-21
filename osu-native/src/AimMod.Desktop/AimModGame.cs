@@ -916,6 +916,8 @@ public partial class AimModGame : OsuGameBase
         {
             RelativeSizeAxes = Axes.Both,
         };
+        statisticsScreen.ComparisonStore = () => new StatisticsComparisonStore(Storage.GetFullPath($"statistics/compare-{currentOsuProfile?.UserId ?? 0}.json", true));
+        statisticsScreen.ReloadComparison();
         statisticsScreen.ConfigureReplayAnalysis(replayAnalyses, prepareCatalogReplayMoment);
         switchWorkspaceRoute(NativeRoute.Statistics, statisticsScreen);
         statisticsScreen.RefreshHistory();
