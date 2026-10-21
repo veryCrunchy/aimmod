@@ -65,11 +65,22 @@ internal sealed class PpTargetBeatmapPatternReader(string cacheDirectory, int ma
         return new PpTargetBeatmapFile(path, contentHash);
     }
 
+    /// <summary>
+    /// Keeps the map in the cache. An identical cached copy is left untouched rather than rewritten every scan: on
+    /// Windows each newly written file is checked again by real-time malware scanning.
+    /// </summary>
     internal async Task RetainAsync(PpTargetBeatmapFile file, int beatmapId, string? expectedHash, CancellationToken cancellationToken)
     {
         string destination = sourcePath(beatmapId, expectedHash);
         if (Path.GetFullPath(file.Path).Equals(Path.GetFullPath(destination), StringComparison.OrdinalIgnoreCase))
             return;
+        try
+        {
+            if (File.Exists(destination) && new FileInfo(destination).Length == new FileInfo(file.Path).Length
+                && (await IdentifyAsync(destination, null, cancellationToken).ConfigureAwait(false)).ContentHash == file.ContentHash)
+                return;
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidDataException) { }
         string temporaryPath = destination + $".{Guid.NewGuid():N}.tmp";
         try
         {
