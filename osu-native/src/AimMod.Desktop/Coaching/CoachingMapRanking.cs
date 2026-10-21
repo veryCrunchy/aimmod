@@ -106,6 +106,39 @@ public static class CoachingIssues
         && string.IsNullOrEmpty(j.NestedPath) && double.IsFinite(j.StartTimeMs) && j.StartTimeMs >= 0
         && j.MissAnalysis is { Confidence: >= .7, HitRadius: > 0 } m && double.IsFinite(m.HitRadius);
 
+    /// <summary>
+    /// Objects inside streams: eight or more notes in a row, each at most 200 ms (real time) after the one before and
+    /// no more than two circle radii away, the same rule PP targets and statistics use. The circle radius comes from a
+    /// confident miss; a play without one has no stream misses to attribute, so it returns no objects.
+    /// </summary>
+    public static IReadOnlySet<int> StreamObjects(ReplayAnalysisResult analysis)
+    {
+        double? radius = analysis.Judgements.Where(IsEvidenceMiss).Select(j => j.MissAnalysis!.HitRadius).FirstOrDefault(r => r > 0);
+        var streams = new HashSet<int>();
+        if (radius is not { } r) return streams;
+        var heads = analysis.Judgements.Where(j => j.ObjectIndex is >= 0 && string.IsNullOrEmpty(j.NestedPath) && j.ObjectPosition is not null
+                && j.ObjectType is "HitCircle" or "SliderHeadCircle" && double.IsFinite(j.StartTimeMs))
+            .GroupBy(j => j.ObjectIndex!.Value).Select(g => g.First()).OrderBy(j => j.ObjectIndex).ToArray();
+        int start = 0;
+        for (int i = 1; i <= heads.Length; i++)
+        {
+            bool fast = i < heads.Length && heads[i].ObjectIndex == heads[i - 1].ObjectIndex + 1 && closeAndFast(heads[i - 1], heads[i], r);
+            if (fast) continue;
+            if (i - start >= 8)
+                for (int k = start; k < i; k++) streams.Add(heads[k].ObjectIndex!.Value);
+            start = i;
+        }
+        return streams;
+    }
+
+    private static bool closeAndFast(ReplayObjectJudgement a, ReplayObjectJudgement b, double radius)
+    {
+        double rate = b.GameplayRate is > 0 ? b.GameplayRate.Value : 1;
+        double gap = (b.StartTimeMs - a.StartTimeMs) / rate;
+        double distance = Math.Sqrt(Math.Pow(b.ObjectPosition!.X - a.ObjectPosition!.X, 2) + Math.Pow(b.ObjectPosition.Y - a.ObjectPosition.Y, 2));
+        return gap is > 0 and <= 200 && distance <= radius * 2;
+    }
+
     public static CoachingIssueKind? FromMiss(ReplayObjectJudgement j)
     {
         if (!IsEvidenceMiss(j)) return null;
@@ -259,7 +292,8 @@ public static class CoachingMapRanker
             .OrderBy(r => r.PlayedAt).ToArray();
         if (analysed.Length == 0) return CoachingSkillSummary.Empty;
 
-        var families = Enum.GetValues<CoachingIssueFamily>().Where(f => f != CoachingIssueFamily.Tapping).ToArray();
+        // Misses inside streams count as stream control, whatever went wrong on the note itself.
+        var families = Enum.GetValues<CoachingIssueFamily>();
         var older = new Dictionary<CoachingIssueFamily, int>();
         var newer = new Dictionary<CoachingIssueFamily, int>();
         int half = analysed.Length / 2, driftOld = 0, driftNew = 0;
@@ -269,11 +303,12 @@ public static class CoachingMapRanker
         {
             var analysis = analyses[analysed[i].ScoreId];
             var bucket = i < half ? older : newer;
+            var streams = CoachingIssues.StreamObjects(analysis);
             foreach (var judgement in analysis.Judgements)
             {
                 if (CoachingIssues.FromMiss(judgement) is { } kind)
                 {
-                    var family = CoachingIssues.Family(kind);
+                    var family = streams.Contains(judgement.ObjectIndex!.Value) ? CoachingIssueFamily.Tapping : CoachingIssues.Family(kind);
                     bucket[family] = bucket.GetValueOrDefault(family) + 1;
                 }
                 else if (i >= analysed.Length - 60 && !ReplayJudgementClassifier.IsMiss(judgement) && double.IsFinite(judgement.TimeOffsetMs)

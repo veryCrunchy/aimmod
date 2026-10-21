@@ -68,6 +68,46 @@ public sealed class CoachingMapRankingTests
     }
 
     [Test]
+    public void MissesInsideStreamsCountAsStreamControl()
+    {
+        var runs = Enumerable.Range(0, 4).Select(i => play("Streams", "hash-s", .9, 3, now.AddHours(-i))).ToArray();
+        // Objects 20–35 are a 16-note stream: 100 ms apart and 12 px apart. Object 5 is a lone note.
+        var analyses = runs.ToDictionary(r => r.ScoreId, _ => streamAnalysis(missAt: [5, 24, 30]));
+        var skills = CoachingMapRanker.Rank(runs, analyses, now).Skills;
+        var streams = CoachingIssues.StreamObjects(analyses[runs[0].ScoreId]);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(streams, Is.EquivalentTo(Enumerable.Range(20, 16)));
+            Assert.That(skills.Lines.Select(l => l.Family), Is.EqualTo(new[] { CoachingIssueFamily.Tapping, CoachingIssueFamily.Timing }));
+            Assert.That(skills.Lines[0].Share, Is.EqualTo(2 / 3.0).Within(1e-9));
+            Assert.That(CoachingIssues.StreamObjects(streamAnalysis(missAt: [])), Is.Empty, "without a measured radius no stream is claimed");
+        });
+    }
+
+    private static ReplayAnalysisResult streamAnalysis(int[] missAt)
+    {
+        var judgements = new List<ReplayObjectJudgement>();
+        double time = 1_000;
+        for (int index = 0; index < 60; index++)
+        {
+            bool stream = index is >= 20 and < 36;
+            time += stream && index > 20 ? 100 : 1_000;
+            var position = new ReplayPoint(stream ? 100 + (index - 20) * 12 : 256, 192);
+            if (missAt.Contains(index))
+            {
+                var cursor = new ReplayPoint(position.X + 2, position.Y);
+                judgements.Add(new ReplayObjectJudgement(index, null, "HitCircle", time, time, "Miss", "Great", time - 130, -130, 1, position, cursor, index, 0,
+                    new ReplayMissAnalysis(ReplayMissReason.EarlyClick, 32, 4, 0, cursor, -130, 2, cursor, 10, true, false, false, 0, Confidence: .9)));
+            }
+            else
+                judgements.Add(new ReplayObjectJudgement(index, null, "HitCircle", time, time, "Great", "Great", time + 4, 4, 1, position, position, index, index + 1));
+        }
+        return new ReplayAnalysisResult(ReplayAnalysisProtocol.EngineVersion, "officialRulesetPlayback", true, ReplayAnalysisProtocol.WallClockTimeoutMs,
+            [], judgements, new ReplayJudgementSummary(60 - missAt.Length, 0, 0, missAt.Length, 0, 0));
+    }
+
+    [Test]
     public void SectionsMatchingTheMainIssueComeFirst()
     {
         var run = play("Sections", "hash-e", .93, 3, now);
