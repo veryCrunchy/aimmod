@@ -87,6 +87,10 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
     private readonly Container skillsetGroup;
     private readonly PpTargetDropdown<PpTargetSkillset> skillsetDropdown;
     private readonly Bindable<PpTargetSkillset> skillset = new(PpTargetSkillset.Any);
+    private OsuTextFlowContainer? skillsetHint;
+    /// <summary>The last complete results, shown while a rescan for a new skill profile has not caught up yet.</summary>
+    private (PpTargetPreferenceProfile Profile, IReadOnlyDictionary<int, PpTargetEstimate> Estimates)? shownScan;
+    private bool showingShownScan;
     private readonly Container sortGroup;
     private readonly Container modsGroup;
     private readonly PpTargetDropdown<string> modsDropdown;
@@ -423,6 +427,7 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
             patternHistory = [];
             pendingPatternProfile = null;
             exactEstimates = new Dictionary<int, PpTargetEstimate>();
+            shownScan = null;
             hasVisibleSnapshot = false;
             lastCompletedScanIdentity = null;
             renderResults();
@@ -561,12 +566,18 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
         {
             exactCalculation?.Cancel();
             exactEstimates = new Dictionary<int, PpTargetEstimate>();
+            shownScan = null;
             renderResults();
             startExactCalculations();
             saveSnapshot();
         }));
         length.BindValueChanged(_ => filterChanged(renderResults));
-        skillset.BindValueChanged(_ => filterChanged(renderResults));
+        skillset.BindValueChanged(e => filterChanged(() =>
+        {
+            renderResults();
+            // Streams and bursts can be found sooner by measuring dense maps first.
+            if (PpTargetScanPlanner.PrefersDenseMaps(e.NewValue) != PpTargetScanPlanner.PrefersDenseMaps(e.OldValue) && exactScanRunning) startExactCalculations();
+        }));
         sort.BindValueChanged(_ => { if (!suppressFilterEvents) { renderResults(); saveSnapshot(); } });
 
         _ = restoreSnapshotAsync(renderGeneration);
@@ -866,6 +877,7 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
                         saveSnapshot();
                         return;
                     }
+                    keepShownResults();
                     profile = profile with { PatternProfile = patterns };
                     exactEstimates = new Dictionary<int, PpTargetEstimate>();
                     updateProfileSummary();
@@ -1140,10 +1152,11 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
         exactScanWaitingForPatterns = false;
         cancelToken(ref exactCalculation);
         exactScanRunning = false;
+        keepShownResults();
         if (pendingPatternProfile is { } pending)
         {
             pendingPatternProfile = null;
-            profile = profile with { PatternProfile = pending };
+            keepShownResults(); profile = profile with { PatternProfile = pending };
         }
         IPpTargetExactCalculationService? calculator = exactCalculator();
         if (calculator is null || profile.TypicalAccuracy is null || catalog.Count == 0)
@@ -1159,17 +1172,17 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
             MinimumStars: minimumStars.Value <= 0 ? null : minimumStars.Value,
             MaximumStars: maximumStars.Value >= 10 ? null : maximumStars.Value,
             Statuses: category.Value == OfficialBeatmapCategory.Any ? null : [PpTargetStatus.FromCategory(category.Value)]);
-        _ = planExactScanAsync(calculator, selectedModProfile(profile), catalog, localSets, filters, exactCalculation!.Token);
+        _ = planExactScanAsync(calculator, selectedModProfile(profile), catalog, localSets, filters, skillset.Value, exactCalculation!.Token);
     }
 
     private async Task planExactScanAsync(IPpTargetExactCalculationService calculator,
         PpTargetPreferenceProfile scanProfile, IReadOnlyList<OfficialBeatmapSet> scanCatalog,
-        IReadOnlyList<LocalBeatmapSet> installedSets, PpTargetFilters filters, CancellationToken cancellationToken)
+        IReadOnlyList<LocalBeatmapSet> installedSets, PpTargetFilters filters, PpTargetSkillset scanSkillset, CancellationToken cancellationToken)
     {
         try
         {
             var previous = exactEstimates;
-            var candidates = await Task.Run(() => PpTargetScanPlanner.Select(scanProfile, scanCatalog, filters, calculation_scan_limit, previous), cancellationToken).ConfigureAwait(false);
+            var candidates = await Task.Run(() => PpTargetScanPlanner.Select(scanProfile, scanCatalog, filters, calculation_scan_limit, previous, scanSkillset), cancellationToken).ConfigureAwait(false);
             cancellationToken.ThrowIfCancellationRequested();
             Dictionary<int, LocalBeatmapDifficulty> installed = installedSets.SelectMany(set => set.Difficulties)
                 .Where(difficulty => difficulty.OnlineId > 0 && !string.IsNullOrWhiteSpace(difficulty.BeatmapHash))
@@ -1216,7 +1229,7 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
                         if (!skillAnalysisRunning && pendingPatternProfile is { } pending)
                         {
                             pendingPatternProfile = null;
-                            profile = profile with { PatternProfile = pending };
+                            keepShownResults(); profile = profile with { PatternProfile = pending };
                             startExactCalculations();
                         }
                     });
@@ -1289,6 +1302,7 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
                         return;
                     exactScanRunning = false;
                     exactEstimates = calculated;
+                    shownScan = null;
                     lastCompletedScanIdentity = calculated.Count == requests.Count ? scanIdentity : null;
                     status.Text = withCatalogStatus(calculated.Count == 0
                         ? "PP values are unavailable for these difficulties."
@@ -1299,7 +1313,7 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
                     if (!skillAnalysisRunning && pendingPatternProfile is { } pending)
                     {
                         pendingPatternProfile = null;
-                        profile = profile with { PatternProfile = pending };
+                        keepShownResults(); profile = profile with { PatternProfile = pending };
                         startExactCalculations();
                     }
                 });
@@ -1361,6 +1375,9 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
         var currentProfile = profile;
         var currentCatalog = catalog;
         var estimates = exactEstimates;
+        // Keep the last complete targets on screen until a rescan has calculated as many maps.
+        showingShownScan = exactScanRunning && shownScan is { } shown && exactEstimates.Count < shown.Estimates.Count;
+        if (showingShownScan) (currentProfile, estimates) = shownScan!.Value;
         var ordering = sort.Value;
         var chosenSkillset = skillset.Value;
         var modSelection = selectedMods.Value;
@@ -1469,7 +1486,35 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
         }
         else
             workspaceState.HideState();
-        resultCount.Text = $"{visibleCandidates.Length:N0} maps / {visibleCandidates.Count(c => c.Candidate.EvidenceTier == 2):N0} supported / {visibleCandidates.Count(c => c.Candidate.EvidenceTier == 1):N0} stretch / {visibleCandidates.Count(c => c.Candidate.EvidenceTier == 0):N0} unverified";
+        showSkillsetHint(visibleCandidates.Length);
+        resultCount.Text = (showingShownScan ? "Last results while updating  /  " : "") + $"{visibleCandidates.Length:N0} maps / {visibleCandidates.Count(c => c.Candidate.EvidenceTier == 2):N0} supported / {visibleCandidates.Count(c => c.Candidate.EvidenceTier == 1):N0} stretch / {visibleCandidates.Count(c => c.Candidate.EvidenceTier == 0):N0} unverified";
+    }
+
+    /// <summary>
+    /// Only measured maps can match a skillset, and the scan measures maps inside the star range, best fit first. A short
+    /// list says so instead of looking like there are no such maps.
+    /// </summary>
+    /// <summary>Remembers the current results before a rescan replaces the profile they were calculated with.</summary>
+    private void keepShownResults()
+    {
+        if (exactEstimates.Count > 0 && (shownScan is null || exactEstimates.Count >= shownScan.Value.Estimates.Count))
+            shownScan = (profile, exactEstimates);
+    }
+
+    private void showSkillsetHint(int matches)
+    {
+        bool show = skillset.Value != PpTargetSkillset.Any && matches is > 0 and < 12;
+        if (!show) { if (skillsetHint is not null) skillsetHint.Alpha = 0; return; }
+        if (skillsetHint is null)
+        {
+            results.Add(skillsetHint = new OsuTextFlowContainer(t => { t.Font = new FontUsage(size: 12); t.Colour = AimModPalette.Muted; })
+                { RelativeSizeAxes = Axes.X, AutoSizeAxes = Axes.Y, Padding = new MarginPadding { Horizontal = 4, Bottom = 4 } });
+            results.SetLayoutPosition(skillsetHint, -1);
+        }
+        string stars = minimumStars.Value <= 0 && maximumStars.Value >= 10 ? "any star rating" : $"{minimumStars.Value:0.0}–{(maximumStars.Value >= 10 ? "10+" : maximumStars.Value.ToString("0.0"))}★";
+        skillsetHint.Text = $"{matches:N0} of {exactEstimates.Count:N0} measured maps in {stars} are mostly {PpTargetSkillsets.Label(skillset.Value).ToLowerInvariant()}. "
+            + "Maps are measured as the scan reaches them, best fit first, so widen or lower the star range to find more.";
+        skillsetHint.Alpha = 1;
     }
 
     private void highlight(PpTargetRow row, bool selected)

@@ -20,11 +20,14 @@ public static class PpTargetSkillsets
         _ => "Any skillset",
     };
 
-    /// <summary>The share a map needs to count as this kind of map.</summary>
+    /// <summary>
+    /// The share a map needs to count as this kind of map. Streams and bursts use the 10% at which PP targets already
+    /// treats a map as demanding them; jumps and sharp angles appear in most maps, so they need to dominate.
+    /// </summary>
     public static double Threshold(PpTargetSkillset skillset) => skillset switch
     {
-        PpTargetSkillset.Streams => .20,
-        PpTargetSkillset.Bursts => .15,
+        PpTargetSkillset.Streams => .10,
+        PpTargetSkillset.Bursts => .10,
         PpTargetSkillset.Jumps => .40,
         PpTargetSkillset.SharpAngles => .30,
         _ => 0,

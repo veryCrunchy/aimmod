@@ -8,10 +8,25 @@ public static class PpTargetScanPlanner
 
     public static IReadOnlyList<PpTargetCandidate> Select(PpTargetPreferenceProfile profile,
         IEnumerable<OfficialBeatmapSet> catalog, PpTargetFilters filters, int limit = 500,
-        IReadOnlyDictionary<int, PpTargetEstimate>? estimates = null)
+        IReadOnlyDictionary<int, PpTargetEstimate>? estimates = null, PpTargetSkillset skillset = PpTargetSkillset.Any)
     {
         var ranked = PpTargetRanker.Rank(profile, catalog, filters with { Limit = 50_000 }, estimates);
         int budget = Math.Clamp(limit, 1, 5_000);
+        // Streams and bursts are invisible until a map is measured, and skill fit measures them last for players
+        // who are weak at them. Combo per beat is known up front and is high where notes come in streams, so half the
+        // budget goes to maps already known to match, then the densest maps not measured yet, measured first.
+        PpTargetCandidate[] dense = PrefersDenseMaps(skillset)
+            ? ranked.Candidates.Where(c => PpTargetSkillsets.Matches(c.Estimate?.Features, skillset)).OrderByDescending(c => c.RankScore)
+                .Concat(ranked.Candidates.Where(c => c.Estimate?.Features is null && ComboPerBeat(c) is not null)
+                    .OrderByDescending(c => ComboPerBeat(c)).ThenBy(c => c.BeatmapId))
+                .DistinctBy(c => c.BeatmapId).Take(budget / 2).ToArray()
+            : [];
+        if (dense.Length > 0)
+        {
+            var denseIds = dense.Select(c => c.BeatmapId).ToHashSet();
+            var rest = Select(profile, catalog, filters, budget, estimates).Where(c => !denseIds.Contains(c.BeatmapId)).Take(budget - dense.Length);
+            return [.. dense, .. rest];
+        }
         // Reserve exploration for different tempos and durations. Most calculations
         // go to promising, supported maps rather than evenly funding impossible stars.
         var ordered = ranked.Candidates.OrderByDescending(c => c.PassEstimate is { Probability: >= .5 })
@@ -53,6 +68,13 @@ public static class PpTargetScanPlanner
         return selected.OrderByDescending(c => c.PassEstimate is { Probability: >= .5 })
             .ThenByDescending(c => c.RankScore).ThenBy(c => c.BeatmapId).ToArray();
     }
+
+    public static bool PrefersDenseMaps(PpTargetSkillset skillset) => skillset is PpTargetSkillset.Streams or PpTargetSkillset.Bursts;
+
+    /// <summary>Maximum combo per beat of drain time: about one for 1/2 maps, higher where streams pack notes together.</summary>
+    public static double? ComboPerBeat(PpTargetCandidate candidate) =>
+        candidate.MaximumCombo is > 0 && candidate.TotalLengthSeconds > 0 && candidate.Bpm > 0
+            ? candidate.MaximumCombo.Value / (candidate.TotalLengthSeconds * candidate.Bpm / 60) : null;
 
     /// <summary>Expected earned PP, or before any calculation a star-based PP proxy times the pass chance.</summary>
     public static double EarnedPotential(PpTargetCandidate candidate) => candidate.ExpectedEarnedPp

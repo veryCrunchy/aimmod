@@ -5,7 +5,7 @@ namespace AimMod.Desktop.Tests;
 
 public sealed class PpTargetSkillsetTests
 {
-    private static readonly PpPatternFeatures streamMap = new() { PointCount = 800, StreamFraction = .42, BurstFraction = .1, JumpFraction = .12, SharpTurnFraction = .1 };
+    private static readonly PpPatternFeatures streamMap = new() { PointCount = 800, StreamFraction = .42, BurstFraction = .06, JumpFraction = .12, SharpTurnFraction = .1 };
     private static readonly PpPatternFeatures jumpMap = new() { PointCount = 600, StreamFraction = .02, BurstFraction = .05, JumpFraction = .66, SharpTurnFraction = .45 };
 
     [Test]
