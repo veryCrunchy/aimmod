@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0](https://github.com/veryCrunchy/aimmod/compare/aimmod-osu-v0.5.0...aimmod-osu-v0.6.0) (2026-10-21)
+
+
+### Features
+
+* **osu:** coaching for top players: where the pp went, guarded drills and a clearer coaching tab ([#37](https://github.com/veryCrunchy/aimmod/issues/37)) ([6ecafa8](https://github.com/veryCrunchy/aimmod/commit/6ecafa822e792a1d03036c752ecb71be4e9c07c5))
+
 ## [0.5.0](https://github.com/veryCrunchy/aimmod/compare/aimmod-osu-v0.4.0...aimmod-osu-v0.5.0) (2026-10-17)
 
 
