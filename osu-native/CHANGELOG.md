@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.0](https://github.com/veryCrunchy/aimmod/compare/aimmod-osu-v0.6.0...aimmod-osu-v0.7.0) (2026-10-30)
+
+
+### Features
+
+* **osu:** stream ladder, skillsets on Home and PP targets by skillset ([#39](https://github.com/veryCrunchy/aimmod/issues/39)) ([9905ba5](https://github.com/veryCrunchy/aimmod/commit/9905ba51a43ed2a8d2695812f71a2c8dad0a6469))
+
 ## [0.6.0](https://github.com/veryCrunchy/aimmod/compare/aimmod-osu-v0.5.0...aimmod-osu-v0.6.0) (2026-10-21)
 
 
