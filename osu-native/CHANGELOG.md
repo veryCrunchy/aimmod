@@ -6,6 +6,7 @@
 ### Features
 
 * **osu:** coaching for top players: where the pp went, guarded drills and a clearer coaching tab ([#37](https://github.com/veryCrunchy/aimmod/issues/37)) ([6ecafa8](https://github.com/veryCrunchy/aimmod/commit/6ecafa822e792a1d03036c752ecb71be4e9c07c5))
+* **osu:** stream ladder, skillsets on Home and PP targets by skillset ([#39](https://github.com/veryCrunchy/aimmod/issues/39)) ([9905ba5](https://github.com/veryCrunchy/aimmod/commit/9905ba51a43ed2a8d2695812f71a2c8dad0a6469))
 
 ## [0.5.0](https://github.com/veryCrunchy/aimmod/compare/aimmod-osu-v0.4.0...aimmod-osu-v0.5.0) (2026-10-17)
 
