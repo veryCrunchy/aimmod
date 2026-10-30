@@ -154,7 +154,7 @@ public partial class NativePpTargetsWorkspace
             OfficialBeatmapSet set,
             Func<OfficialBeatmapSet, Task<OnlineBeatmapImportResult>> import,
             Func<int, CancellationToken, Task>? openBeatmap,
-            TargetSort ordering, bool installed = false, string key = "")
+            TargetSort ordering, bool installed = false, string key = "", PpTargetSkillset skillset = PpTargetSkillset.Any)
         {
             Key = key;
             TooltipContent = candidate;
@@ -225,7 +225,8 @@ public partial class NativePpTargetsWorkspace
                     {
                         title = new TruncatingSpriteText { Text = candidate.Title, Font = new FontUsage(size: 15, weight: "Bold"), Colour = AimModPalette.Text, MaxWidth = 450 },
                         artist = new TruncatingSpriteText { Text = $"{candidate.Artist}  /  mapped by {candidate.Creator}", Font = new FontUsage(size: 11, weight: "SemiBold"), Colour = AimModPalette.Muted, MaxWidth = 450 },
-                        mapDetails = truncatingText($"[{candidate.Difficulty}]   {candidate.StarRating:0.00}*   {candidate.Bpm:0} BPM   {formatLength(candidate.TotalLengthSeconds)}   {combo}   {mods}", 11, ReadableDifficultyColour(candidate.StarRating), "Bold"),
+                        mapDetails = truncatingText($"[{candidate.Difficulty}]   {candidate.StarRating:0.00}*   {candidate.Bpm:0} BPM   {formatLength(candidate.TotalLengthSeconds)}   {combo}   {mods}"
+                            + (PpTargetSkillsets.Tag(candidate.Estimate?.Features, skillset) is { } tag ? $"   {tag}" : ""), 11, ReadableDifficultyColour(candidate.StarRating), "Bold"),
                         // Predicted play statistics: cyan on a tinted strip, distinct from the amber chance figures.
                         new Container
                         {

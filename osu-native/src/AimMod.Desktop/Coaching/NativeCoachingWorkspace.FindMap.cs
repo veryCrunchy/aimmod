@@ -166,7 +166,9 @@ public partial class NativeCoachingWorkspace
             legend.Add(legendItem(CoachingIssues.FamilyLabel(line.Family), $"{line.Share:P0}", FamilyColour(line.Family), line.Change));
         }
         var notes = new List<string>();
-        if (skills.DriftShare is { } drift && drift > 0) notes.Add($"Stream drift in {drift:P0} of plays");
+        if (skills.DriftShare is { } drift && drift > 0)
+            notes.Add($"Stream drift in {drift:P0} of plays" + (skills.DriftChange is { } trend && Math.Abs(trend) >= .05
+                ? $", {(trend < 0 ? "less" : "more")} often lately ({(trend < 0 ? "↓" : "↑")}{Math.Abs(trend):P0})" : ""));
         if (skills.MeanOffsetMs is { } mean && skills.SpreadMs is { } spread)
             notes.Add(Math.Abs(mean) < 1 ? $"taps on the beat, ±{spread:0} ms" : $"taps {Math.Abs(mean):0} ms {(mean < 0 ? "early" : "late")}, ±{spread:0} ms");
 
@@ -182,6 +184,8 @@ public partial class NativeCoachingWorkspace
             string text = string.Join(" · ", notes);
             body.Add(flow(char.ToUpperInvariant(text[0]) + text[1..], 12, AimModPalette.Muted));
         }
+        if (skills.Lines.Any(l => l.Family == CoachingIssueFamily.Tapping))
+            body.Add(flow("Stream control counts misses inside streams of 8 or more notes, whatever went wrong on the note.", 11, AimModPalette.Muted));
         profileHost.Add(new CoachingCard(body, 16));
     }
 

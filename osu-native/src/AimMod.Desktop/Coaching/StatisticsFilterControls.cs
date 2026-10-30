@@ -30,6 +30,7 @@ public partial class StatisticsFilterDropdown<T> : BoundedShearedDropdown<T>
 
     protected override LocalisableString GenerateItemText(T item) => item.ToString() switch
     {
+        "Days7" => "Last 7 days",
         "Days30" => "Last 30 days",
         "Days90" => "Last 90 days",
         "Year" => "Last year",

@@ -32,6 +32,9 @@ public sealed class PpTargetExactCalculationService : IPpTargetExactCalculationS
     private const int cache_version = 8;
     private const int maximum_batch_size = 200;
     private const int maximum_cache_entries = 16_384;
+    // About ten official calculations per map: enough for a full 2,000-map scan in two setups, so a rescan whose
+    // score shapes did not change reuses every result instead of evicting its own.
+    private const int maximum_performance_entries = 49_152;
     private const int calibration_budget = 40;
     private static readonly JsonSerializerOptions json_options = new(JsonSerializerDefaults.Web);
 
@@ -47,6 +50,54 @@ public sealed class PpTargetExactCalculationService : IPpTargetExactCalculationS
     private readonly Dictionary<string, double> calibrationCache;
     private readonly PpTargetBeatmapPatternReader patternReader;
     private readonly int maximumConcurrency;
+    private readonly string patternDirectory;
+
+    /// <summary>The folders a scan writes beatmap files to: the pattern cache and the per-scan scratch folder.</summary>
+    public IReadOnlyList<string> ScanFolders => [patternDirectory, difficultyDownloadDirectory];
+    private static readonly TimeSpan worker_idle_lifetime = TimeSpan.FromSeconds(90);
+    private readonly object idleLock = new();
+    private readonly Stack<SidecarRuntimeClient> idleWorkers = new();
+    private Timer? idleTimer;
+
+    /// <summary>
+    /// One worker per two logical processors, up to six: more workers measured no faster. Each worker is a separate
+    /// process of about 100 MB, so machines with little memory get one worker per 2 GB.
+    /// </summary>
+    internal static int DefaultConcurrency(int processors, long memoryBytes) =>
+        Math.Clamp(Math.Min(processors / 2, memoryBytes > 0 ? (int)(memoryBytes / (2L << 30)) : 6), 1, 6);
+
+    /// <summary>
+    /// Workers stay alive between batches, so a scan of thousands of maps does not start new processes every 200 maps
+    /// and lose their decoded maps and difficulty. Idle workers exit after a short while.
+    /// </summary>
+    private SidecarRuntimeClient rentWorker()
+    {
+        lock (idleLock)
+            while (idleWorkers.TryPop(out SidecarRuntimeClient? worker))
+            {
+                if (worker.IsUsable) return worker;
+                _ = worker.DisposeAsync().AsTask();
+            }
+        return runtimeFactory();
+    }
+
+    private void returnWorker(SidecarRuntimeClient worker)
+    {
+        if (!worker.IsUsable) { _ = worker.DisposeAsync().AsTask(); return; }
+        lock (idleLock)
+        {
+            idleWorkers.Push(worker);
+            idleTimer ??= new Timer(_ => releaseIdleWorkers(), null, Timeout.Infinite, Timeout.Infinite);
+            idleTimer.Change(worker_idle_lifetime, Timeout.InfiniteTimeSpan);
+        }
+    }
+
+    private void releaseIdleWorkers()
+    {
+        SidecarRuntimeClient[] idle;
+        lock (idleLock) { idle = idleWorkers.ToArray(); idleWorkers.Clear(); }
+        foreach (SidecarRuntimeClient worker in idle) _ = worker.DisposeAsync().AsTask();
+    }
 
     public PpTargetExactCalculationService(string libraryRoot, string cachePath)
         : this(libraryRoot, cachePath, null, Path.Combine(Path.GetTempPath(), "aimmod-pp-target-difficulties"))
@@ -81,14 +132,14 @@ public sealed class PpTargetExactCalculationService : IPpTargetExactCalculationS
         this.difficultyClient = difficultyClient;
         this.difficultyDownloadDirectory = Path.TrimEndingDirectorySeparator(Path.GetFullPath(difficultyDownloadDirectory));
         this.runtimeFactory = runtimeFactory ?? throw new ArgumentNullException(nameof(runtimeFactory));
-        this.maximumConcurrency = maximumConcurrency ?? Math.Clamp(Environment.ProcessorCount / 2, 1, 3);
-        if (this.maximumConcurrency is < 1 or > 3)
+        this.maximumConcurrency = maximumConcurrency ?? DefaultConcurrency(Environment.ProcessorCount, GC.GetGCMemoryInfo().TotalAvailableMemoryBytes);
+        if (this.maximumConcurrency is < 1 or > 16)
             throw new ArgumentOutOfRangeException(nameof(maximumConcurrency));
         cache = loadCache(this.cachePath);
         performanceCache = loadPerformanceCache(this.cachePath);
         calibrationCache = loadCalibrationCache(this.cachePath);
-        patternReader = new PpTargetBeatmapPatternReader(Directory.Exists(this.cachePath)
-            ? Path.Combine(this.cachePath, "beatmap-patterns") : this.cachePath + ".beatmaps");
+        patternDirectory = Directory.Exists(this.cachePath) ? Path.Combine(this.cachePath, "beatmap-patterns") : this.cachePath + ".beatmaps";
+        patternReader = new PpTargetBeatmapPatternReader(patternDirectory);
     }
 
     /// <summary>Estimates keyed by beatmap id. When several variants of one beatmap are requested, the first requested variant wins.</summary>
@@ -205,7 +256,7 @@ public sealed class PpTargetExactCalculationService : IPpTargetExactCalculationS
                 SidecarRuntimeClient? workerRuntime = null;
                 PpWhatIfClient? ppClient = null;
                 PpWhatIfClient getClient() => ppClient ??= new PpWhatIfClient(new SidecarRuntimeRequestClient(
-                    workerIndex == 0 && runtime is not null ? runtime : workerRuntime ??= runtimeFactory()));
+                    workerIndex == 0 && runtime is not null ? runtime : workerRuntime ??= rentWorker()));
                 string workingDirectory = Path.Combine(difficultyDownloadDirectory, $"scan-{Guid.NewGuid():N}");
                 try
                 {
@@ -215,7 +266,8 @@ public sealed class PpTargetExactCalculationService : IPpTargetExactCalculationS
                 }
                 finally
                 {
-                    if (workerRuntime is not null) await workerRuntime.DisposeAsync().ConfigureAwait(false);
+                    // A cancelled request terminates its worker; IsUsable then sends it to disposal instead of the pool.
+                    if (workerRuntime is not null) returnWorker(workerRuntime);
                     try
                     {
                         if (Directory.Exists(workingDirectory))
@@ -264,14 +316,11 @@ public sealed class PpTargetExactCalculationService : IPpTargetExactCalculationS
                     IReadOnlyList<string> mods = PpTargetMods.Normalise(request.Mods);
                     PpTargetBeatmapFile file;
                     PpTargetBeatmapPatternGeometry geometry;
-                    await preparationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
-                    try
-                    {
-                        file = await PpTargetBeatmapPatternReader.IdentifyAsync(beatmapPath, request.BeatmapHash, cancellationToken).ConfigureAwait(false);
-                        geometry = await patternReader.ReadAsync(file, mods, cancellationToken, request.ModsJson, request.LegacyScore).ConfigureAwait(false);
-                        await patternReader.RetainAsync(file, request.BeatmapId, request.BeatmapHash, cancellationToken).ConfigureAwait(false);
-                    }
-                    finally { preparationGate.Release(); }
+                    // The lane's own copy of the map: reading its geometry and retaining it can run beside other lanes.
+                    // The reader serialises its cache trimming.
+                    file = await PpTargetBeatmapPatternReader.IdentifyAsync(beatmapPath, request.BeatmapHash, cancellationToken).ConfigureAwait(false);
+                    geometry = await patternReader.ReadAsync(file, mods, cancellationToken, request.ModsJson, request.LegacyScore).ConfigureAwait(false);
+                    await patternReader.RetainAsync(file, request.BeatmapId, request.BeatmapHash, cancellationToken).ConfigureAwait(false);
                     string stagingDirectory = workingDirectory;
                     double? clockRate = geometry.ClockRate ?? PpTargetDifficulty.ClockRate(mods, request.ModsJson);
                     var features = PpTargetPatternModel.ExtractFeatures(geometry.Points, geometry.HitRadius, geometry.ClockRate) with
@@ -560,7 +609,7 @@ public sealed class PpTargetExactCalculationService : IPpTargetExactCalculationS
                 await using (FileStream stream = new(temporaryPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 81920, true))
                 {
                     Dictionary<string, PpWhatIfResult> performance;
-                    lock (performanceCache) performance = performanceCache.TakeLast(maximum_cache_entries).ToDictionary(p => p.Key, p => p.Value);
+                    lock (performanceCache) performance = performanceCache.TakeLast(maximum_performance_entries).ToDictionary(p => p.Key, p => p.Value);
                     Dictionary<string, double> calibration;
                     lock (calibrationCache) calibration = calibrationCache.TakeLast(maximum_cache_entries).ToDictionary(p => p.Key, p => p.Value);
                     await JsonSerializer.SerializeAsync(stream, new CacheDocument(cache_version, entries, performance, calibration), json_options, CancellationToken.None).ConfigureAwait(false);
@@ -777,7 +826,7 @@ public sealed class PpTargetExactCalculationService : IPpTargetExactCalculationS
         if (double.IsFinite(result.PerformancePoints) && result.PerformancePoints >= 0)
             lock (performanceCache)
             {
-                if (performanceCache.Count >= maximum_cache_entries) performanceCache.Remove(performanceCache.Keys.First());
+                if (performanceCache.Count >= maximum_performance_entries) performanceCache.Remove(performanceCache.Keys.First());
                 performanceCache[key] = result;
             }
         return result;
@@ -794,7 +843,7 @@ public sealed class PpTargetExactCalculationService : IPpTargetExactCalculationS
                 ? results.Where(p => p.Value is not null && p.Value.EngineVersion == PpCalculationProtocol.EngineVersion
                     && double.IsFinite(p.Value.PerformancePoints) && p.Value.PerformancePoints >= 0
                     && p.Value.MaxCombo > 0 && p.Value.ObjectCount > 0 && double.IsFinite(p.Value.Accuracy) && p.Value.Accuracy is >= 0 and <= 1)
-                    .TakeLast(maximum_cache_entries).ToDictionary(p => p.Key, p => p.Value, StringComparer.Ordinal)
+                    .TakeLast(maximum_performance_entries).ToDictionary(p => p.Key, p => p.Value, StringComparer.Ordinal)
                 : new(StringComparer.Ordinal);
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException or NotSupportedException) { return new(StringComparer.Ordinal); }

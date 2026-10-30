@@ -73,6 +73,9 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
     private AimModLayout.ChangeTracker<float> statusWidthTracker;
     private LocalBeatmapSet? selectedSet;
     private LocalBeatmapDifficulty? selectedDifficulty;
+
+    /// <summary>Practice for the selected difficulty itself, rather than every difficulty of the set by title.</summary>
+    public Action<LocalBeatmapSet, LocalBeatmapDifficulty>? OpenDifficultyPractice { get; set; }
     private long displayedRevision;
     private bool libraryLoaded;
     private bool sideInspector = true;
@@ -164,7 +167,9 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
                 {
                     new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Canvas, Depth = 100 },
                     backToResults = new AimModButton("Back to results", closeDetails) { Height = AimModVisualStyle.CompactControlHeight, Alpha = 0 },
-                    inspector = new BeatmapInspector(openBeatmap, openPractice, set => selectSet(set, true), retryDetails),
+                    inspector = new BeatmapInspector(openBeatmap,
+                openPractice is null ? null : (set, difficulty) => { if (OpenDifficultyPractice is { } open) open(set, difficulty); else openPractice(set.Title); },
+                set => selectSet(set, true), retryDetails),
                 },
             },
             // The toolbar is drawn ahead of the list and inspector so its popups are never covered.

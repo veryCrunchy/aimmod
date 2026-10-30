@@ -362,6 +362,9 @@ public sealed class SidecarRuntimeClient : IAsyncDisposable
         }
     }
 
+    /// <summary>True while the worker is running and no request has failed it, so it can be reused for more work.</summary>
+    public bool IsUsable => Volatile.Read(ref terminalFailure) is null && !hasExited();
+
     private bool hasExited()
     {
         if (Volatile.Read(ref processDisposed))

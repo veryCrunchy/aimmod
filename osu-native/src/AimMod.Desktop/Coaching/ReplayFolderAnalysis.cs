@@ -33,16 +33,23 @@ public sealed record FolderTiming(Estimate? UnstableRate, Estimate? MeanOffsetMs
 /// <param name="Share">This key's share of the hits whose key is known.</param>
 public sealed record FolderKey(string Key, int Hits, double Share, Estimate? MeanOffsetMs, Estimate? UnstableRate);
 
-/// <summary>One pattern class in the player's earlier and more recent half of analysed plays.</summary>
+/// <summary>One pattern class in the earlier and later plays: by halves of the plays, or before and since a date.</summary>
 public sealed record FolderPatternTrend(string Pattern, int Plays, Estimate? EarlierAccuracy, Estimate? RecentAccuracy,
     Estimate? EarlierMissRate, Estimate? RecentMissRate, Estimate? EarlierUnstableRate, Estimate? RecentUnstableRate);
 
 public sealed record FolderMiss(LocalReplay Run, double TimeMs, ReplayMissReason? Reason);
 
+/// <summary>Timing and keys of the plays before a date and of the plays on or after it.</summary>
+public sealed record FolderComparison(DateTimeOffset Since, int PlaysBefore, int PlaysSince, FolderTiming Before, FolderTiming After,
+    IReadOnlyList<FolderKey> KeysBefore, IReadOnlyList<FolderKey> KeysSince);
+
 public sealed record ReplayFolderSummary(int Plays, int FailedPlays, int PlaysWithKeys, FolderTiming Timing,
     IReadOnlyList<FolderKey> Keys, IReadOnlyList<FolderPatternTrend> Patterns, IReadOnlyList<FolderMiss> RecentMisses)
 {
     public static ReplayFolderSummary Empty { get; } = new(0, 0, 0, new(null, null, null, 0, 0), [], [], []);
+
+    /// <summary>Set when the summary compares plays before and since a date; patterns are then split by that date too.</summary>
+    public FolderComparison? Comparison { get; init; }
 }
 
 /// <summary>
@@ -53,12 +60,31 @@ public static class ReplayFolderAnalysis
 {
     private const int minimum_hits = 5, recent_misses = 12, recent_plays_for_misses = 8;
 
-    public static ReplayFolderSummary Build(IReadOnlyList<LocalReplay> runs, IReadOnlyDictionary<Guid, ReplayAnalysisResult> analyses, DateTimeOffset now)
+    /// <param name="localSets">Installed maps, for circle size. Without a play's circle size its jumps, bursts and streams cannot be told apart.</param>
+    /// <param name="since">Compare the plays before this time with the plays on or after it, instead of earlier and recent halves.</param>
+    public static ReplayFolderSummary Build(IReadOnlyList<LocalReplay> runs, IReadOnlyDictionary<Guid, ReplayAnalysisResult> analyses, DateTimeOffset now,
+        IEnumerable<LocalBeatmapSet>? localSets = null, DateTimeOffset? since = null)
     {
         var plays = runs.Where(r => r.RulesetShortName == "osu" && ScoreMods.IsManualPlay(r) && analyses.ContainsKey(r.ScoreId))
             .DistinctBy(r => r.ScoreId).OrderBy(r => r.PlayedAt).ToArray();
         if (plays.Length == 0) return ReplayFolderSummary.Empty;
 
+        var (timing, keys, withKeys) = timingAndKeys(plays, analyses);
+        FolderComparison? comparison = null;
+        if (since is { } cut)
+        {
+            var before = plays.Where(p => p.PlayedAt < cut).ToArray();
+            var after = plays.Where(p => p.PlayedAt >= cut).ToArray();
+            var (beforeTiming, beforeKeys, _) = timingAndKeys(before, analyses);
+            var (afterTiming, afterKeys, _) = timingAndKeys(after, analyses);
+            comparison = new FolderComparison(cut, before.Length, after.Length, beforeTiming, afterTiming, beforeKeys, afterKeys);
+        }
+        return new ReplayFolderSummary(plays.Length, plays.Count(p => !p.Passed), withKeys, timing, keys,
+            patterns(plays, analyses, now, localSets, since), misses(plays, analyses)) { Comparison = comparison };
+    }
+
+    private static (FolderTiming Timing, IReadOnlyList<FolderKey> Keys, int WithKeys) timingAndKeys(LocalReplay[] plays, IReadOnlyDictionary<Guid, ReplayAnalysisResult> analyses)
+    {
         var urs = new List<double>();
         var means = new List<double>();
         int hits = 0, early = 0, withKeys = 0;
@@ -94,27 +120,43 @@ public static class ReplayFolderAnalysis
         int keyedHits = keyHits.Values.Sum();
         var keys = keyHits.OrderBy(k => k.Key, StringComparer.Ordinal).Select(k => new FolderKey(k.Key, k.Value, k.Value / (double)keyedHits,
             Estimate.Of(keyMeans.GetValueOrDefault(k.Key) ?? []), Estimate.Of(keyUrs.GetValueOrDefault(k.Key) ?? [])?.Within(0, double.MaxValue))).ToArray();
-
-        return new ReplayFolderSummary(plays.Length, plays.Count(p => !p.Passed), withKeys,
-            new FolderTiming(Estimate.Of(urs)?.Within(0, double.MaxValue), Estimate.Of(means), hits == 0 ? null : early / (double)hits, urs.Count, hits),
-            keys, patterns(plays, analyses, now), misses(plays, analyses));
+        return (new FolderTiming(Estimate.Of(urs)?.Within(0, double.MaxValue), Estimate.Of(means), hits == 0 ? null : early / (double)hits, urs.Count, hits), keys, withKeys);
     }
 
-    /// <summary>Each pattern class in the earlier and recent half of the plays that contain it.</summary>
-    private static IReadOnlyList<FolderPatternTrend> patterns(LocalReplay[] plays, IReadOnlyDictionary<Guid, ReplayAnalysisResult> analyses, DateTimeOffset now)
+    /// <summary>
+    /// Each pattern class in the earlier and recent half of the plays that contain it, or before and since a date.
+    /// A play's circle size comes from a miss's measured hit radius, or else from the installed map.
+    /// </summary>
+    private static IReadOnlyList<FolderPatternTrend> patterns(LocalReplay[] plays, IReadOnlyDictionary<Guid, ReplayAnalysisResult> analyses, DateTimeOffset now,
+        IEnumerable<LocalBeatmapSet>? localSets, DateTimeOffset? since)
     {
-        var evidence = PpTargetPatternModel.BuildProfile(plays, analyses, now: now, recencyDays: 3650).Evidence.OrderBy(e => e.PlayedAt).ToArray();
+        var contexts = new Dictionary<Guid, PpPatternContext>();
+        foreach (var play in plays)
+            if (analyses[play.ScoreId].Judgements.Select(j => j.MissAnalysis?.HitRadius).FirstOrDefault(r => r is > 0 && double.IsFinite(r.Value)) is { } radius)
+                contexts[play.ScoreId] = new PpPatternContext(radius, null);
+        var evidence = PpTargetPatternModel.BuildProfile(plays, analyses, contexts, now: now, recencyDays: 3650, localSets: localSets)
+            .Evidence.OrderBy(e => e.PlayedAt).ToArray();
         var trends = new List<FolderPatternTrend>();
         foreach (string pattern in evidence.SelectMany(e => e.Outcomes.Keys).Distinct().Order(StringComparer.Ordinal))
         {
-            var outcomes = evidence.Where(e => e.Outcomes.TryGetValue(pattern, out var o) && o.ObjectCount >= minimum_hits)
-                .Select(e => e.Outcomes[pattern]).ToArray();
-            if (outcomes.Length < 4) continue;
-            var earlier = outcomes[..(outcomes.Length / 2)];
-            var recent = outcomes[(outcomes.Length / 2)..];
+            var withPattern = evidence.Where(e => e.Outcomes.TryGetValue(pattern, out var o) && o.ObjectCount >= minimum_hits).ToArray();
+            PpPatternOutcome[] earlier, recent;
+            if (since is { } cut)
+            {
+                earlier = withPattern.Where(e => e.PlayedAt < cut).Select(e => e.Outcomes[pattern]).ToArray();
+                recent = withPattern.Where(e => e.PlayedAt >= cut).Select(e => e.Outcomes[pattern]).ToArray();
+                if (earlier.Length < 2 && recent.Length < 2) continue;
+            }
+            else
+            {
+                var outcomes = withPattern.Select(e => e.Outcomes[pattern]).ToArray();
+                if (outcomes.Length < 4) continue;
+                earlier = outcomes[..(outcomes.Length / 2)];
+                recent = outcomes[(outcomes.Length / 2)..];
+            }
             Estimate? share(IEnumerable<double> values) => Estimate.Of(values)?.Within(0, 1);
             Estimate? ur(IEnumerable<PpPatternOutcome> half) => Estimate.Of(half.Select(o => o.UnstableRate ?? double.NaN))?.Within(0, double.MaxValue);
-            trends.Add(new FolderPatternTrend(pattern, outcomes.Length,
+            trends.Add(new FolderPatternTrend(pattern, earlier.Length + recent.Length,
                 share(earlier.Select(o => o.Accuracy)), share(recent.Select(o => o.Accuracy)),
                 share(earlier.Select(o => o.MissRate)), share(recent.Select(o => o.MissRate)),
                 ur(earlier), ur(recent)));

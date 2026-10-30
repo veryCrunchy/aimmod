@@ -79,6 +79,7 @@ public sealed partial class OffscreenVisualCaptureTests
     [TestCase("statistics-populated", 1600, 900)]
     [TestCase("statistics-analysis-populated", 1100, 760)]
     [TestCase("statistics-analysis-populated", 800, 760)]
+    [TestCase("statistics-analysis-compare-populated", 1100, 760)]
     [TestCase("statistics-mods", 1100, 760)]
     [TestCase("statistics-mods", 800, 600)]
     [TestCase("coaching-populated", 1100, 760)]
@@ -104,6 +105,12 @@ public sealed partial class OffscreenVisualCaptureTests
     [TestCase("ppTargets-populated", 1600, 900)]
     [TestCase("ppTargets-menu", 1600, 900)]
     [TestCase("ppTargets-menu", 800, 760)]
+    [TestCase("ppTargets-skillset", 1600, 900)]
+    [TestCase("ppTargets-defender", 1600, 900)]
+    [TestCase("ppTargets-defender", 800, 760)]
+    [TestCase("ppTargets-defender-confirm", 1100, 760)]
+    [TestCase("ppTargets-skillset-menu", 1600, 900)]
+    [TestCase("ppTargets-skillset-menu", 800, 760)]
     [TestCase("ppTargets-evidence", 1600, 900)]
     [TestCase("ppTargets-evidence", 800, 760)]
     [TestCase("ppTargets-details", 1100, 760)]
@@ -173,11 +180,12 @@ public sealed partial class OffscreenVisualCaptureTests
         await WindowsPrivateDesktopCapture.CaptureAsync(
             (host, succeeded, failed) => route switch
             {
-                "ppTargets" or "ppTargets-filters" or "ppTargets-populated" or "ppTargets-details" or "ppTargets-menu" or "ppTargets-evidence" or "ppTargets-tooltip" => new CapturePpTargetsGame(host, ppCache!, outputPath, width, height, succeeded, failed, route == "ppTargets-details"),
+                "ppTargets" or "ppTargets-filters" or "ppTargets-populated" or "ppTargets-details" or "ppTargets-menu" or "ppTargets-skillset" or "ppTargets-skillset-menu" or "ppTargets-defender" or "ppTargets-defender-confirm" or "ppTargets-evidence" or "ppTargets-tooltip" => new CapturePpTargetsGame(host, ppCache!, outputPath, width, height, succeeded, failed, route == "ppTargets-details"),
                 "beatmaps-populated" => new CaptureBeatmapGame(host, source, outputPath, width, height, succeeded, failed),
                 "statistics-mods" => new CaptureStatisticsGame(host, source, outputPath, width, height, succeeded, failed),
                 "statistics-populated" => new CaptureStatisticsGame(host, source, outputPath, width, height, succeeded, failed),
                 "statistics-analysis-populated" => new CaptureStatisticsGame(host, source, outputPath, width, height, succeeded, failed),
+            "statistics-analysis-compare-populated" => new CaptureStatisticsGame(host, source, outputPath, width, height, succeeded, failed),
                 "coaching-populated" => new CaptureCoachingGame(host, source, outputPath, width, height, CoachingCaptureState.Analysing, succeeded, failed),
                 "coaching-complete" => new CaptureCoachingGame(host, source, outputPath, width, height, CoachingCaptureState.Complete, succeeded, failed),
                 "coaching-practice-many" => new CaptureCoachingGame(host, source, outputPath, width, height, CoachingCaptureState.PracticeMany, succeeded, failed),
@@ -302,6 +310,9 @@ public sealed partial class OffscreenVisualCaptureTests
             new ReplayJudgementSummary(hits.Length, 0, 0, 1, 0, 0));
     }
 
+    /// <summary>The last fixture estimates, re-applied by the skillset capture after the offline profile rebuild clears them.</summary>
+    private static IReadOnlyDictionary<int, PpTargetEstimate>? skillsetFixtureEstimates;
+
     private static async Task<PpTargetWorkspaceCache> createPpTargetCaptureCache(string outputPath)
     {
         var now = DateTimeOffset.UtcNow;
@@ -332,6 +343,7 @@ public sealed partial class OffscreenVisualCaptureTests
                 .Select(i => new PpTargetPassSample(800000 + i, now.AddDays(-1), 5.2, 190, 200, "", i <= 12, Accuracy: .972)).ToArray()),
         };
         var estimates = new Dictionary<int, PpTargetEstimate>();
+        skillsetFixtureEstimates = estimates;
         OfficialBeatmapSet[] catalog = Enumerable.Range(0, 8).Select(i =>
         {
             int beatmapId = 910_000 + i;
@@ -347,6 +359,10 @@ public sealed partial class OffscreenVisualCaptureTests
             estimates[beatmapId] = syntheticOutcomeEstimate(new(185 + i * 21, 276 + i * 29, new(170 + i * 21, 202 + i * 21), 24,
                 PpTargetConfidence.High, "Official osu! ruleset / fixture", BeatmapId: beatmapId,
                 PatternPrediction: prediction, PatternProfileIdentity: identity), i, 1250 + i * 110);
+            if (outputPath.Contains("ppTargets-skillset", StringComparison.Ordinal))
+                // Even-numbered maps are stream maps, the rest jump maps.
+                estimates[beatmapId] = estimates[beatmapId] with { PatternProfileIdentity = null, Features = new PpPatternFeatures { PointCount = 1250 + i * 110, HitRadius = 32, ClockRate = 1,
+                    StreamFraction = i % 2 == 0 ? .28 + i * .03 : .04, BurstFraction = .08, JumpFraction = i % 2 == 0 ? .14 : .58, SharpTurnFraction = .2 } };
             if (evidenceComparison && i >= 2)
             {
                 difficulty = difficulty with { StarRating = 10.36, Bpm = 230, TotalLengthSeconds = 359 };
@@ -1150,9 +1166,41 @@ public sealed partial class OffscreenVisualCaptureTests
                     }
                 }, 300);
             }
+            if (outputPath.Contains("ppTargets-skillset", StringComparison.Ordinal))
+                Scheduler.AddDelayed(() =>
+                {
+                    const BindingFlags flags = BindingFlags.Instance | BindingFlags.NonPublic;
+                    var dropdown = (osu.Framework.Graphics.UserInterface.Dropdown<PpTargetSkillset>)
+                        typeof(NativePpTargetsWorkspace).GetField("skillsetDropdown", flags)!.GetValue(workspace)!;
+                    if (outputPath.Contains("ppTargets-skillset-menu", StringComparison.Ordinal))
+                    {
+                        var menu = (osu.Framework.Graphics.UserInterface.Menu)
+                            typeof(osu.Framework.Graphics.UserInterface.Dropdown<PpTargetSkillset>).GetField("Menu", flags)!.GetValue(dropdown)!;
+                        menu.Open();
+                    }
+                    else
+                    {
+                        typeof(NativePpTargetsWorkspace).GetField("exactEstimates", flags)!.SetValue(workspace, skillsetFixtureEstimates);
+                        dropdown.Current.Value = PpTargetSkillset.Streams;
+                    }
+                }, outputPath.Contains("ppTargets-skillset-menu", StringComparison.Ordinal) ? 300 : 1200);
+            if (outputPath.Contains("ppTargets-defender", StringComparison.Ordinal))
+                Scheduler.AddDelayed(() =>
+                {
+                    const BindingFlags flags = BindingFlags.Instance | BindingFlags.NonPublic;
+                    workspace.DefenderExclusion = new DefenderScanExclusion(
+                        [@"C:\Users\Player\AppData\Roaming\AimMod\cache\pp-target-exact-v2.json.beatmaps", @"C:\Users\Player\AppData\Roaming\AimMod\downloads\pp-target-difficulties"],
+                        Path.Combine(Path.GetTempPath(), $"aimmod-defender-capture-{Guid.NewGuid():N}.json"), (_, _) => Task.FromResult(0));
+                    typeof(NativePpTargetsWorkspace).GetMethod("offerDefenderExclusion", flags)!.Invoke(workspace, null);
+                    var card = typeof(NativePpTargetsWorkspace).GetField("defenderCard", flags)!.GetValue(workspace);
+                    Assert.That(card, Is.Not.Null, "Defender runs on the capture machine, so the card must be offered.");
+                    if (outputPath.Contains("ppTargets-defender-confirm", StringComparison.Ordinal))
+                        typeof(DefenderExclusionPanel).GetField("confirming", flags)!.SetValue(card, true);
+                    typeof(DefenderExclusionPanel).GetMethod("render", flags)!.Invoke(card, null);
+                }, 300);
             if (outputPath.Contains("ppTargets-tooltip", StringComparison.Ordinal))
                 Scheduler.AddDelayed(showTooltip, 300);
-            Scheduler.AddDelayed(capture, outputPath.Contains("ppTargets-filters", StringComparison.Ordinal) ? 2000 : 1000);
+            Scheduler.AddDelayed(capture, outputPath.Contains("ppTargets-filters", StringComparison.Ordinal) || outputPath.Contains("ppTargets-skillset-1", StringComparison.Ordinal) ? 2200 : 1000);
         }
 
         private osu.Framework.Graphics.Drawable? tooltip;
@@ -1218,9 +1266,9 @@ public sealed partial class OffscreenVisualCaptureTests
                 }
                 var rows = (osu.Framework.Graphics.Containers.FillFlowContainer<osu.Framework.Graphics.Drawable>)
                     typeof(NativePpTargetsWorkspace).GetField("results", flags)!.GetValue(workspace)!;
-                Assert.That(rows.Count, Is.EqualTo(8), "Capture must show PP target rows, never Home or a loading placeholder.");
+                Assert.That(rows.Children.Count(row => row.GetType().Name == "PpTargetRow"), Is.EqualTo(outputPath.Contains("ppTargets-skillset-1", StringComparison.Ordinal) ? 4 : 8), "Capture must show PP target rows, never Home or a loading placeholder.");
                 var list = (AimModScrollContainer)typeof(NativePpTargetsWorkspace).GetField("resultScroll", flags)!.GetValue(workspace)!;
-                foreach (var row in list.Alpha > 0 ? rows.Children : [])
+                foreach (var row in list.Alpha > 0 ? rows.Children.Where(row => row.GetType().Name == "PpTargetRow") : [])
                 {
                     Assert.That(row, Is.Not.InstanceOf<osu.Framework.Graphics.Cursor.IHasTooltip>(), "Rows show the visual popover, not a text tooltip.");
                     Assert.That(((osu.Framework.Graphics.Cursor.IHasCustomTooltip<PpTargetCandidate>)row).TooltipContent, Is.Not.Null);
@@ -1419,6 +1467,8 @@ public sealed partial class OffscreenVisualCaptureTests
             {
                 var replays = (IReadOnlyList<LocalReplay>)typeof(InMemoryLocalLibrarySource).GetField("replays", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(memory)!;
                 workspace.ConfigureReplayAnalysis(replays.ToDictionary(r => r.ScoreId, syntheticAnalysis), (_, _) => { });
+                if (outputPath.Contains("statistics-analysis-compare", StringComparison.Ordinal))
+                    workspace.CompareSince = DateOnly.FromDateTime(DateTime.Now.AddDays(-14));
             }
             if (analysis)
                 Scheduler.AddDelayed(() =>

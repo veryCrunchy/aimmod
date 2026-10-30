@@ -738,7 +738,10 @@ public partial class AimModGame : OsuGameBase
     {
         homeScreen ??= new Home.NativeHomeDashboard(createHomeSources(), new Home.HomeDashboardActions(
             showBeatmaps, showSkins, showReplays, showStatistics, showCoaching, showPpTargets, showTrainers, showSettings,
-            () => { showTrainers(); trainersWorkspace?.ResumeGuidedPractice(); }, openBeatmapPractice, prepareCatalogReplay), updateService!);
+            () => { showTrainers(); trainersWorkspace?.ResumeGuidedPractice(); }, openBeatmapPractice, prepareCatalogReplay)
+        {
+            OpenTrainer = kind => { showTrainers(); trainersWorkspace?.ShowExercise(kind); },
+        }, updateService!);
         switchWorkspaceRoute(NativeRoute.Home, homeScreen);
         homeScreen.Refresh();
     }
@@ -755,7 +758,10 @@ public partial class AimModGame : OsuGameBase
             () => new TrainerHistoryStore(accountPath("trainers/history-{0}.json")).LoadGuidedPlan(),
             () => new TrainerHistoryStore(accountPath("trainers/history-{0}.json")).Load(),
             () => new PpTargetWorkspaceCache(Storage.GetFullPath("cache/pp-target-workspace-v1.json", true)).Load(),
-            () => localScorePpHydrationService);
+            () => localScorePpHydrationService)
+        {
+            ReplayAnalyses = () => replayAnalyses.ToDictionary(pair => pair.Key, pair => pair.Value),
+        };
     }
 
     private void showBeatmaps()
@@ -770,6 +776,7 @@ public partial class AimModGame : OsuGameBase
             openBeatmapPractice)
         {
             RelativeSizeAxes = Axes.Both,
+            OpenDifficultyPractice = (set, difficulty) => { showCoaching(); coachingWorkspace!.FocusDifficulty(set.Title, difficulty); },
         };
         switchWorkspaceRoute(NativeRoute.Beatmaps, beatmapsScreen);
     }
@@ -916,6 +923,8 @@ public partial class AimModGame : OsuGameBase
         {
             RelativeSizeAxes = Axes.Both,
         };
+        statisticsScreen.ComparisonStore = () => new StatisticsComparisonStore(Storage.GetFullPath($"statistics/compare-{currentOsuProfile?.UserId ?? 0}.json", true));
+        statisticsScreen.ReloadComparison();
         statisticsScreen.ConfigureReplayAnalysis(replayAnalyses, prepareCatalogReplayMoment);
         switchWorkspaceRoute(NativeRoute.Statistics, statisticsScreen);
         statisticsScreen.RefreshHistory();
@@ -970,6 +979,8 @@ public partial class AimModGame : OsuGameBase
             prepareCatalogReplayMoment, () => { showTrainers(); trainersWorkspace?.StartGuidedPractice(TrainerGuidedFocus.MovementComparison); }, showTrainers)
         {
             RelativeSizeAxes = Axes.Both,
+            AnalysisFailed = replayAnalysisFailures.Contains,
+            AnalyseDifficulty = run => _ = analyseForCoachingAsync(run),
             CancelAnalysisRequested = () =>
             {
                 stopReplayLibraryAnalysis();
@@ -1170,8 +1181,16 @@ public partial class AimModGame : OsuGameBase
         {
             RelativeSizeAxes = Axes.Both,
         };
+        ppTargetsWorkspace.DefenderExclusion = defenderScanExclusion();
         switchWorkspaceRoute(NativeRoute.PpTargets, ppTargetsWorkspace);
     }
+
+    private DefenderScanExclusion? defenderExclusion;
+
+    /// <summary>The Defender exclusion offer for the PP target scan folders. Null until PP calculation is available.</summary>
+    private DefenderScanExclusion? defenderScanExclusion() => ppTargetExactCalculationService is PpTargetExactCalculationService service
+        ? defenderExclusion ??= new DefenderScanExclusion(service.ScanFolders, Storage.GetFullPath("settings/defender-exclusion.json"))
+        : null;
 
     private void switchWorkspaceRoute(NativeRoute route, Drawable screen)
     {
@@ -1827,6 +1846,15 @@ public partial class AimModGame : OsuGameBase
 
     private static bool isReplayAnalysisRoute(NativeRoute route) =>
         route is NativeRoute.Replays or NativeRoute.Coaching or NativeRoute.PpTargets;
+
+    /// <summary>Analyses one difficulty's replays for its coaching page, then refreshes coaching.</summary>
+    private async Task analyseForCoachingAsync(LocalReplay run)
+    {
+        try { await analyseMatchingMapReplays(run, appLifetime.Token).ConfigureAwait(false); }
+        catch (OperationCanceledException) { return; }
+        catch (Exception error) { Console.Error.WriteLine($"[AimMod] Coaching replay analysis failed: {error.Message}"); }
+        if (!IsDisposed) Schedule(() => coachingWorkspace?.RefreshAfterMapAnalysis());
+    }
 
     private async Task analyseMatchingMapReplays(LocalReplay selected, CancellationToken cancellationToken)
     {

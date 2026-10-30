@@ -34,6 +34,8 @@ public sealed partial class OffscreenVisualCaptureTests
     [TestCase("detail-practising", 900, 700)]
     [TestCase("find-menu", 1280, 800)]
     [TestCase("find-menu", 900, 700)]
+    [TestCase("drills-played", 1600, 900)]
+    [TestCase("drills-played", 900, 700)]
     [Explicit("Renders the coaching screen with 1,000+ synthetic plays on a private desktop.")]
     [SupportedOSPlatform("windows")]
     public async Task CaptureCoachingScreen(string scene, int width, int height)
@@ -163,7 +165,18 @@ public sealed partial class OffscreenVisualCaptureTests
         {
             var now = DateTimeOffset.UtcNow;
             var (runs, analyses) = CoachingScreenFixture.Build(now);
-            Assert.That(runs.Length, Is.GreaterThan(1_000));
+            if (scene == "drills-played")
+            {
+                // Recent plays on difficulties that have no analysed problems: not analysed yet, no replay saved.
+                var template = runs.OrderByDescending(r => r.PlayedAt).First();
+                string[] names = ["Kumocha's Extra", "PikA's Extra", "Ram's Another", "Insane"];
+                runs = [.. runs, .. names.SelectMany((name, i) => Enumerable.Range(0, 3 + i).Select(n => template with
+                {
+                    ScoreId = Guid.NewGuid(), BeatmapId = new Guid(i + 1, 7, 7, [7, 7, 7, 7, 7, 7, 7, 7]), BeatmapHash = "synthetic-played-" + i,
+                    Difficulty = name, Title = "Synthetic Nightcore", StarRating = 4.6 + i * .15, PlayedAt = now.AddMinutes(-5 - i * 20 - n),
+                    HasReplayFile = i != 3, OnlineBeatmapId = 0, OnlineScoreId = 0,
+                }))];
+            }            Assert.That(runs.Length, Is.GreaterThan(1_000));
             var source = new InMemoryLocalLibrarySource([], runs);
             string storage = Path.Combine(Path.GetDirectoryName(output)!, "coaching-screen-" + scene + width);
             var library = new PracticeMapLibrary(Path.Combine(storage, "library"));
@@ -225,6 +238,31 @@ public sealed partial class OffscreenVisualCaptureTests
                             catch (Exception error) { failure(error); host.Exit(); }
                         }, 600);
                 }, scene == "detail-practising" ? 2_800 : 1_900);
+
+            if (scene == "drills-played")
+            {
+                int waited = 0;
+                void showPlayed()
+                {
+                    try
+                    {
+                        var played = (IReadOnlyList<PlayedDifficultyWithoutDrills>)typeof(NativePracticeWorkspace).GetField("playedWithoutDrills", flags)!.GetValue(practice)!;
+                        // The coaching model is built in the background; wait for it rather than a fixed delay.
+                        if (played.Count == 0 && ++waited < 30) { Scheduler.AddDelayed(showPlayed, 250); return; }
+                        workspace.FocusPracticeMap(string.Empty);
+                        Assert.That(played, Is.Not.Empty, "The fixture has played difficulties without analysed problems.");
+                        var notAnalysed = played.FirstOrDefault(p => p.Reason == PlayedWithoutDrillsReason.NotAnalysed) ?? played[0];
+                        typeof(NativePracticeWorkspace).GetMethod("selectRow", flags)!.Invoke(practice, ["played:" + notAnalysed.Play.ScoreId]);
+                        // Scroll the list to where the played difficulties start, after the drills.
+                        var list = (Drawable)typeof(NativePracticeWorkspace).GetField("list", flags)!.GetValue(practice)!;
+                        var rows = (System.Collections.IList)list.GetType().BaseType!.GetProperty("RowData", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)!.GetValue(list)!;
+                        int firstPlayed = rows.Cast<object>().TakeWhile(row => !((string)row.GetType().GetProperty("Key")!.GetValue(row)!).StartsWith("played:", StringComparison.Ordinal)).Count();
+                        Scheduler.AddDelayed(() => descendants(list).OfType<AimModScrollContainer>().First().ScrollTo(Math.Max(0, firstPlayed - 1) * 106, false), 300);
+                    }
+                    catch (Exception error) { failure(error); host.Exit(); }
+                }
+                Scheduler.AddDelayed(showPlayed, 1_600);
+            }
 
             if (scene == "find-menu")
                 Scheduler.AddDelayed(() =>

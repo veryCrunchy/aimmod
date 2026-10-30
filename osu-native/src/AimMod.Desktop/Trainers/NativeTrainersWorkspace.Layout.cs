@@ -212,7 +212,7 @@ public partial class NativeTrainersWorkspace
     private UsualValues? usual(TrainerKind kind)
     {
         var now = DateTimeOffset.UtcNow;
-        var runs = history().Load().Where(r => r.Settings.Kind == kind && !r.Assisted && r.WarmupRun is null && r.CompletedAt >= now.AddDays(-30))
+        var runs = history().Load().Where(r => r.Settings.Kind == kind && !r.Assisted && r.WarmupRun is null && r.LadderRun is null && r.CompletedAt >= now.AddDays(-30))
             .Take(12).ToArray();
         if (runs.Length < 3) return null;
         double? median(IEnumerable<double> values) { var a = values.Where(double.IsFinite).ToArray(); return a.Length == 0 ? null : TrainerPerformance.Median(a); }

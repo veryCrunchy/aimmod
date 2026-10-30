@@ -6,6 +6,7 @@ namespace AimMod.Desktop.Coaching;
 public enum StatisticsTimeRange
 {
     All,
+    Days7,
     Days30,
     Days90,
     Year,
@@ -84,6 +85,7 @@ public sealed record StatisticsWorkspaceModel(
         DateTimeOffset reference = now ?? DateTimeOffset.Now;
         DateTimeOffset? earliest = query.TimeRange switch
         {
+            StatisticsTimeRange.Days7 => reference.AddDays(-7),
             StatisticsTimeRange.Days30 => reference.AddDays(-30),
             StatisticsTimeRange.Days90 => reference.AddDays(-90),
             StatisticsTimeRange.Year => reference.AddYears(-1),
@@ -153,11 +155,15 @@ public sealed record StatisticsWorkspaceModel(
             })
         {
             Insights = buildInsights(chronological, matching, query.TimeRange, earliest, reference),
+            MatchingRuns = matching,
         };
     }
 
     /// <summary>Headline, trend and change for each metric. Unbounded views compare the latest 30 days.</summary>
     public StatisticsInsights Insights { get; init; } = StatisticsInsights.Empty;
+
+    /// <summary>Plays matching every filter except the period, for comparisons that reach back before it.</summary>
+    public IReadOnlyList<LocalReplay> MatchingRuns { get; init; } = [];
 
     private static StatisticsInsights buildInsights(
         LocalReplay[] chronological,
@@ -175,6 +181,7 @@ public sealed record StatisticsWorkspaceModel(
             start = periodStart;
             label = range switch
             {
+                StatisticsTimeRange.Days7 => "vs prev 7d",
                 StatisticsTimeRange.Days30 => "vs prev 30d",
                 StatisticsTimeRange.Days90 => "vs prev 90d",
                 _ => "vs prev year",

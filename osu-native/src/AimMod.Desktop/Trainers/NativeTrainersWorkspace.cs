@@ -96,6 +96,7 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
         AddInternal(tabs);
         AddInternal(modPage = new Container { RelativeSizeAxes = Axes.Both, Padding = new MarginPadding { Top = 120 }, Alpha = 0 });
         buildWarmupTab(tabs);
+        buildLadderTab(tabs);
         pageBody.Add(results = column());
         results.Padding = new MarginPadding { Bottom = 24 };
         pageBody.Add(setup = new Container { RelativeSizeAxes = Axes.X });
@@ -232,7 +233,7 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
 
     public void CompleteOsuSession(TrainerResult? result)
     {
-        if (completeWarmup(result)) return;
+        if (completeWarmup(result) || completeLadder(result)) return;
         results.Clear();
         if (result is null)
         {
@@ -433,7 +434,7 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
 
     private void addResultHeader(TrainerResult r)
     {
-        results.Add(text(r.WarmupRun is not null ? "Warmup drill complete" : r.Assisted ? "Assisted session complete" : r.Settings.GuidedCues ? "Guided practice complete" : "Session complete", 22, AimModPalette.Text));
+        results.Add(text(r.WarmupRun is not null ? "Warmup drill complete" : r.LadderRun is not null ? "Ladder step complete" : r.Assisted ? "Assisted session complete" : r.Settings.GuidedCues ? "Guided practice complete" : "Session complete", 22, AimModPalette.Text));
         var chips = flow(); chips.Spacing = new(6);
         chips.Add(new AimModTrainerChip(DisplayName(r.Settings.Kind), tone: AimModTrainerChipTone.Accent));
         if (TrainerPresets.For(r.Settings.Kind).FirstOrDefault(p => p.Matches(r.Settings)) is { } preset) chips.Add(new AimModTrainerChip(preset.Title));

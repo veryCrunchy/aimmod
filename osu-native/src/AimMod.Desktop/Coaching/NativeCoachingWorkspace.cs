@@ -119,6 +119,66 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
 
     public void ClosePractice() { if (practiceWorkspace is not null) { practiceWorkspace.Alpha = 0; if (practiceWorkspace.IsShowingSavedPractice) showCoachingPage(coachingMapId is null ? 3 : 4); } refreshPracticeProgress(); }
 
+    /// <summary>Whether background analysis already failed for a play this session.</summary>
+    public Func<Guid, bool>? AnalysisFailed { get; set; }
+
+    /// <summary>Analyses a difficulty's replays now, ahead of the background queue.</summary>
+    public Action<LocalReplay>? AnalyseDifficulty { get; set; }
+
+    /// <summary>A difficulty's replays were just analysed: rebuild the report and the open coaching page.</summary>
+    public void RefreshAfterMapAnalysis()
+    {
+        requestModel(workspace?.SelectedRun?.ScoreId);
+        if (coachingMapRun is not null || coachingMapId is not null) renderCoachingMap();
+    }
+
+    /// <summary>Opens a difficulty's coaching page from one play, analysing its replays first when they are not yet.</summary>
+    private void coachPlay(LocalReplay run)
+    {
+        if (practiceWorkspace is not null) practiceWorkspace.Alpha = 0;
+        openCoachingMap(null, run);
+        if (run.HasReplayFile && !analyses.ContainsKey(run.ScoreId) && AnalysisFailed?.Invoke(run.ScoreId) != true) AnalyseDifficulty?.Invoke(run);
+    }
+
+    private (string Title, LocalBeatmapDifficulty Difficulty)? pendingDifficultyFocus;
+    private bool historyApplied;
+
+    /// <summary>
+    /// Opens coaching for one difficulty: its coaching page from the newest play on it, passed if possible and failed
+    /// otherwise, whether or not that play is analysed yet. Without any play, the map's drills are shown with a note.
+    /// </summary>
+    public void FocusDifficulty(string title, LocalBeatmapDifficulty difficulty)
+    {
+        pendingDifficultyFocus = (title, difficulty);
+        if (historyApplied) applyDifficultyFocus();
+    }
+
+    internal static bool PlaysDifficulty(LocalReplay run, LocalBeatmapDifficulty difficulty) =>
+        !string.IsNullOrEmpty(difficulty.BeatmapHash) && string.Equals(run.BeatmapHash, difficulty.BeatmapHash, StringComparison.OrdinalIgnoreCase)
+        || difficulty.BeatmapId != Guid.Empty && run.BeatmapId == difficulty.BeatmapId
+        || difficulty.OnlineId > 0 && run.OnlineBeatmapId == difficulty.OnlineId;
+
+    /// <summary>The play to coach a difficulty from: the newest passed play, else the newest play of any result.</summary>
+    internal static LocalReplay? CoachingRunFor(IEnumerable<LocalReplay> history, LocalBeatmapDifficulty difficulty)
+    {
+        var plays = history.Where(r => r.RulesetShortName == "osu" && CoachingRunKeys.IsManualPlay(r) && PlaysDifficulty(r, difficulty))
+            .OrderByDescending(r => r.PlayedAt).ToArray();
+        return plays.FirstOrDefault(eligibleForCoaching) ?? plays.FirstOrDefault();
+    }
+
+    private void applyDifficultyFocus()
+    {
+        if (pendingDifficultyFocus is not { } focus) return;
+        pendingDifficultyFocus = null;
+        if (CoachingRunFor(allReplays, focus.Difficulty) is { } run)
+        {
+            coachPlay(run);
+            return;
+        }
+        FocusPracticeMap(focus.Title);
+        practiceWorkspace?.SetRunStatus($"You haven't played {focus.Difficulty.Name} yet. Play it once in osu!, then press Practice again to coach exactly that difficulty. Below are this map's difficulties that already have practice sections.");
+    }
+
     public void FocusPracticeMap(string title)
     {
         practiceMinimumStars.SetDefault();
@@ -140,6 +200,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         Func<LocalReplay, CancellationToken, Task>? openBeatmap = null, CoachingTrainingStore? trainingStore = null, PracticeMapLibrary? practiceLibrary = null, Func<int>? accountId = null,
         Action<LocalReplay, double>? openReplayMoment = null, Action? compareMovement = null, Action? openTrainers = null)
     {
+        if (practiceWorkspace is not null) practiceWorkspace.OpenCoaching = run => coachPlay(run);
         this.practiceLibrary = practiceLibrary;
         this.practiceAccountId = accountId ?? (() => 0);
         this.trainingStore = trainingStore;
@@ -415,6 +476,8 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         }
         refreshPracticeProgress();
         requestModel(workspace?.SelectedRun?.ScoreId);
+        historyApplied = true;
+        applyDifficultyFocus();
     }
 
     /// <summary>
@@ -495,6 +558,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
             practicePool = pool;
             renderedPracticePage = null;
         }
+        practiceWorkspace?.SetPlayedWithoutDrills(PracticeMapCandidateBuilder.PlayedWithoutDrills(model.History, analyses, pool, AnalysisFailed));
         loadingOverlay.HideLoading();
         updateWorkspace();
         if (pendingCompletion is not null)

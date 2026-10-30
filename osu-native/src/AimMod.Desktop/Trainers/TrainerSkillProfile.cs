@@ -25,7 +25,7 @@ public static class TrainerSkillProfile
 {
     public static TrainerSkillLimits Build(TrainerKind kind, IEnumerable<TrainerResult> history, IEnumerable<TrainerSkillEvidence> replays, DateTimeOffset now, TrainerSkillLimits? startingLimits = null)
     {
-        var recent = history.Where(r => r.WarmupRun is null && r.Settings.Kind == kind && r.Notes >= 12
+        var recent = history.Where(r => r.WarmupRun is null && r.LadderRun is null && r.Settings.Kind == kind && r.Notes >= 12
             && TrainerPerformance.IsCompleted(r, now) && r.CompletedAt >= now.AddDays(-30))
             .DistinctBy(r => r.Id).OrderByDescending(r => r.CompletedAt).Take(12).ToArray();
         double reference = TrainerPerformance.Reference(recent.Skip(3).Count() >= 3 ? recent.Skip(3) : recent);

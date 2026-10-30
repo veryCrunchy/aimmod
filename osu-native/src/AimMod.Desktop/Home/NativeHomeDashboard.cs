@@ -6,6 +6,7 @@ using AimMod.Desktop.Trainers;
 using AimMod.Desktop.Updates;
 using AimMod.Desktop.Visuals;
 using AimMod.Osu.Runtime;
+using AimMod.Osu.Runtime.Contracts;
 using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
 using osu.Framework.Graphics.Shapes;
@@ -28,6 +29,9 @@ internal sealed record HomeDashboardSources(
     Func<ILocalScorePpHydrationService?> PpHydration)
 {
     public Func<DateTimeOffset> Clock { get; init; } = () => DateTimeOffset.Now;
+
+    /// <summary>Replay analyses held in memory. Skillsets need them; without any, Home falls back to the PP target cache.</summary>
+    public Func<IReadOnlyDictionary<Guid, ReplayAnalysisResult>>? ReplayAnalyses { get; init; }
 }
 
 internal sealed record HomeDashboardActions(
@@ -41,7 +45,11 @@ internal sealed record HomeDashboardActions(
     Action ShowSettings,
     Action ResumeGuidedPractice,
     Action<string> PractiseMap,
-    Action<LocalReplay> OpenReplay);
+    Action<LocalReplay> OpenReplay)
+{
+    /// <summary>Opens Trainers on one exercise.</summary>
+    public Action<TrainerKind>? OpenTrainer { get; init; }
+}
 
 /// <summary>
 /// The start page: who you are, how your recent plays went compared with before, what to do next,
@@ -61,6 +69,7 @@ internal partial class NativeHomeDashboard : CompositeDrawable
     private readonly HomeNextUpPanel nextUpPanel;
     private readonly HomeRecentPlaysPanel recentPanel;
     private readonly HomeShortcutsPanel shortcutsPanel;
+    private readonly HomeSkillsetPanel skillsetPanel;
     private readonly HomeColumns formRow;
     private readonly HomeColumns recentRow;
     private readonly INativeUpdateService updateService;
@@ -104,6 +113,7 @@ internal partial class NativeHomeDashboard : CompositeDrawable
                             formRow = new HomeColumns(.6f,
                                 formPanel = new HomeFormPanel(actions),
                                 nextUpPanel = new HomeNextUpPanel(runRecommendation) { Alpha = 0 }) { RightFirstWhenStacked = true },
+                            skillsetPanel = new HomeSkillsetPanel(actions) { Alpha = 0 },
                             recentRow = new HomeColumns(.6f,
                                 recentPanel = new HomeRecentPlaysPanel(actions) { Alpha = 0 },
                                 shortcutsPanel = new HomeShortcutsPanel(actions)),
@@ -219,9 +229,11 @@ internal partial class NativeHomeDashboard : CompositeDrawable
         formPanel.SetData(loaded);
         nextUpPanel.SetData(loaded.Recommendations);
         recentPanel.SetData(loaded, now);
+        skillsetPanel.SetData(loaded.Skillsets);
         // Without plays there is nothing to compare or list: show the first steps on their own.
         formPanel.Alpha = loaded.HasPlays ? 1 : 0;
         recentPanel.Alpha = loaded.HasPlays ? 1 : 0;
+        skillsetPanel.Alpha = loaded.HasPlays ? 1 : 0;
         nextUpPanel.SetTitle(loaded.HasPlays ? "Next up" : "Get started");
     }
 

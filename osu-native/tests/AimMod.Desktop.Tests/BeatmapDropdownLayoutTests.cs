@@ -17,7 +17,7 @@ public sealed class BeatmapDropdownLayoutTests
         using CompositeDrawable workspace = ppTargets
             ? new NativePpTargetsWorkspace(new InMemoryLocalLibrarySource([], []), () => null, () => null)
             : new NativeOfficialBeatmapSearchScreen(() => null, () => null);
-        foreach (string field in ppTargets ? new[] { "categoryDropdown", "lengthDropdown", "sortDropdown" } : new[] { "categoryDropdown", "sortDropdown" })
+        foreach (string field in ppTargets ? new[] { "skillsetDropdown", "categoryDropdown", "lengthDropdown", "sortDropdown" } : new[] { "categoryDropdown", "sortDropdown" })
         {
             var dropdown = (CompositeDrawable)workspace.GetType().GetField(field, BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(workspace)!;
             object header = property(dropdown, "Header");

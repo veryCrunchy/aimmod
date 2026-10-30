@@ -14,6 +14,10 @@ This is the statement AimMod shows in Settings, under What AimMod reads. A test 
 - One collection, "AimMod coaching", with a backup kept before every change. osu!stable's collections are only written after osu! is closed.
 - AimMod's own skin packages, if you install any. Other skins are never changed or removed.
 
+## Microsoft Defender
+
+- Only on Windows, and only if you choose to: AimMod can add its two PP target cache folders to Microsoft Defender's exclusions, so scans do not wait for Defender to check each beatmap file. Windows asks for permission first, the command runs in a PowerShell window you can see, and you can remove the exclusions again in Settings. Nothing else is excluded.
+
 ## Practice
 
 - Adaptive practice and trainers run in AimMod's own player, not in osu!. Those plays are never submitted to osu! and are not saved as osu! scores.

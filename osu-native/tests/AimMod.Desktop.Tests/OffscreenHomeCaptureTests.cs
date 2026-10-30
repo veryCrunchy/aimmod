@@ -37,6 +37,8 @@ public sealed partial class OffscreenHomeCaptureTests
     [TestCase("loading", 1280, 800)]
     [TestCase("update-options", 1280, 800)]
     [TestCase("update-available", 1920, 1080)]
+    [TestCase("skillsets", 1920, 1080)]
+    [TestCase("skillsets", 900, 700)]
     [Explicit("Creates a real graphics device and writes a visual-review artifact.")]
     [SupportedOSPlatform("windows")]
     public async Task CaptureHome(string state, int width, int height)
@@ -95,7 +97,9 @@ public sealed partial class OffscreenHomeCaptureTests
         {
             [910_001] = new(168, 201, new(152, 180), 24, PpTargetConfidence.High, "fixture", BeatmapId: 910_001, ExpectedAccuracy: .968),
         };
-        return new PpTargetWorkspaceSnapshot(now, PpTargetPreferenceProfile.Empty, [], [set], estimates, 100, "", "", 4, 7, OfficialBeatmapCategory.Ranked);
+        // An aim-first player, so the skillsets panel shows a clear strongest and weakest pattern.
+        return new PpTargetWorkspaceSnapshot(now, PpTargetPreferenceProfile.Empty with { PatternProfile = HomeSkillsetsTests.AimPlayer(now) },
+            [], [set], estimates, 100, "", "", 4, 7, OfficialBeatmapCategory.Ranked);
     }
 
     private sealed partial class HomeCaptureGame(GameHost host, string state, int width, int height, string output, Action ok, Action<Exception> fail)
@@ -111,7 +115,7 @@ public sealed partial class OffscreenHomeCaptureTests
                 try
                 {
                     DateTimeOffset now = DateTimeOffset.Now;
-                    bool signedIn = state is "populated" or "month" or "loading" or "update-options" or "update-available";
+                    bool signedIn = state is "populated" or "skillsets" or "month" or "loading" or "update-options" or "update-available";
                     bool hasPlays = state is not "empty";
                     OsuProfile? profile = signedIn ? CreateProfile() : null;
                     var library = hasPlays ? CreateHistory(420, now) : new InMemoryLocalLibrarySource([], []);
@@ -127,7 +131,7 @@ public sealed partial class OffscreenHomeCaptureTests
                         () => hasPlays && signedIn ? CreatePpTargets(now) : null,
                         () => null);
                     Action nothing = () => { };
-                    var actions = new HomeDashboardActions(nothing, nothing, nothing, nothing, nothing, nothing, nothing, nothing, nothing, _ => { }, _ => { });
+                    var actions = new HomeDashboardActions(nothing, nothing, nothing, nothing, nothing, nothing, nothing, nothing, nothing, _ => { }, _ => { }) { OpenTrainer = _ => { } };
                     INativeUpdateService updates = new FixtureUpdateService(state == "update-available"
                         ? new NativeUpdateState(NativeUpdateStage.Available, NativeUpdateChannel.Stable, "AimMod 0.4.0 is ready", "Download the update while you keep using AimMod.", "0.4.0")
                         : new NativeUpdateState(NativeUpdateStage.Unavailable, NativeUpdateChannel.Stable, "Updates unavailable", "Install AimMod to receive updates automatically."));
@@ -162,6 +166,13 @@ public sealed partial class OffscreenHomeCaptureTests
                             if (state == "month")
                                 descendants(home).OfType<AimModButton>().Single(button => button.ChildrenOfType<osu.Framework.Graphics.Sprites.SpriteText>()
                                     .Any(text => text.Text.ToString() == "30 days")).Action!.Invoke();
+                            if (state == "skillsets")
+                            {
+                                var panel = descendants(home).OfType<NativeHomeDashboard.HomeSkillsetPanel>().Single();
+                                Assert.That(panel.Shown?.Weakest?.Pattern, Is.EqualTo("Streams"), "Home must show the synthetic skillsets.");
+                                var scroll = descendants(home).OfType<AimModScrollContainer>().First();
+                                scroll.ScrollTo(scroll.Current + scroll.ToLocalSpace(panel.ScreenSpaceDrawQuad.TopLeft).Y - 8, false);
+                            }
                             if (state != "loading")
                                 Assert.That(home.Data, Is.Not.Null, "Home must finish loading before the capture.");
                         }

@@ -35,6 +35,14 @@ public partial class NativeBeatmapDiscoveryScreen : CompositeDrawable
     private readonly AimModTabControl<BeatmapDiscoveryTab> tabs = null!;
     private readonly Bindable<BeatmapDiscoveryTab> currentTab = new(BeatmapDiscoveryTab.Installed);
     private NativeInstalledBeatmapBrowser? installedScreen;
+    private Action<LocalBeatmapSet, LocalBeatmapDifficulty>? openDifficultyPractice;
+
+    /// <summary>Practice for one selected installed difficulty.</summary>
+    public Action<LocalBeatmapSet, LocalBeatmapDifficulty>? OpenDifficultyPractice
+    {
+        get => openDifficultyPractice;
+        set { openDifficultyPractice = value; if (installedScreen is not null) installedScreen.OpenDifficultyPractice = value; }
+    }
     private NativeOfficialBeatmapSearchScreen? onlineScreen;
     private Drawable? activeScreen;
 
@@ -122,7 +130,8 @@ public partial class NativeBeatmapDiscoveryScreen : CompositeDrawable
         {
             if (installedScreen is null)
             {
-                installedScreen = new NativeInstalledBeatmapBrowser(localLibrary, exactCalculator, onlineScoreHistory, openBeatmap, openPractice) { RelativeSizeAxes = Axes.Both };
+                installedScreen = new NativeInstalledBeatmapBrowser(localLibrary, exactCalculator, onlineScoreHistory, openBeatmap, openPractice)
+                { RelativeSizeAxes = Axes.Both, OpenDifficultyPractice = openDifficultyPractice };
                 page.Add(installedScreen);
             }
             setActiveScreen(installedScreen, onlineScreen);

@@ -580,6 +580,25 @@ public sealed class PpTargetEngineTests
     }
 
     [Test]
+    public void StreamSearchesMeasureKnownStreamMapsThenTheDensestUnmeasuredMapsFirst()
+    {
+        // Same tempo and length, so combo per beat rises with each map's maximum combo.
+        var catalog = Enumerable.Range(1, 40).Select(i => set(i, "ranked", difficulty(i, 5) with { MaximumCombo = 300 + i * 10 })).ToArray();
+        var known = new Dictionary<int, PpTargetEstimate>
+        {
+            [1] = new(180, 250, new(160, 200), 0, PpTargetConfidence.Low, "test", Features: new PpPatternFeatures { PointCount = 300, StreamFraction = .3 }),
+        };
+        var streams = PpTargetScanPlanner.Select(profileWithHistory(), catalog, new PpTargetFilters(), 10, known, PpTargetSkillset.Streams);
+        Assert.That(streams, Has.Count.EqualTo(10));
+        Assert.That(streams.Take(5).Select(c => c.BeatmapId), Is.EqualTo(new[] { 1, 40, 39, 38, 37 }));
+        Assert.That(streams.Select(c => c.BeatmapId).Distinct().Count(), Is.EqualTo(10));
+        Assert.That(PpTargetScanPlanner.Select(profileWithHistory(), catalog, new PpTargetFilters(), 10, known, PpTargetSkillset.Jumps).Select(c => c.BeatmapId),
+            Is.EqualTo(PpTargetScanPlanner.Select(profileWithHistory(), catalog, new PpTargetFilters(), 10, known).Select(c => c.BeatmapId)),
+            "Only streams and bursts change the scan order.");
+        Assert.That(PpTargetScanPlanner.ComboPerBeat(streams[1]), Is.EqualTo(700 / (120 * 3.0)).Within(1e-9));
+    }
+
+    [Test]
     public void PlanReservesAQuarterOfTheBudgetForHighEarnedPpStretchTargets()
     {
         // One tempo/length band per star rating, so exploration alone reaches only a few hard maps.

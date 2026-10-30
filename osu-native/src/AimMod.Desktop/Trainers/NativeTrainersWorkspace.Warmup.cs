@@ -33,8 +33,8 @@ public partial class NativeTrainersWorkspace
 
     public void ShowWarmup()
     {
-        if (preparing || pendingWarmup is not null || running) return;
-        skillPage.Hide(); modPage.Hide(); warmupPage.Show();
+        if (preparing || sessionPending || running) return;
+        skillPage.Hide(); modPage.Hide(); hideLadder(); warmupPage.Show();
         skillEntry.SetSelected(false); dtEntry.SetSelected(false); warmupEntry.SetSelected(true);
         if (warmup is not null && warmupAccount != CurrentSkillAccountId?.Invoke())
         { warmup = null; warmupStore = null; warmupMessage = "Choose a warmup for this player."; }
@@ -175,7 +175,7 @@ public partial class NativeTrainersWorkspace
 
     private void launchWarmup()
     {
-        if (warmup is not { Finished: false } plan || preparing || pendingWarmup is not null || running) return;
+        if (warmup is not { Finished: false } plan || preparing || sessionPending || running) return;
         if (warmupAccount != CurrentSkillAccountId?.Invoke()) { ShowWarmup(); return; }
         if (LaunchOsuSession is not {} launch) { warmupStatus.Text = "The osu! player is unavailable. Reopen AimMod and try again."; return; }
         if (!customSettings && inheritedSettings is {} inherited) ApplyOsuSettings(inherited);

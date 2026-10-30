@@ -20,7 +20,7 @@ public partial class NativeInstalledBeatmapBrowser
     private sealed partial class BeatmapInspector : Container
     {
         private readonly Func<int, CancellationToken, Task>? openBeatmap;
-        private readonly Action<string>? openPractice;
+        private readonly Action<LocalBeatmapSet, LocalBeatmapDifficulty>? openPractice;
         private readonly Action<LocalBeatmapSet> selectSet;
         private readonly Action retry;
         private readonly OsuScrollContainer scroll;
@@ -39,7 +39,7 @@ public partial class NativeInstalledBeatmapBrowser
 
         internal string PpStateForTesting { get; private set; } = string.Empty;
 
-        public BeatmapInspector(Func<int, CancellationToken, Task>? openBeatmap, Action<string>? openPractice, Action<LocalBeatmapSet> selectSet, Action retry)
+        public BeatmapInspector(Func<int, CancellationToken, Task>? openBeatmap, Action<LocalBeatmapSet, LocalBeatmapDifficulty>? openPractice, Action<LocalBeatmapSet> selectSet, Action retry)
         {
             this.openBeatmap = openBeatmap;
             this.openPractice = openPractice;
@@ -138,7 +138,7 @@ public partial class NativeInstalledBeatmapBrowser
             var open = new AimModButton("Open in osu!", () => { if (canOpen) _ = openBeatmap!(difficulty.OnlineId, CancellationToken.None); }, true);
             open.Enabled.Value = canOpen;
             open.Alpha = canOpen ? 1 : 0.45f;
-            var practice = new AimModButton("Practice", () => openPractice?.Invoke(set.Title));
+            var practice = new AimModButton("Practice", () => openPractice?.Invoke(set, difficulty));
             practice.Enabled.Value = openPractice is not null;
             practice.Alpha = openPractice is null ? 0.45f : 1;
             return new FillFlowContainer

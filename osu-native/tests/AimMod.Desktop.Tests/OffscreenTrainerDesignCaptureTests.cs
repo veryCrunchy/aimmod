@@ -28,6 +28,7 @@ public sealed partial class OffscreenVisualCaptureTests
     [TestCase("warmup-plan", 1280, 800)] [TestCase("warmup-plan", 900, 700)]
     [TestCase("mods", 1920, 1080)] [TestCase("mods", 900, 700)]
     [TestCase("guided", 1280, 800)] [TestCase("reaction-results", 1280, 800)] [TestCase("warmup-done", 1280, 800)]
+    [TestCase("ladder", 1920, 1080)] [TestCase("ladder", 900, 700)] [TestCase("ladder-done", 1280, 800)] [TestCase("ladder-progress", 1280, 800)]
     [Explicit("Creates a real graphics device and writes trainer design-review captures.")]
     [SupportedOSPlatform("windows")]
     public async Task CaptureTrainerDesign(string route, int width, int height)
@@ -69,6 +70,33 @@ public sealed partial class OffscreenVisualCaptureTests
                 JudgementMisses: misses, TapTargets: notes, OffsetHistogram: TrainerResult.Histogram(offsets)));
         }
         return runs.ToArray();
+    }
+
+    private static TrainerResult ladderStep(TrainerSettings s, double spread, DateTimeOffset at, int misses = 0) =>
+        new(Guid.NewGuid(), at, s, s.Bpm, s.Bpm - misses, (int)(s.Bpm * .7), 0, 0, -2, spread, 1,
+            Engine: TrainerResult.EngineFor(s), Accuracy: 96.5, PlayedSeconds: s.Seconds, JudgementMisses: misses);
+
+    /// <summary>Synthetic ladders a few days apart, climbing from 170 to 190 BPM with one ended early.</summary>
+    internal static IEnumerable<TrainerResult> SyntheticLadders(DateTimeOffset now)
+    {
+        int[] reached = [170, 170, 180, 180, 190];
+        for (int i = 0; i < reached.Length; i++)
+        {
+            var at = now.AddDays(-3 * (reached.Length - i)).AddMinutes(-30);
+            var ladder = new TrainerStreamLadder(180, 15, "Z / X", 16);
+            while (!ladder.Finished)
+            {
+                bool clean = ladder.CurrentBpm <= reached[i];
+                double limit = TrainerStreamLadder.SpreadLimitMs(ladder.CurrentBpm, 15);
+                var step = ladderStep(ladder.CurrentSettings(), clean ? limit * (.86 - i * .03) : limit * 1.3, at, clean ? 0 : 2);
+                ladder.Record(step with { CompletedAt = DateTimeOffset.UtcNow.AddSeconds(-1) });
+                at = at.AddMinutes(1);
+            }
+            foreach (var step in ladder.Results) yield return step with { CompletedAt = at };
+        }
+        var early = new TrainerStreamLadder(180, 15, "Z / X", 16);
+        early.Record(ladderStep(early.CurrentSettings(), 13, DateTimeOffset.UtcNow.AddSeconds(-1)));
+        yield return early.Results[0] with { CompletedAt = now.AddHours(-5) };
     }
 
     private sealed partial class TrainerDesignGame(GameHost host, ILocalLibrarySource source, string route, int width, int height,
@@ -175,6 +203,30 @@ public sealed partial class OffscreenVisualCaptureTests
                     workspace.ShowWarmup();
                     break;
                 }
+                case "ladder":
+                    foreach (var step in SyntheticLadders(now)) store.Add(step);
+                    workspace.ShowStreamLadder();
+                    break;
+                case "ladder-done":
+                {
+                    foreach (var step in SyntheticLadders(now)) store.Add(step);
+                    workspace.ShowStreamLadder();
+                    var ladder = new TrainerStreamLadder(180, 15, "Z / X", 16);
+                    foreach (double spread in new[] { 11.2, 11.9, 12.1, 13.4 }) ladder.Record(ladderStep(ladder.CurrentSettings(), spread, now));
+                    typeof(NativeTrainersWorkspace).GetField("ladder", flags)!.SetValue(workspace, ladder);
+                    typeof(NativeTrainersWorkspace).GetField("ladderStore", flags)!.SetValue(workspace, store);
+                    typeof(NativeTrainersWorkspace).GetField("ladderAccount", flags)!.SetValue(workspace, workspace.CurrentSkillAccountId?.Invoke());
+                    foreach (var step in ladder.Results) store.Add(step);
+                    workspace.ShowStreamLadder();
+                    break;
+                }
+                case "ladder-progress":
+                    foreach (var step in SyntheticLadders(now)) store.Add(step);
+                    workspace.SelectTrainer(TrainerKind.Alternating);
+                    workspace.RefreshHistory();
+                    Scheduler.AddDelayed(() => ((AimModScrollContainer)field("contentScroll")!).ScrollToEnd(false), 1200);
+                    delay = 2200;
+                    break;
                 case "mods":
                     ((AimModButton)field("dtEntry")!).Action!();
                     delay = 2500;

@@ -237,6 +237,32 @@ public sealed class NativePpTargetsWorkspaceTests
     }
 
     [Test]
+    public void ARescanKeepsTheLastCompleteResultsUntilItCatchesUp()
+    {
+        using var workspace = new NativePpTargetsWorkspace(new InMemoryLocalLibrarySource([], []), () => null, () => null);
+        const System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+        var type = typeof(NativePpTargetsWorkspace);
+        IReadOnlyDictionary<int, PpTargetEstimate> estimates(int count) => Enumerable.Range(1, count)
+            .ToDictionary(i => i, i => new PpTargetEstimate(100, 150, new(90, 110), 0, PpTargetConfidence.Low, "test", BeatmapId: i));
+        void keep() => type.GetMethod("keepShownResults", flags)!.Invoke(workspace, null);
+        (PpTargetPreferenceProfile, IReadOnlyDictionary<int, PpTargetEstimate>)? shown() =>
+            ((PpTargetPreferenceProfile, IReadOnlyDictionary<int, PpTargetEstimate>)?)type.GetField("shownScan", flags)!.GetValue(workspace);
+
+        var complete = estimates(20);
+        type.GetField("exactEstimates", flags)!.SetValue(workspace, complete);
+        keep();
+        Assert.That(shown()!.Value.Item2, Is.SameAs(complete));
+        // A partial rescan never replaces the fuller results it is catching up to.
+        type.GetField("exactEstimates", flags)!.SetValue(workspace, estimates(5));
+        keep();
+        Assert.That(shown()!.Value.Item2, Is.SameAs(complete));
+        var larger = estimates(25);
+        type.GetField("exactEstimates", flags)!.SetValue(workspace, larger);
+        keep();
+        Assert.That(shown()!.Value.Item2, Is.SameAs(larger));
+    }
+
+    [Test]
     public async Task PendingEvidencePersistsWithoutChangingTheActiveEstimateProfile()
     {
         var original = snapshot();
@@ -265,7 +291,7 @@ public sealed class NativePpTargetsWorkspaceTests
             .GetProperty("Scheduler", flags | System.Reflection.BindingFlags.Public)!.GetValue(workspace)!;
         async Task scan(PpTargetPreferenceProfile profile)
         {
-            await (Task)method.Invoke(workspace, [calculator, profile, saved.Catalog, saved.LocalSets, new PpTargetFilters(), CancellationToken.None])!;
+            await (Task)method.Invoke(workspace, [calculator, profile, saved.Catalog, saved.LocalSets, new PpTargetFilters(), PpTargetSkillset.Any, CancellationToken.None])!;
             scheduler.Update();
         }
         await scan(saved.Profile);
