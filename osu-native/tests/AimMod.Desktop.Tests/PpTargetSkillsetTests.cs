@@ -26,6 +26,7 @@ public sealed class PpTargetSkillsetTests
     }
 
     [Test]
+    [SetCulture("en-US")]
     public void RowsShowTheChosenShareOrTheMostProminentPattern()
     {
         Assert.Multiple(() =>
