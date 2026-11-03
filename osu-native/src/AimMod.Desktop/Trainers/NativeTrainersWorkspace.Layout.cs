@@ -280,8 +280,14 @@ public partial class NativeTrainersWorkspace
         if (planned.Spinners != TrainerSpinnerFrequency.None || planned.Kind == TrainerKind.Spinner)
             yield return new($"Spinners · {planned.SpinnerSeconds} s", FontAwesome.Solid.Redo);
         if (planned.Kind == TrainerKind.Reading && planned.ReadingHidden) yield return new("Hidden", FontAwesome.Solid.EyeSlash);
+        if (TrainerAutopilot.IsActive(planned)) yield return new("Autopilot", FontAwesome.Solid.Magic, AimModTrainerChipTone.Info, tooltip: "The cursor follows the notes. You only tap.");
         if (planned.GuidedCues) yield return new("Guide cues", FontAwesome.Solid.CommentDots, AimModTrainerChipTone.Info);
     }
+
+    /// <summary>True when the player runs OpenTabletDriver or another driver outside AimMod.</summary>
+    public Func<bool>? ExternalTabletDriver { get; set; }
+
+    public void RefreshInputChips() => refreshInputChips();
 
     private void refreshInputChips()
     {
@@ -293,7 +299,10 @@ public partial class NativeTrainersWorkspace
         if (settings.Kind != TrainerKind.Reaction)
             inputChips.Add(new AimModTrainerChip(mouseButtons ? "Mouse on" : "Mouse off", FontAwesome.Solid.MousePointer,
                 tooltip: mouseButtons ? "Mouse buttons also tap." : "Mouse buttons are off, as in osu!."));
-        if (!customSettings && inheritedSettings?.Input is { } input)
+        if (ExternalTabletDriver?.Invoke() == true)
+            inputChips.Add(new AimModTrainerChip("External tablet driver", FontAwesome.Solid.PenNib,
+                tooltip: "Your tablet driver keeps its own area. AimMod's built-in tablet support is off."));
+        else if (!customSettings && inheritedSettings?.Input is { } input)
             inputChips.Add(input.Tablet is { Enabled: true } tablet
                 ? new AimModTrainerChip($"Tablet {tablet.AreaSize.X:0.#} × {tablet.AreaSize.Y:0.#} mm", FontAwesome.Solid.PenNib)
                 : new AimModTrainerChip($"Sensitivity {input.Sensitivity:0.##}x", FontAwesome.Solid.MousePointer, tooltip: "External tablet drivers keep their own mapping."));

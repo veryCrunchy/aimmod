@@ -117,6 +117,14 @@ public static class StatisticsChartFormat
         return Enumerable.Range(0, Math.Clamp(count, 2, 12)).Select(index => Math.Round(first + index * step, 6)).ToArray();
     }
 
+    /// <summary>The smallest step that fits <paramref name="maximum"/> ticks, or the largest step when the chart is too narrow for any.</summary>
+    private static int tickStep(int[] steps, double units, int maximum)
+    {
+        foreach (int step in steps)
+            if (units / step <= maximum) return step;
+        return steps[^1];
+    }
+
     /// <summary>Date ticks at whole days, weeks or months depending on the span.</summary>
     public static (DateTimeOffset Time, string Label)[] TimeTicks(DateTimeOffset start, DateTimeOffset end, int maximum)
     {
@@ -127,14 +135,14 @@ public static class StatisticsChartFormat
         var ticks = new List<(DateTimeOffset, string)>();
         if (span <= TimeSpan.FromDays(2))
         {
-            int hours = new[] { 1, 2, 3, 6, 12, 24 }.First(step => span.TotalHours / step <= maximum);
+            int hours = tickStep([1, 2, 3, 6, 12, 24], span.TotalHours, maximum);
             var cursor = new DateTimeOffset(localStart.Year, localStart.Month, localStart.Day, localStart.Hour, 0, 0, localStart.Offset).AddHours(1);
             for (; cursor <= end; cursor = cursor.AddHours(1))
                 if (cursor.Hour % hours == 0) ticks.Add((cursor, cursor.ToString("HH:mm", CultureInfo.InvariantCulture)));
         }
         else if (span <= TimeSpan.FromDays(75))
         {
-            int days = new[] { 1, 2, 7, 14, 28 }.First(step => span.TotalDays / step <= maximum);
+            int days = tickStep([1, 2, 7, 14, 28], span.TotalDays, maximum);
             var cursor = new DateTimeOffset(localStart.Date, localStart.Offset).AddDays(1);
             if (days >= 7)
                 while (cursor.DayOfWeek != DayOfWeek.Monday) cursor = cursor.AddDays(1);
@@ -143,10 +151,10 @@ public static class StatisticsChartFormat
         }
         else
         {
-            int months = new[] { 1, 2, 3, 6, 12 }.First(step => span.TotalDays / 30.4 / step <= maximum);
+            int months = tickStep([1, 2, 3, 6, 12, 24, 60, 120], span.TotalDays / 30.4, maximum);
             var cursor = new DateTimeOffset(localStart.Year, localStart.Month, 1, 0, 0, 0, localStart.Offset).AddMonths(1);
             for (; cursor <= end; cursor = cursor.AddMonths(1))
-                if ((cursor.Month - 1) % months == 0)
+                if ((cursor.Year * 12 + cursor.Month - 1) % months == 0)
                     ticks.Add((cursor, cursor.ToString(cursor.Month == 1 || span.TotalDays > 400 ? "MMM yyyy" : "MMM", CultureInfo.InvariantCulture)));
         }
 

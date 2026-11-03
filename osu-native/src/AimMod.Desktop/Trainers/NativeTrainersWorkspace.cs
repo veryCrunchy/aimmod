@@ -80,7 +80,7 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
         this.history = history;
         this.openCoaching = openCoaching;
         preferences = history().LoadPreferences();
-        settings = settings with { RandomizePatterns = preferences.RandomizePatterns, GuidedCues = preferences.GuidedCues, AdaptiveDifficulty = preferences.AdaptiveDifficulty };
+        settings = settings with { RandomizePatterns = preferences.RandomizePatterns, GuidedCues = preferences.GuidedCues, AdaptiveDifficulty = preferences.AdaptiveDifficulty, Autopilot = preferences.Autopilot };
         freshAimLayout = preferences.FreshLayout;
         RelativeSizeAxes = Axes.Both;
         pageBody = new Container { RelativeSizeAxes = Axes.X, Padding = new MarginPadding { Right = 14 } };
@@ -139,6 +139,7 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
         body.Add(practiceOptions);
         body.Add(readingControls);
         buildObjectAndGuideControls(body, sessionBody);
+        buildAutopilotControl(sessionBody);
         practiceOptions.Hide();
         advanced = column(); advanced.Depth = -8; advanced.Alpha = 0;
         start = new AimModButton("Start practice", startSelectedPractice, true) { AutoSizeAxes = Axes.None, RelativeSizeAxes = Axes.X, Height = 44 };
@@ -175,7 +176,7 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
     private void updateInstruction()
     {
         timingControls.Alpha = settings.Kind != TrainerKind.Reaction && settings.Music != "song" ? 1 : 0;
-        instruction.Text = settings.Kind switch
+        string instructionText = settings.Kind switch
         {
             TrainerKind.Spinner => $"Hold either {settings.Keys} and draw smooth circles around the spinner centre. Keep one direction until it ends.",
             TrainerKind.Steady => $"Follow the moving circles and tap {settings.Keys} in time. Keep your motion relaxed through rests and changes in spacing.",
@@ -189,6 +190,7 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
             TrainerKind.Reading => $"Read the approach circles and hit each note in order with {settings.Keys}. Look ahead while finishing the current target.",
             _ => $"Wait for the field to turn mint, then press {settings.Keys} or click. The delay changes each time; early taps count as false starts.",
         };
+        instruction.Text = TrainerAutopilot.IsActive(settings) ? instructionText + " Autopilot moves the cursor, so only your tapping counts." : instructionText;
         if (exerciseTitle is not null) exerciseTitle.Text = DisplayName(settings.Kind);
         foreach (var (kind, button) in exerciseButtons) button.SetSelected(kind == settings.Kind);
         if (status is not null) status.Text = settings.Kind == TrainerKind.Reaction ? "Wait for mint. Escape ends the session." : settings.Music == "song" ? "Listen to the song lead-in. Escape ends the session." : "Four-beat count-in. Escape ends the session.";
@@ -203,6 +205,7 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
         if (timingControls is not null) timingControls.Alpha = settings.Kind != TrainerKind.Reaction && settings.Music != "song" ? 1 : 0;
         advancedToggle?.SetCaption(settings.Kind == TrainerKind.Reaction ? "Controls" : "Controls & audio");
         refreshObjectAndGuideControls();
+        refreshAutopilotControl();
         refreshPracticeIntent();
         field?.Reset();
         if (field is not null) field.Alpha = 0;
@@ -434,7 +437,7 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
 
     private void addResultHeader(TrainerResult r)
     {
-        results.Add(text(r.WarmupRun is not null ? "Warmup drill complete" : r.LadderRun is not null ? "Ladder step complete" : r.Assisted ? "Assisted session complete" : r.Settings.GuidedCues ? "Guided practice complete" : "Session complete", 22, AimModPalette.Text));
+        results.Add(text(r.WarmupRun is not null ? "Warmup drill complete" : r.LadderRun is not null ? "Ladder step complete" : r.Assisted && r.Settings.Autopilot ? "Autopilot session complete" : r.Assisted ? "Assisted session complete" : r.Settings.GuidedCues ? "Guided practice complete" : "Session complete", 22, AimModPalette.Text));
         var chips = flow(); chips.Spacing = new(6);
         chips.Add(new AimModTrainerChip(DisplayName(r.Settings.Kind), tone: AimModTrainerChipTone.Accent));
         if (TrainerPresets.For(r.Settings.Kind).FirstOrDefault(p => p.Matches(r.Settings)) is { } preset) chips.Add(new AimModTrainerChip(preset.Title));
@@ -451,6 +454,7 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
             chips.Add(new AimModTrainerChip($"AR {r.Settings.ApproachRate}"));
             if (r.Settings.ReadingHidden) chips.Add(new AimModTrainerChip("Hidden", FontAwesome.Solid.EyeSlash));
         }
+        if (TrainerAutopilot.IsActive(r.Settings)) chips.Add(new AimModTrainerChip("Autopilot", FontAwesome.Solid.Magic, tooltip: "The cursor followed the notes. Compared only with other Autopilot runs."));
         if (r.Settings.Music == "song") chips.Add(new AimModTrainerChip($"{r.Settings.SongTitle} · +{r.Settings.SongStartSeconds}s", FontAwesome.Solid.Headphones));
         if (r.Settings.MeasuredStars is { } stars) chips.Add(new AimModTrainerChip($"{stars:0.00}", FontAwesome.Solid.Star, tooltip: TrainerStarTarget.Describe(r.Settings)));
         results.Add(chips);

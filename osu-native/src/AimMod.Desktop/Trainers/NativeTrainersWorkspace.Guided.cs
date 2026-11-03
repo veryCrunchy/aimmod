@@ -131,7 +131,8 @@ public partial class NativeTrainersWorkspace
         if (focus == TrainerGuidedFocus.GroupLength && settings.RandomizePatterns)
         { status.Text = "Turn the skill randomizer off and choose one burst or stream pattern before building group length."; return; }
         if (!customSettings && inheritedSettings is {} inherited) ApplyOsuSettings(inherited);
-        var baseline = adaptiveSettings(settings) with { MinimumStars = null, MaximumStars = null, MeasuredStars = null };
+        // Guided steps need your own aim: Autopilot runs are assisted and never count towards a plan.
+        var baseline = adaptiveSettings(settings) with { MinimumStars = null, MaximumStars = null, MeasuredStars = null, Autopilot = false };
         guidedPlan = TrainerGuidedPractice.Create(baseline, focus);
         guidedStore = history();
         guidedAccountId = CurrentSkillAccountId?.Invoke();

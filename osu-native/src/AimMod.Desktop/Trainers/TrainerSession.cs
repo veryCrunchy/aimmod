@@ -18,7 +18,7 @@ public sealed record TrainerSettings(TrainerKind Kind = TrainerKind.Steady, int 
     ReactionMode ReactionMode = ReactionMode.Simple, int ReactionWindowMs = 1200, int ReadingComplexity = 0,
     TrainerSpinnerFrequency Spinners = TrainerSpinnerFrequency.None, int SpinnerSeconds = 4, bool GuidedCues = false, bool AdaptiveDifficulty = false, double OverallDifficulty = 5,
     TrainerSliderShape SliderShape = TrainerSliderShape.Straight, TrainerSpinnerPattern SpinnerPattern = TrainerSpinnerPattern.Steady,
-    double? MinimumStars = null, double? MaximumStars = null, double? MeasuredStars = null)
+    double? MinimumStars = null, double? MaximumStars = null, double? MeasuredStars = null, bool Autopilot = false)
 {
     public string TempoDescription => Music == "song" ? "Song tempo" : $"{Bpm} BPM";
     public TrainerSettings ComparisonKey()
@@ -31,6 +31,7 @@ public sealed record TrainerSettings(TrainerKind Kind = TrainerKind.Steady, int 
             SliderBeats = 1, PathStyle = TrainerPathStyle.FigureEight, AimStyle = TrainerAimStyle.Balanced, AimSpacing = 100,
             CircleSize = 4, ApproachRate = 7, OverallDifficulty = 5, RandomizePatterns = false, SkillLimits = null, MovementScale = 1,
             ReadingGroupSize = 4, ReadingHidden = false, ReadingComplexity = 0, Spinners = TrainerSpinnerFrequency.None, SpinnerSeconds = 4,
+            Autopilot = false,
         };
         return this with
     {
@@ -47,6 +48,7 @@ public sealed record TrainerSettings(TrainerKind Kind = TrainerKind.Steady, int 
         ReactionWindowMs = Kind == TrainerKind.Reaction ? ReactionWindowMs : 1200,
         ReadingGroupSize = Kind == TrainerKind.Reading ? ReadingGroupSize : 4,
         ReadingHidden = Kind == TrainerKind.Reading && ReadingHidden,
+        Autopilot = TrainerAutopilot.Supports(Kind) && Autopilot,
         ReadingComplexity = Kind == TrainerKind.Reading ? ReadingComplexity : 0,
         SliderBeats = Sliders == TrainerSliderStyle.None ? 1 : SliderBeats,
         SpinnerSeconds = Kind == TrainerKind.Spinner || Spinners != TrainerSpinnerFrequency.None ? SpinnerSeconds : 4,
@@ -225,7 +227,7 @@ public sealed class TrainerSession
 }
 
 public sealed record TrainerWorkspacePreferences(bool ShuffleMusic = true, bool RandomizePatterns = false, bool FreshLayout = true, bool GuidedCues = false, bool AdaptiveDifficulty = true,
-    bool TargetStarsEnabled = false, double MinimumStars = 3, double MaximumStars = 4);
+    bool TargetStarsEnabled = false, double MinimumStars = 3, double MaximumStars = 4, bool Autopilot = false);
 
 public sealed class TrainerHistoryStore(string path)
 {

@@ -57,7 +57,9 @@ public sealed record TrainerInputSettings(double Sensitivity = 1, bool RelativeM
         return fallback;
     }
 
-    public IDisposable Apply(IEnumerable<InputHandler> handlers)
+    /// <param name="builtInTablet">False when the player uses an external tablet driver such as OpenTabletDriver.
+    /// The built-in handler then stays off so it never competes with that driver for the tablet.</param>
+    public IDisposable Apply(IEnumerable<InputHandler> handlers, bool builtInTablet = true)
     {
         var scope = new InputScope();
         foreach (var handler in handlers)
@@ -67,7 +69,7 @@ public sealed record TrainerInputSettings(double Sensitivity = 1, bool RelativeM
             if (handler is ITabletHandler device)
             {
                 // stable and externally driven tablets use the existing OS mapping.
-                var mapping = Tablet;
+                var mapping = builtInTablet ? Tablet : null;
                 if (mapping is not null)
                 {
                     scope.Set(device.AreaSize, mapping.AreaSize); scope.Set(device.AreaOffset, mapping.AreaOffset);

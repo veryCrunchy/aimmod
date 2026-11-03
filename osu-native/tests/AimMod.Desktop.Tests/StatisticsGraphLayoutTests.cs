@@ -27,6 +27,17 @@ public sealed class StatisticsGraphLayoutTests
         });
     }
 
+    [TestCase(60)] [TestCase(75)] [TestCase(400)] [TestCase(3000)]
+    public void NarrowChartsFallBackToTheWidestStepInsteadOfThrowing(int spanDays)
+    {
+        // A narrow or mid-resize chart asks for two ticks; no step fits these spans in two ticks.
+        var start = new DateTimeOffset(2026, 4, 1, 12, 0, 0, TimeSpan.Zero);
+        var ticks = StatisticsChartFormat.TimeTicks(start, start.AddDays(spanDays), 2);
+        Assert.That(ticks, Is.Not.Empty);
+        Assert.That(ticks.All(tick => tick.Time > start && tick.Time <= start.AddDays(spanDays)), Is.True);
+        Assert.That(ticks.Length, Is.LessThanOrEqualTo(spanDays > 75 ? 4 : 3));
+    }
+
     [Test]
     public void TimeTicksUseMonthsForLongRangesAndDaysForShortOnes()
     {

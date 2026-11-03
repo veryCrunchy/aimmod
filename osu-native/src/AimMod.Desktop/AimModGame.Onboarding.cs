@@ -23,7 +23,8 @@ public partial class AimModGame
         inSetup?null:showUserSetup,()=>playTheme(true), inline:inSetup, trainingStatus:()=>hubTrainingSyncService?.Status ?? "Training sync is unavailable.",
         creatorSettings: inSetup ? null : new Creator.CreatorSettingsPanel(creatorSettingsStore, creatorToolsEnabled, setCreatorToolsEnabled, showCreatorTools),
         defenderSettings: !inSetup && PpTargets.DefenderScanExclusion.Supported && defenderScanExclusion() is { } defender
-            ? new PpTargets.DefenderExclusionPanel(defender, inSettings: true) : null);
+            ? new PpTargets.DefenderExclusionPanel(defender, inSettings: true) : null,
+        externalTabletDriverChanged: setExternalTabletDriver);
 
     private void showFirstRunSetup()
     {
