@@ -285,3 +285,24 @@ jobs:
               Write-Host "$($_.FullName) sha256: $hash"
             }
           }
+
+      # The pre-release is created before the builds upload to it, so a failed build would leave it
+      # published without downloads. Remove it and its tag unless something was uploaded.
+      - name: Remove the empty pre-release after a failed build
+        if: ${{ failure() && steps.prerelease_meta.outputs.pre_tag != '' }}
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tagName = "${{ steps.prerelease_meta.outputs.pre_tag }}"
+          $assets = gh release view $tagName --json assets --jq '.assets | length' 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "No release $tagName to remove."
+            exit 0
+          }
+          if ([int]$assets -gt 0) {
+            Write-Host "Release $tagName has $assets downloads; keeping it."
+            exit 0
+          }
+          gh release delete $tagName --yes --cleanup-tag
+          Write-Host "Removed empty release $tagName."
