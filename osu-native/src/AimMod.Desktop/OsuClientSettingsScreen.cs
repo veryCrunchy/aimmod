@@ -34,7 +34,8 @@ public partial class OsuClientSettingsScreen : CompositeDrawable
         IOsuHubUploadQueue? uploadQueue,
         IHubSharingPreferenceStore? preferenceStore,
         Action<Uri>? openUrl,
-        Action<string>? copyText, AutomaticPracticeStore? automaticPractice = null, UserSetupStore? setupStore = null, Action? reopenSetup = null, Action? previewSound = null, bool inline = false, Func<string>? trainingStatus = null, Drawable? creatorSettings = null, Drawable? defenderSettings = null)
+        Action<string>? copyText, AutomaticPracticeStore? automaticPractice = null, UserSetupStore? setupStore = null, Action? reopenSetup = null, Action? previewSound = null, bool inline = false, Func<string>? trainingStatus = null, Drawable? creatorSettings = null, Drawable? defenderSettings = null,
+        Action<bool>? externalTabletDriverChanged = null)
     {
         this.destinationService = destinationService ?? throw new ArgumentNullException(nameof(destinationService));
         destination = new Bindable<string>(label(destinationService.Destination));
@@ -112,7 +113,8 @@ public partial class OsuClientSettingsScreen : CompositeDrawable
         content.Spacing=new(14);
         content.Add(items[0]);
         content.Add(settingsNavigation);
-        addSettingsPage(items.Skip(1).Take(3).Concat(creatorSettings is null ? [] : new[] { creatorSettings }).Concat(defenderSettings is null ? [] : new[] { defenderSettings }));
+        addSettingsPage(items.Skip(1).Take(3).Concat(tabletDriverSettings(setupStore, externalTabletDriverChanged))
+            .Concat(creatorSettings is null ? [] : new[] { creatorSettings }).Concat(defenderSettings is null ? [] : new[] { defenderSettings }));
         addSettingsPage(items.Skip(4).Take(practiceStart-4));
         addSettingsPage(items.Skip(practiceStart).Take(startupStart-practiceStart));
         addSettingsPage(items.Skip(startupStart));
@@ -146,6 +148,32 @@ public partial class OsuClientSettingsScreen : CompositeDrawable
         for(int i=0;i<settingsTabs.Count;i++)settingsTabs[i].SetSelected(i==selected);
         for(int i=0;i<settingsPages.Count;i++)settingsPages[i].Alpha=i==selected?1:0;
     }
+
+    public const string BuiltInTabletDriver = "Built-in tablet driver";
+    public const string ExternalTabletDriver = "OpenTabletDriver or another external driver";
+
+    private static IEnumerable<Drawable> tabletDriverSettings(UserSetupStore? store, Action<bool>? changed)
+    {
+        if (store is null || changed is null) yield break;
+        yield return new SpriteText { Text = "TABLET DRIVER", Font = AimModVisualStyle.LabelFont, Colour = AimModPalette.Cyan };
+        var driver = new Bindable<string>(store.Load().ExternalTabletDriver ? ExternalTabletDriver : BuiltInTabletDriver);
+        yield return new AimModDropdown<string> { Width = 360, Items = new[] { BuiltInTabletDriver, ExternalTabletDriver }, Current = driver };
+        var status = note(tabletDriverNote(driver.Value == ExternalTabletDriver));
+        yield return status;
+        driver.BindValueChanged(v =>
+        {
+            bool external = v.NewValue == ExternalTabletDriver;
+            try { store.Save(store.Load() with { ExternalTabletDriver = external }); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            { status.Text = "Could not save the tablet driver choice. Try again."; return; }
+            changed(external);
+            status.Text = tabletDriverNote(external);
+        });
+    }
+
+    private static string tabletDriverNote(bool external) => external
+        ? "AimMod's built-in tablet support stays off, so it never competes with your driver for the tablet. Your driver's area and settings apply everywhere, including trainers."
+        : "AimMod reads your tablet itself. Trainers use the tablet area from osu!lazer. Choose the external option if you run OpenTabletDriver yourself.";
 
     private static IEnumerable<Drawable> dataStatement()
     {

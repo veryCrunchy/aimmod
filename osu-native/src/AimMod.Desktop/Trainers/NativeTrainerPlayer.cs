@@ -87,6 +87,8 @@ public partial class NativeTrainerPlayer : Player, IPracticeGameplaySession
             JudgementMisses: judgements.Count(j => j.Type == HitResult.Miss),
             TapTargets: beatmap.HitObjects.Count(h => h is HitCircle or Slider),
             SpinnerPractice: spinnerPractice,
+            // Autopilot aims for the player. Keep those runs out of skill, adaptive and profile comparisons.
+            Assisted: TrainerAutopilot.IsActive(settings),
             OffsetHistogram: offsets.Length > 0 ? TrainerResult.Histogram(offsets) : null,
             ReadingWindows: settings.Kind != TrainerKind.Reading ? null : judgements.Where(j => IsTapObject(j.HitObject))
                 .GroupBy(j => (int)((j.HitObject.StartTime - start) / 10000))

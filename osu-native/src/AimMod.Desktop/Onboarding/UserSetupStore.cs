@@ -1,7 +1,7 @@
 using System.Text.Json;
 namespace AimMod.Desktop.Onboarding;
 
-public sealed record UserSetupPreferences(bool Completed = false, bool StartupSound = true);
+public sealed record UserSetupPreferences(bool Completed = false, bool StartupSound = true, bool ExternalTabletDriver = false);
 public sealed class UserSetupStore(string path)
 {
     public UserSetupPreferences Load()

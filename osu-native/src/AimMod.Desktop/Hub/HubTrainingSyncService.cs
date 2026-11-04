@@ -36,6 +36,7 @@ public sealed record HubTrainingSession(string Id, DateTimeOffset CompletedAt, s
             info.Properties.Single(p => p.Name == nameof(TrainerSettings.ReadingGroupSize)).ShouldSerialize = (_, value) => value is int size && size != 4;
             info.Properties.Single(p => p.Name == nameof(TrainerSettings.ReadingComplexity)).ShouldSerialize = (_, value) => value is int complexity && complexity != 0;
             info.Properties.Single(p => p.Name == nameof(TrainerSettings.ReadingHidden)).ShouldSerialize = (_, value) => value is true;
+            info.Properties.Single(p => p.Name == nameof(TrainerSettings.Autopilot)).ShouldSerialize = (_, value) => value is true;
             info.Properties.Single(p => p.Name == nameof(TrainerSettings.ReactionMode)).ShouldSerialize = (_, value) => value is ReactionMode mode && mode != ReactionMode.Simple;
             info.Properties.Single(p => p.Name == nameof(TrainerSettings.ReactionWindowMs)).ShouldSerialize = (_, value) => value is int window && window != 1200;
             info.Properties.Single(p => p.Name == nameof(TrainerSettings.SliderShape)).ShouldSerialize = (_, value) => value is TrainerSliderShape shape && shape != TrainerSliderShape.Straight;

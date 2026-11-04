@@ -16,6 +16,7 @@ using osu.Framework.Localisation;
 using osu.Framework.Input.Events;
 using osu.Framework.Input.Handlers;
 using osu.Framework.Input.Handlers.Mouse;
+using osu.Framework.Input.Handlers.Tablet;
 using osu.Framework.Platform;
 using osu.Game;
 using osu.Game.Beatmaps;
@@ -201,6 +202,29 @@ public partial class AimModGame : OsuGameBase
             mouse.UseRelativeMode.Value = false;
     }
 
+    private bool externalTabletDriver;
+
+    /// <summary>
+    /// An external driver such as OpenTabletDriver owns the tablet. Keep the built-in handler off so both never read it at once.
+    /// Switching back to the built-in driver turns it on again.
+    /// </summary>
+    internal static void UseTabletDriver(IEnumerable<InputHandler> handlers, bool external, bool enableBuiltIn = false)
+    {
+        foreach (var tablet in handlers.OfType<ITabletHandler>())
+        {
+            if (external) tablet.Enabled.Value = false;
+            else if (enableBuiltIn) tablet.Enabled.Value = true;
+        }
+    }
+
+    private void setExternalTabletDriver(bool external)
+    {
+        bool switchedToBuiltIn = externalTabletDriver && !external;
+        externalTabletDriver = external;
+        UseTabletDriver(Host.AvailableInputHandlers, external, switchedToBuiltIn);
+        trainersWorkspace?.RefreshInputChips();
+    }
+
     protected override void Update()
     {
         base.Update();
@@ -262,6 +286,8 @@ public partial class AimModGame : OsuGameBase
         base.LoadComplete();
         creatorToolsEnabled = CreatorTest is not null || creatorSettingsStore.Load();
         UseDesktopMouseCoordinates(Host.AvailableInputHandlers);
+        externalTabletDriver = userSetupStore.Load().ExternalTabletDriver;
+        UseTabletDriver(Host.AvailableInputHandlers, externalTabletDriver);
 
         replayAnalysisCache = new ReplayAnalysisCache(Storage.GetFullPath("cache/replay-analysis-v1.json", true));
         onlineSkinCatalog = new OnlineSkinCatalogBackend(
@@ -956,6 +982,7 @@ public partial class AimModGame : OsuGameBase
         trainersWorkspace.BeginTrainingSync = () => hubTrainingSyncService?.BeginSession();
         trainersWorkspace.SongLibrary = localLibrary;
         trainersWorkspace.CurrentSkillAccountId=()=>currentOsuProfile?.UserId;
+        trainersWorkspace.ExternalTabletDriver=()=>externalTabletDriver;
         switchWorkspaceRoute(NativeRoute.Trainers, trainersWorkspace);
         trainersWorkspace.RefreshHistory();
         _ = refreshTrainerSettingsAsync();

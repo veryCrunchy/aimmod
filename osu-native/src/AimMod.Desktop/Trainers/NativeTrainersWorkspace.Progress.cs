@@ -17,8 +17,10 @@ public partial class NativeTrainersWorkspace
     {
         recent.Clear();
         var kind = settings.Kind;
-        var runs = history().Load().Where(r => !r.Assisted && r.Settings.Kind == kind).ToArray();
-        historyHeader.Title = $"Progress · {DisplayName(kind)}";
+        // Autopilot runs only measure tapping, so they get their own progress instead of mixing with your own-aim runs.
+        bool autopilot = TrainerAutopilot.IsActive(settings);
+        var runs = history().Load().Where(r => r.Assisted == autopilot && r.Settings.Kind == kind).ToArray();
+        historyHeader.Title = $"Progress · {DisplayName(kind)}{(autopilot ? " · Autopilot" : "")}";
         recentRunsLink.Show(runs.Where(r => r.Settings.Keys == settings.Keys && r.Settings.OffsetMs == settings.OffsetMs).Take(5).Reverse()
             .Select(r => kind == TrainerKind.Reaction ? 100.0 * r.Hits / Math.Max(1, r.Notes) : r.UsesOsuJudgements ? r.Accuracy : null).ToArray(),
             kind == TrainerKind.Reaction ? "correct" : "accuracy");

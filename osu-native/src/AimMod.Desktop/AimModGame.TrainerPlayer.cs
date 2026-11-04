@@ -87,7 +87,7 @@ public partial class AimModGame
 
     private void launchPreparedTrainer(TrainerSettings settings, bool mouseButtons, TrainerBeatmap map)
         => launchPreparedGameplay(settings, mouseButtons, map, result => trainersWorkspace?.CompleteOsuSession(result),
-            map.ReleaseAudio, map.SeekTime, map.FadeOutro, TrainerReadingPatterns.Mods(settings));
+            map.ReleaseAudio, map.SeekTime, map.FadeOutro, TrainerAutopilot.GameplayMods(settings));
 
     private void launchPreparedGameplay(TrainerSettings settings, bool mouseButtons, WorkingBeatmap map,
         Action<TrainerResult?> complete, Action release, double seekTime, Action<double>? fadeOutro, Mod[] mods)
@@ -157,7 +157,7 @@ public partial class AimModGame
         if (rulesetConfig is not null && trainerRulesetPreferences is not null) preferences.Add(trainerRulesetPreferences.Apply(rulesetConfig));
         if (trainerGameplayPreferences is not null) preferences.Add(trainerGameplayPreferences.Apply(LocalConfig));
         if (trainerDisplayPreferences is not null) preferences.Add(trainerDisplayPreferences.Apply(frameworkConfig, LocalConfig, Host.Window));
-        preferences.Add((trainerOsuSettings?.Input ?? new TrainerInputSettings()).Apply(Host.AvailableInputHandlers));
+        preferences.Add((trainerOsuSettings?.Input ?? new TrainerInputSettings()).Apply(Host.AvailableInputHandlers, builtInTablet: !externalTabletDriver));
         var stack = new OsuScreenStack { RelativeSizeAxes = Axes.Both };
         var bindings = TrainerSettings.ParseKeys(settings.Keys).Select(k => Enum.Parse<InputKey>(k.ToString())).ToArray();
         var inheritedBindings = settings.Keys == trainerOsuSettings?.Keys && trainerOsuSettings.Bindings is { Count: > 0 } ? trainerOsuSettings.Bindings : null;
@@ -190,7 +190,7 @@ public partial class AimModGame
         bool finished = false;
         var session = create(new GameplaySessionHooks(() =>
         {
-            if (trainerOsuSettings?.Input?.Tablet is {} mapping)
+            if (!externalTabletDriver && trainerOsuSettings?.Input?.Tablet is {} mapping)
                 foreach (var device in Host.AvailableInputHandlers.OfType<ITabletHandler>())
                 { device.OutputAreaSize.Value = mapping.OutputSize; device.OutputAreaOffset.Value = mapping.OutputOffset; }
         }, () => Schedule(() =>
