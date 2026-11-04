@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.0](https://github.com/veryCrunchy/aimmod/compare/aimmod-osu-v0.6.0...aimmod-osu-v0.7.0) (2026-11-04)
+
+
+### Features
+
+* **osu:** Autopilot for tapping drills and an external tablet driver option ([#44](https://github.com/veryCrunchy/aimmod/issues/44)) ([9388f53](https://github.com/veryCrunchy/aimmod/commit/9388f53ac58754140dbeb3c5941dc4478200a438))
+
 ## [0.6.0](https://github.com/veryCrunchy/aimmod/compare/aimmod-osu-v0.5.0...aimmod-osu-v0.6.0) (2026-10-21)
 
 
