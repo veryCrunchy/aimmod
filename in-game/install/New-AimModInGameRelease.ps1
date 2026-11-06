@@ -55,10 +55,14 @@ param(
     [string]$MinimumInstallerVersion,
     [string]$InstallerUrl,
     # The built AimMod-Setup.exe, listed in the .sha256 file; optional.
-    [string]$SetupExe
+    [string]$SetupExe,
+    [long]$ReleaseCounter = 0,
+    [switch]$Sign
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'AimModRelease.ps1')
+. (Join-Path $PSScriptRoot 'ReleaseSigning.ps1')
+if ($Sign -and $ReleaseCounter -le 0) { throw 'A positive release counter is required.' }
 
 if ($Version -notmatch '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$') { throw "Invalid version $Version." }
 if ($Channel -eq 'stable' -and $Version.Contains('-')) { throw 'A prerelease version belongs on the beta channel.' }
@@ -157,6 +161,7 @@ function Invoke-Finish {
     $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
     if ($manifest.version -ne $Version -or $manifest.channel -ne $Channel) { throw 'The staged manifest is for another version or channel.' }
 
+    if ($Sign) { Protect-ReleaseMetadata $manifestPath $ReleaseCounter }
     $zip = Join-Path $Output "$name.zip"
     if (Test-Path -LiteralPath $zip) { Remove-Item -LiteralPath $zip -Force }
     Add-Type -AssemblyName System.IO.Compression.FileSystem
@@ -179,6 +184,7 @@ function Invoke-Finish {
     }
     $feedPath = Join-Path $Output "aimmod-ingame-$Channel.json"
     Write-Utf8 $feedPath ($feed | ConvertTo-Json -Depth 4)
+    if ($Sign) { Protect-ReleaseMetadata $feedPath $ReleaseCounter }
     if ($Channel -eq 'stable' -and $WriteBetaFeed) {
         $write = $true
         if ($ExistingBetaFeed -and (Test-Path -LiteralPath $ExistingBetaFeed)) {
@@ -190,6 +196,7 @@ function Invoke-Finish {
             $feed.installerUrl = $InstallerUrl.Replace('{channel}', 'beta')
             $betaPath = Join-Path $Output 'aimmod-ingame-beta.json'
             Write-Utf8 $betaPath ($feed | ConvertTo-Json -Depth 4)
+            if ($Sign) { Protect-ReleaseMetadata $betaPath $ReleaseCounter }
             Write-Host "The beta feed also offers $Version."
         }
     }

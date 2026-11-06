@@ -80,6 +80,7 @@ static class LifecycleChecks
 
     public static async Task Run()
     {
+        using var legacyMetadata = ReleaseTrust.LegacyFixtures();
         var count = 0;
         void Check(bool ok, string name) { if (!ok) throw new Exception("Lifecycle check failed: " + name); count++; }
         void Throws<T>(Action action, string name) where T : Exception { var thrown = false; try { action(); } catch (T) { thrown = true; } Check(thrown, name); }
@@ -202,6 +203,20 @@ static class LifecycleChecks
             Throws<InstallException>(() => applier.RecoverInterrupted(), "recovery waits for the game to close");
             gameUp = false;
             Check(applier.RecoverInterrupted() && !applier.HasInterrupted && Tree(win64) == before, "interrupted install undone on the next run");
+            // A journal must never redirect recovery into another installation.
+            var journalFile = Directory.GetFiles(applier.BackupRoot, "journal.json", SearchOption.AllDirectories).First();
+            var journalBytes = File.ReadAllText(journalFile);
+            var hostile = System.Text.Json.Nodes.JsonNode.Parse(journalBytes)!;
+            hostile["state"] = "applying";
+            hostile["win64"] = Path.Combine(temp, "another-game");
+            File.WriteAllText(journalFile, hostile.ToJsonString());
+            Throws<InstallException>(() => applier.RecoverInterrupted(), "recovery rejects another installation");
+            File.WriteAllText(journalFile, journalBytes);
+            var link = Path.Combine(temp, "recovery-junction");
+            Directory.CreateSymbolicLink(link, state);
+            Throws<InstallException>(() => RecoverySecurity.NoLinks(Path.Combine(link, "journal.json")), "recovery rejects linked ancestors");
+            Directory.Delete(link);
+
 
             var updated = applier.Apply(win64, package2, "update");
             record = InstallManifest.Read(win64)!;

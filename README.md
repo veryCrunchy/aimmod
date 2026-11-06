@@ -2,12 +2,12 @@
 
 [Join the AimMod Discord](https://aimmod.app/join) for updates, feedback and support.
 
-AimMod is a performance-analysis and coaching suite for osu! and KovaaK's Aim Trainer. Each game has a dedicated desktop client and release channel built around the data and practice workflow that game exposes.
+AimMod is a performance-analysis and coaching suite for osu! and KovaaK's Aim Trainer. Each game has a dedicated experience and release channel built around its data and practice workflow.
 
 | Product | Platforms | Download |
 | --- | --- | --- |
 | AimMod for osu! | Windows x64, Linux x64 | [Stable channel](https://github.com/veryCrunchy/aimmod/releases/tag/aimmod-osu-stable) |
-| AimMod for KovaaK's | Windows | [Latest release](https://github.com/veryCrunchy/kovaaks/releases/latest) |
+| AimMod for KovaaK's | Windows | [In-game installer](https://github.com/verycrunchy/aimmod/releases/download/aimmod-ingame-stable/AimMod-Setup.exe) |
 
 ## AimMod for osu!
 
@@ -76,92 +76,26 @@ The [osu! knowledge base](https://aimmod.app/osu/learn) covers reading, timing, 
 
 ## AimMod for KovaaK's
 
-AimMod for KovaaK's is built around two parts:
-- a live in-session HUD while you play
-- a full post-session stats window for replay review, coaching, and scenario analysis
+AimMod runs inside KovaaK's, with live HUDs, session history, replay review,
+coaching, and Steam multiplayer. Install it once and launch the game through Steam.
 
-It runs as a Windows desktop app and syncs its runtime into KovaaK's while the app is open, so your overlay, replay data, and session analysis stay tied to the same run.
+### Install and play
 
-### Screenshots
+1. Close KovaaK's and download [AimMod Setup](https://github.com/verycrunchy/aimmod/releases/download/aimmod-ingame-stable/AimMod-Setup.exe).
+2. Run the installer, confirm the game folder and choose Install. The Beta channel offers upcoming releases.
+3. Start KovaaK's from Steam. In KovaaK's, press Esc and click AIMMOD, or press F7.
+4. Open Multiplayer to host a lobby or join one, then invite friends through Steam. Everyone needs a compatible AimMod installation.
+5. Play a scenario and open AimMod to review your history, replay and coaching.
 
-**Live challenge HUD**
+Updates are downloaded in the background and applied after the game closes.
+Use Setup to repair or uninstall. Windows SmartScreen may warn about an unfamiliar
+download: verify the official release source before choosing More info and Run anyway.
 
-![Live stat HUD](public/NzXmg9xdc9.png)
-
-**Scenario summary page**
-
-![Scenario summary](public/cD4yvwyuz8.png)
-
-**Scenario coaching page**
-
-![Scenario coaching](public/tvxcCZoOfC.png)
-
-**Focused replay moment**
-
-![Focused moment detail](public/uSIwrmIcw1.png)
-
-**Full-run replay review**
-
-![Replay review](public/WuKkgKOWX6.png)
-
-## What AimMod Does
-
-### In-game overlay
-
-- Live challenge HUDs for score, timing, pace, accuracy, and scenario state
-- Smoothness and mouse-control feedback during runs
-- Coaching toasts and a post-session overview
-- Drag-and-scale HUD layout mode with saved positions
-
-### Session stats
-
-- Global overview of all your recent practice
-- Per-scenario pages for summary, mechanics, coaching, replay, and leaderboard views
-- Practice profile and scenario comparison tools
-- SQL-backed session history and replay persistence
-
-### Replay analysis
-
-- Mouse path replay for the full run or selected moments
-- Saved focus moments, quick notes, and replay navigation
-- Timeline-by-second review
-- Shot detail context for replay segments
-- Video replay capture alongside the mouse path
-
-### Coaching and profiling
-
-- Aim fingerprint and aim-style summaries
-- Warm-up and practice-pattern insights
-- Scenario-specific coaching cards
-- Trend, floor, peak-zone, and consistency views
-
-### Integration
-
-- Discord Rich Presence
-- UE4SS-based runtime bridge into KovaaK's
-- Automatic stats import from KovaaK's run results
-
-## KovaaK's Quick Start
-
-1. Download the latest build from [Releases](https://github.com/veryCrunchy/kovaaks/releases/latest).
-2. Launch AimMod.
-3. Start KovaaK's.
-4. Open settings if you want to choose which HUDs are visible or reposition them.
-5. Play a scenario.
-6. Open the stats window to review the run, replay key moments, and inspect scenario-specific coaching.
-
-### Default hotkeys
-
-| Key | Action |
-| --- | --- |
-| `F8` | Open settings |
-| `F10` | Toggle HUD layout mode |
-
-## KovaaK's Requirements
+### Requirements
 
 - Windows 10 or Windows 11
-- KovaaK's Aim Trainer (Steam)
-- AimMod running while you play if you want live overlay, replay capture, runtime bridge data, and automatic session analysis
+- KovaaK's Aim Trainer installed through Steam
+- Steam running for multiplayer
 
 ## Build From Source
 

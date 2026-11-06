@@ -10,6 +10,7 @@ using Microsoft.Win32;
 // channel switch, game-running gating) with synthetic feeds, and its install,
 // update, repair and uninstall flow against a fake HTTPS host and a synthetic
 // game folder. See in-game/docs/install-lifecycle.md.
+using var legacyMetadata = ReleaseTrust.LegacyFixtures();
 var count = 0;
 void Check(bool ok, string name) { if (!ok) throw new Exception("Setup check failed: " + name); count++; }
 async Task Throws<T>(Func<Task> action, string name) where T : Exception
@@ -18,6 +19,44 @@ async Task Throws<T>(Func<Task> action, string name) where T : Exception
     try { await action(); } catch (T) { thrown = true; }
     Check(thrown, name);
 }
+
+// Signature checks use an ephemeral test key, never a release credential.
+using (var signingKey = System.Security.Cryptography.ECDsa.Create(System.Security.Cryptography.ECCurve.NamedCurves.nistP256))
+{
+    var keys = new Dictionary<string, string> { ["test"] = Convert.ToBase64String(signingKey.ExportSubjectPublicKeyInfo()) };
+    var now = DateTimeOffset.UtcNow;
+    byte[] Signed(DateTimeOffset expires, long counter = 1, string version = "1.1.0-beta.1")
+    {
+        var data = new System.Text.Json.Nodes.JsonObject { ["channel"] = "beta", ["version"] = version, ["releaseCounter"] = counter, ["expiresAt"] = expires.ToString("O"), ["manifestSha256"] = new string('a', 64) };
+        var payload = Encoding.UTF8.GetBytes(data.ToJsonString());
+        data["signature"] = new System.Text.Json.Nodes.JsonObject { ["keyId"] = "test", ["payload"] = Convert.ToBase64String(payload), ["value"] = Convert.ToBase64String(signingKey.SignData(payload, System.Security.Cryptography.HashAlgorithmName.SHA256)) };
+        return Encoding.UTF8.GetBytes(data.ToJsonString());
+    }
+    var signed = Signed(now.AddDays(1));
+    ReleaseTrust.Verify(signed, keys, now);
+    Check(true, "valid signed metadata");
+    await Throws<ReleaseFormatException>(() => { ReleaseTrust.Verify(Signed(now.AddDays(-1)), keys, now); return Task.CompletedTask; }, "expired signature rejected");
+    await Throws<ReleaseFormatException>(() => { ReleaseTrust.Verify("{}"u8, keys, now); return Task.CompletedTask; }, "unsigned metadata rejected when pinned");
+    await Throws<ReleaseFormatException>(() => { ReleaseTrust.Verify(signed, new Dictionary<string, string> { ["rotated"] = keys["test"] }, now); return Task.CompletedTask; }, "unknown key rejected");
+    var changed = Encoding.UTF8.GetBytes(Encoding.UTF8.GetString(signed).Replace("1.1.0-beta.1", "9.0.0"));
+    await Throws<ReleaseFormatException>(() => { ReleaseTrust.Verify(changed, keys, now); return Task.CompletedTask; }, "changed metadata rejected");
+    ReleaseTrust.Verify("{}"u8, new Dictionary<string, string>(), now);
+    Check(true, "legacy migration without pins");
+    var counterRoot = Path.Combine(Path.GetTempPath(), "aimmod-counter-" + Guid.NewGuid().ToString("N"));
+    try
+    {
+        ReleaseTrust.Remember(Signed(now.AddDays(1), 2), counterRoot, keys);
+        ReleaseTrust.Remember(Signed(now.AddDays(1), 2), counterRoot, keys);
+        await Throws<ReleaseFormatException>(() => { ReleaseTrust.Remember(signed, counterRoot, keys); return Task.CompletedTask; }, "counter rollback rejected");
+        await Throws<ReleaseFormatException>(() => { ReleaseTrust.Remember(Signed(now.AddDays(1), 2, "2.0.0"), counterRoot, keys); return Task.CompletedTask; }, "counter reuse with different release rejected");
+        ReleaseTrust.Remember(Signed(now.AddDays(1), 3, "2.0.0"), counterRoot, keys);
+        Check(true, "counter advancement accepted");
+    }
+    finally { if (Directory.Exists(counterRoot)) Directory.Delete(counterRoot, true); }
+
+}
+Check(SemanticVersion.Parse("1.0.0-beta.999999999999999999999999999999") > SemanticVersion.Parse("1.0.0-beta.99999999999999999999999999999"), "unbounded numeric prerelease length comparison");
+Check(SemanticVersion.Parse("1.0.0-beta.999999999999999999999999999998") < SemanticVersion.Parse("1.0.0-beta.999999999999999999999999999999"), "unbounded numeric prerelease ordinal comparison");
 
 var setup = SemanticVersion.Parse("1.0.0");
 string Hex(char c) => new(c, 64);

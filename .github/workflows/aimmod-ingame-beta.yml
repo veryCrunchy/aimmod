@@ -21,7 +21,21 @@ permissions:
   contents: read
 
 jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      value: ${{ steps.version.outputs.value }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          base=$(cat in-game/version.txt)
+          [[ "$base" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]] || exit 1
+          echo "value=${BASH_REMATCH[1]}.$((10#${BASH_REMATCH[2]} + 1)).0-beta.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
   release:
+    needs: version
     if: vars.AIMMOD_INGAME_RELEASES == 'true'
     permissions:
       attestations: write
@@ -29,7 +43,7 @@ jobs:
       id-token: write
     uses: ./.github/workflows/aimmod-ingame-release.yml
     with:
-      version: 0.1.0-beta.${{ github.run_number }}
+      version: ${{ needs.version.outputs.value }}
       channel: beta
       publish: true
     secrets: inherit

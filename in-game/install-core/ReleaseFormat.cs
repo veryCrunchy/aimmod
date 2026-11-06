@@ -45,7 +45,7 @@ readonly record struct SemanticVersion(int Major, int Minor, int Patch, string P
         for (int i = 0; i < Math.Min(a.Length, b.Length); i++)
         {
             var an = a[i].All(char.IsAsciiDigit); var bn = b[i].All(char.IsAsciiDigit);
-            if (an && bn) { c = long.Parse(a[i]).CompareTo(long.Parse(b[i])); }
+            if (an && bn) { c = a[i].Length.CompareTo(b[i].Length); if (c == 0) c = string.CompareOrdinal(a[i], b[i]); }
             else if (an != bn) { c = an ? -1 : 1; }
             else c = string.CompareOrdinal(a[i], b[i]);
             if (c != 0) return Math.Sign(c);
@@ -145,12 +145,13 @@ sealed record ReleaseManifest(
 {
     public const string SchemaName = "aimmod.ingame.release/1";
     public const int KovaaksAppId = 824270;
-    public const int MaximumBytes = 1 << 20;
+    public const int MaximumBytes = 4 << 20;
     static readonly Regex ModName = new("^[A-Za-z0-9_]{1,64}$", RegexOptions.CultureInvariant);
     public SemanticVersion SemVer => SemanticVersion.Parse(Version);
     public static ReleaseManifest Parse(ReadOnlySpan<byte> json)
     {
         if (json.Length is 0 or > MaximumBytes) throw new ReleaseFormatException("Release manifest has an invalid size.");
+        ReleaseTrust.Verify(json);
         ReleaseManifest? manifest;
         try { manifest = JsonSerializer.Deserialize<ReleaseManifest>(json, ReleaseJson.Options); }
         catch (JsonException) { throw new ReleaseFormatException("Release manifest is not valid JSON."); }
@@ -211,6 +212,7 @@ sealed record UpdateFeed(
     public static UpdateFeed Parse(ReadOnlySpan<byte> json)
     {
         if (json.Length is 0 or > MaximumBytes) throw new ReleaseFormatException("Update feed has an invalid size.");
+        ReleaseTrust.Verify(json);
         UpdateFeed? feed;
         try { feed = JsonSerializer.Deserialize<UpdateFeed>(json, ReleaseJson.Options); }
         catch (JsonException) { throw new ReleaseFormatException("Update feed is not valid JSON."); }

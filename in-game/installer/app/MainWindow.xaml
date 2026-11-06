@@ -69,6 +69,7 @@
         <StackPanel Grid.Column="0">
           <TextBlock x:Name="EyebrowText" Style="{StaticResource Eyebrow}" Text="CHECKING" />
           <TextBlock x:Name="TitleText" Margin="0,6,0,0" FontFamily="{StaticResource DisplayFont}" FontSize="27" FontWeight="SemiBold" TextWrapping="Wrap" Text="AimMod Setup" />
+          <TextBlock Margin="0,8,0,0" FontSize="12" Foreground="{StaticResource Muted}" TextWrapping="Wrap" Text="SmartScreen may warn about unfamiliar downloads. Verify the official release source before choosing More info and Run anyway." />
           <TextBlock x:Name="DetailText" Margin="0,8,0,0" FontSize="13.5" LineHeight="20" Foreground="{StaticResource Muted}" TextWrapping="Wrap" Text="" />
 
           <!-- Installer outdated -->
