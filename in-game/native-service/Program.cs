@@ -7,6 +7,7 @@ CultureInfo.CurrentCulture = CultureInfo.InvariantCulture;
 // Install, repair, update hand-off and uninstall (Install/Repair-AimMod.cmd).
 if (args.Contains("--verify-release")) { Environment.ExitCode = Lifecycle.VerifyRelease(args); return; }
 if (Lifecycle.Commands.Any(args.Contains)) { Environment.ExitCode = Lifecycle.RunCommand(args); return; }
+if (args.Contains("--self-test-replays")) { ReplayLibraryChecks.Run(); ReplayChecks.Run(); ReplayKeyboardChecks.Run(); await NativeReplayPlaybackChecks.Run(); return; }
 if (args.Contains("--self-test-lifecycle")) { await LifecycleChecks.Run(); return; }
 if (args.Contains("--self-test-overlays")) { await OverlayScenesChecks.Run(); return; }
 if (args.Contains("--self-test-multiplayer")) { AimMod.InGame.Multiplayer.MultiplayerChecks.Run(); return; }

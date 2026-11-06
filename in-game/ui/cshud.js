@@ -28,12 +28,12 @@
     var left=node('span','cs-buy-left',typeof c.buyLeft==='number'?'Buy time '+clock(c.buyLeft):'Buy time over');head.appendChild(left);box.timeNode=left;
     var close=node('button','cs-buy-close',c.buyKey+' closes');close.type='button';close.onclick=function(){act('cs-buy-menu','');};head.appendChild(close);
     box.appendChild(head);
-    // Two columns so the whole menu fits at 720p: pistols, SMGs and heavy; rifles and gear.
-    var cols=node('div','cs-buy-cols'),left=node('div','cs-buy-col'),right=node('div','cs-buy-col');cols.appendChild(left);cols.appendChild(right);box.appendChild(cols);
+    // Six category cells wrap into rows while preserving the item hotkeys.
+    var cols=node('div','cs-buy-cols');box.appendChild(cols);
     CATS.forEach(function(cat){
       var items=(c.buy||[]).filter(function(i){return i.category===cat[0];});
       var group=node('div','cs-buy-group');group.appendChild(node('div','cs-buy-cat',cat[1]));
-      if(!items.length)group.appendChild(node('div','cs-buy-none','None in this mode yet'));
+      if(!items.length)group.appendChild(node('div','cs-buy-none','No items'));
       items.forEach(function(i){
         var b=node('button','cs-item'+(i.owned?' owned':i.disabled?' off':i.affordable?' ok':''));b.type='button';
         if(i.disabled&&!i.owned)b.disabled=true;
@@ -45,7 +45,7 @@
         b.onclick=function(){if(!b.disabled&&!i.owned)act('cs-buy',i.id);};
         group.appendChild(b);
       });
-      (cat[0]==='rifle'||cat[0]==='gear'||cat[0]==='grenade'?right:left).appendChild(group);
+      cols.appendChild(group);
     });
     return box;
   }

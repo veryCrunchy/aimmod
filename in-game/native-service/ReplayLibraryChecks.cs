@@ -23,6 +23,17 @@ static class ReplayLibraryChecks
             Check(library.Favorite("synthetic", true), "favorite stored");
             using (var list = JsonDocument.Parse(JsonSerializer.Serialize(new ReplayLibrary(catalog, root, exports).List())))
                 Check(list.RootElement[0].GetProperty("favorite").GetBoolean(), "favorite survives reopen");
+            var summary = catalog.List().Single();
+            Check(summary.Score is null && summary.Duration is null, "missing summary measurements stay unknown");
+            var measured = replay.Replace("\"inputEvents\":0}", "\"inputEvents\":0,\"score\":0,\"duration\":1}");
+            File.WriteAllText(path, measured);
+            summary = catalog.List().Single();
+            Check(summary.Score == 0 && summary.Duration == 1, "summary preserves zero score and duration");
+            File.WriteAllText(path, replay);
+            var parsed = catalog.Read("synthetic")!;
+            var timeline = parsed with { Frames = [parsed.Frames[0] with { Stats = new(null,null,null,0,null,null) }, parsed.Frames[1] with { Stats = new(null,null,null,1,null,null) }] };
+            Check(NativeReplayPlayback.KillTimeline(timeline).EndsWith("248\n"), "kill increase places a bounded timeline marker");
+            Check(!NativeReplayPlayback.KillTimeline(parsed).EndsWith("248\n"), "missing kill counters create no marker");
             Check(library.Export("synthetic") && File.ReadAllText(Path.Combine(exports, "synthetic.amreplay")) == replay, "export preserves exact replay bytes");
             Check(library.Export("synthetic") && Directory.GetFiles(exports).Length == 2, "second export does not overwrite");
             Check(catalog.Resolve("synthetic\n") is null && catalog.Read("synthetic\n") is null && !library.Favorite("synthetic\n", true), "identifier with trailing newline rejected");

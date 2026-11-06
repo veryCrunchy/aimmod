@@ -57,7 +57,7 @@
     if (root.AimModFormat) { var parsed = root.AimModFormat.parse(value); if (parsed) return root.AimModFormat.dateTime(parsed); }
     return value.slice(0, 10) + ' · ' + value.slice(11, 16) + ' UTC';
   }
-  var searchTimer = null, LIMIT = 250;
+  var searchTimer = null, LIMIT = 250, sortBy='date', selected=Object.create(null);
   function list() {
     if(busy)return;
     cancel(); clear();
@@ -82,7 +82,30 @@
     function mark(){everything.className='button'+(favoritesOnly||clipsOnly?'':' primary');favorite.className='button'+(favoritesOnly?' primary':'');clipScope.className='button'+(clipsOnly?' primary':'');everything.setAttribute&&everything.setAttribute('aria-pressed',String(!favoritesOnly&&!clipsOnly));favorite.setAttribute&&favorite.setAttribute('aria-pressed',String(favoritesOnly));clipScope.setAttribute&&clipScope.setAttribute('aria-pressed',String(clipsOnly));}
     function setFavorites(value){favoritesOnly=value;clipsOnly=false;mark();draw();}
     scope.appendChild(everything);scope.appendChild(favorite);scope.appendChild(clipScope);toolbar.appendChild(scope);toolbar.appendChild(button('Import replays', importer));toolbar.appendChild(button('Refresh', refresh));
+    var sort=button('',function(){sortBy=sortBy==='date'?'score':sortBy==='score'?'scenario':'date';sort.textContent='Sort: '+sortBy;draw();});sort.textContent='Sort: '+sortBy;toolbar.appendChild(sort);
+    var bulk=node('div','replay-bulk');container.appendChild(bulk);
     var panel = node('div', 'replay-cards');container.appendChild(panel);
+    function batch(action,ids,index){
+      if(index>=ids.length){busy=false;message=action==='export'?'Selected replays exported.':'Selected replays deleted.';selected=Object.create(null);list();return;}
+      busy=true;disableControls(container);
+      get('replay-library',function(ok){if(!ok){busy=false;message='Stopped after '+index+' of '+ids.length+'. Select the remaining replays to retry.';list();return;}
+        delete selected[ids[index]];
+        if(action==='delete'){rows=rows.filter(function(r){return r.id!==ids[index];});total=Math.max(rows.length,total-1);}
+        batch(action,ids,index+1);
+      },{action:action,id:ids[index]});
+    }
+    function selection(){
+      while(bulk.firstChild)bulk.removeChild(bulk.firstChild);
+      var ids=rows.filter(function(r){return selected[r.id];}).map(function(r){return r.id;});
+      bulk.appendChild(node('span','subtle',ids.length+' selected'));
+      bulk.appendChild(button('Select visible',function(){visible().forEach(function(r){selected[r.id]=true;});draw();}));
+      if(!ids.length)return;
+      bulk.appendChild(button('Clear selection',function(){selected=Object.create(null);draw();}));
+      bulk.appendChild(button('Export selected',function(){batch('export',ids,0);}));
+      bulk.appendChild(button('Delete selected',function(){while(bulk.firstChild)bulk.removeChild(bulk.firstChild);bulk.appendChild(node('span','subtle','Delete '+ids.length+' replays permanently?'));bulk.appendChild(button('Cancel',selection));bulk.appendChild(button('Confirm delete',function(){batch('delete',ids,0);}));}));
+    }
+    function visible(){return rows.filter(function(row){return (!favoritesOnly||row.favorite)&&(!clipsOnly||/-clip[0-9]+$/.test(row.id||''))&&(!query||(row.scenario||'').toLowerCase().indexOf(query.toLowerCase())>=0);}).sort(function(a,b){if(sortBy==='score'){if(known(a.score)!==known(b.score))return known(a.score)?-1:1;if(known(a.score)&&a.score!==b.score)return b.score-a.score;}if(sortBy==='scenario'&&a.scenario!==b.scenario)return (a.scenario||'').localeCompare(b.scenario||'');return (b.recordedAt||'').localeCompare(a.recordedAt||'');});}
+
     // Search redraws only the cards, so the field keeps focus while typing.
     search.oninput=function(){if(searchTimer)root.clearTimeout(searchTimer);searchTimer=root.setTimeout(function(){searchTimer=null;if(!busy&&query!==search.value){query=search.value;draw();}},150);};
     search.onchange=function(){if(busy)return;if(searchTimer){root.clearTimeout(searchTimer);searchTimer=null;}query=search.value;draw();};
@@ -90,20 +113,23 @@
     while(panel.firstChild)panel.removeChild(panel.firstChild);
     // Clips (F8 marks) are saved as <run>-clipN replays.
     function isClip(row){return /-clip[0-9]+$/.test(row.id||'');}
-    var shown=rows.filter(function(row){return (!favoritesOnly||row.favorite)&&(!clipsOnly||isClip(row))&&(!query||(row.scenario||'').toLowerCase().indexOf(query.toLowerCase())>=0);});
-    if(!shown.length){var none=node('div','empty');none.style.width='100%';none.appendChild(node('p','',clipsOnly&&!query?'No clips yet. Press your clip key (F8 by default) during a recorded run to mark a moment.':favoritesOnly&&!query?'No favorite replays yet. Mark a replay as a favorite to keep it here.':'No replays match your filters.'));none.appendChild(button('Clear filters',function(){query='';favoritesOnly=false;list();}));panel.appendChild(none);}
+    var shown=visible();selection();
+    var best=Object.create(null);rows.forEach(function(r){if(!/-clip[0-9]+$/.test(r.id)&&known(r.score)&&(!known(best[r.scenario])||r.score>best[r.scenario]))best[r.scenario]=r.score;});
+    if(!shown.length){var none=node('div','empty');none.style.width='100%';none.appendChild(node('p','',clipsOnly&&!query?'No clips yet. Press your clip key (F8 by default) during a recorded run to mark a moment.':favoritesOnly&&!query?'No favorite replays yet. Mark a replay as a favorite to keep it here.':'No replays match your filters.'));none.appendChild(button('Clear filters',function(){query='';favoritesOnly=false;clipsOnly=false;list();}));panel.appendChild(none);}
     shown.forEach(function (row) {
       var card=node('div','replay-card'),group=node('div','replay-card-inner');card.appendChild(group);
-      // One primary action: the whole card plays the replay in game.
+      var choose=node('input','replay-select');choose.type='checkbox';choose.checked=!!selected[row.id];if(choose.setAttribute)choose.setAttribute('aria-label','Select '+(row.scenario||'replay')+' '+date(row.recordedAt));choose.onchange=function(){selected[row.id]=choose.checked;selection();};group.appendChild(choose);
+      // Keep the play target separate from selection and library actions.
       var item = node('button', 'replay-main', ''); item.type = 'button';
       var info = node('div', 'replay-info');
       var titleRow = node('div', 'replay-title-row'); if (row.favorite) titleRow.appendChild(node('span', 'replay-fav', 'Favorite')); titleRow.appendChild(node('div', 'replay-title', row.scenario || 'Untitled scenario'));
+      if(row.isPersonalBest===true||row.isPb===true)titleRow.appendChild(node('span','replay-badge','PB'));else if(!isClip(row)&&known(row.score)&&row.score===best[row.scenario])titleRow.appendChild(node('span','replay-badge','Saved PB'));
       var sub = node('div', 'replay-meta', date(row.recordedAt) || 'Date unknown');
       if (row.reason !== 'completed') sub.appendChild(node('span', 'replay-badge', 'Partial run'));
       if (isClip(row)) sub.appendChild(node('span', 'replay-badge', 'Clip'));
       info.appendChild(titleRow); info.appendChild(sub);
       // Score, length and accuracy appear when the library provides them.
-      var facts = [['Score', known(row.score) ? fmt(row.score) : null], ['Accuracy', known(row.accuracy) ? fmt(row.accuracy) + '%' : null], ['Length', known(row.duration) ? Math.round(row.duration) + 's' : null]].filter(function (f) { return f[1] !== null; });
+      var facts = [['Score', known(row.score) ? fmt(row.score) : 'Unavailable'], ['Accuracy', known(row.accuracy) ? fmt(row.accuracy) + '%' : 'Unavailable'], ['Length', known(row.duration) ? Math.round(row.duration) + 's' : 'Unavailable']].filter(function (f) { return f[1] !== null; });
       if (facts.length) { var stats = node('div', 'replay-stats'); facts.forEach(function (f) { var cell = node('div', 'replay-stat'); cell.appendChild(node('span', '', f[0])); cell.appendChild(node('strong', '', f[1])); stats.appendChild(cell); }); info.appendChild(stats); }
       item.appendChild(info);
       item.appendChild(node('span', 'button primary', 'Play replay'));
@@ -124,7 +150,7 @@
     draw();
   }
   function disableControls(element){
-    if(element.tagName==='BUTTON'||element.tagName==='INPUT')element.disabled=true;
+    if(element.tagName==='BUTTON'||element.tagName==='INPUT'||element.tagName==='SELECT')element.disabled=true;
     for(var i=0;i<element.children.length;i++)disableControls(element.children[i]);
   }
   function open(row) {

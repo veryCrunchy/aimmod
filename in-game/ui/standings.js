@@ -58,7 +58,7 @@
   }
   // CS: each side as its own block (yours first), CS-style: the side's name, score and players
   // alive, then its players with money (your side only), kills, deaths and K/D; the down greyed.
-  var csCols=[['$',function(r){return typeof r.money==='number'?'$'+num(r.money):'';}],['K',function(r){return num(r.frags);}],['D',function(r){return num(r.deaths);}],['K/D',function(r){return num(r.kd,2);}],['ADR',function(r){return num(r.adr,1);}],['HS%',function(r){return num(r.hsPercent,1)+'%';}],['MVP',function(r){return num(r.mvps);}]];
+  var csCols=[['$',function(r){return typeof r.money==='number'?'$'+num(r.money):'';}],['K',function(r){return num(r.frags);}],['D',function(r){return num(r.deaths);}],['K/D',function(r){return num(r.kd,2);}],['ADR',function(r){return num(r.adr,1);}],['HS%',function(r){return typeof r.hsPercent==='number'&&isFinite(r.hsPercent)?num(r.hsPercent,1)+'%':'—';}],['MVP',function(r){return num(r.mvps);}]];
   function csSide(b,t){
     var side=node('div','sb-cs-side team'+t.team+(t.side==='T'?' t':' ct')+(t.self?' self':''));
     var title=node('div','sb-row sb-cs-title');
