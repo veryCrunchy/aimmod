@@ -174,7 +174,7 @@ namespace aimmod
             else if (c[0] == "drop" && c.size() == 6)
             {
                 RoundState::Drop d;
-                if (r.drops.size() >= 128 || !Int(c[1], d.id) || d.id <= 0 || !Num(c[3], d.x) || !Num(c[4], d.y) || !Num(c[5], d.z)) return std::nullopt;
+                if (r.drops.size() >= 32 || !Int(c[1], d.id) || d.id <= 0 || !Num(c[3], d.x) || !Num(c[4], d.y) || !Num(c[5], d.z)) return std::nullopt;
                 if (std::fabs(d.x) > 1e7 || std::fabs(d.y) > 1e7 || std::fabs(d.z) > 1e7) return std::nullopt;
                 if (c[2] != "glock" && c[2] != "usp" && c[2] != "deagle" && c[2] != "mac10" && c[2] != "mp9" && c[2] != "ak47" && c[2] != "m4a1s" && c[2] != "awp" && c[2] != "defuse-kit") return std::nullopt;
                 for (const auto& old : r.drops) if (old.id == d.id) return std::nullopt;

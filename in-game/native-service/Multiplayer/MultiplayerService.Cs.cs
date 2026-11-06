@@ -79,7 +79,7 @@ sealed partial class MultiplayerService
         yield return CsFeel.Line(match.Id, settings?.DynamicCrosshair ?? true, settings?.AdsZoom ?? AdsZooms.Cs, settings?.AdsSensitivity ?? 1);
         if (CsBombLine(cs.Bomb, HostOffset()) is { } bomb) yield return bomb;
         foreach (var d in cs.Drops ?? [])
-            yield return FormattableString.Invariant($"drop\t{d.Id}\t{d.Weapon}\t{d.X}\t{d.Y}\t{d.Z}");
+            yield return FormattableString.Invariant($"drop\t{d.Id}\t{d.Weapon}\t{d.X:0.#}\t{d.Y:0.#}\t{d.Z:0.#}");
     }
 
     internal static string CsLoadoutLine(CsPlayerView me, bool carrier)

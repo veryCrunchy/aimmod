@@ -8,6 +8,7 @@ sealed partial class CsMatch
     public ISet<string> Bots { get; } = new HashSet<string>();
     long dropId, damageCursor;
     public const double WeaponPickupCm = 80;
+    public const int MaxDroppedItems = 32;
 
     void CollectDamage()
     {
@@ -22,7 +23,7 @@ sealed partial class CsMatch
     void AddDrop(P p, string weapon, long now)
     {
         if (Combat.Position(p.Id) is not { } at) return;
-        if (drops.Count >= 128) drops.RemoveAt(0);
+        if (drops.Count >= MaxDroppedItems) drops.RemoveAt(0);
         drops.Add(new(++dropId, p.Id, weapon, at.X, at.Y, Centre(p.Id, at), now + DropBlockMs));
         Event("weapon-dropped", now, p.Id, weapon);
     }
