@@ -29,7 +29,7 @@ sealed class ReplayLibrary
         lock (gate)
         {
             var favorites = Favorites();
-            return catalog.List().Select(r => new { r.Id, r.Scenario, r.RecordedAt, r.Reason, r.Frames, r.InputEvents, favorite = favorites.Contains(r.Id) }).ToArray();
+            return catalog.List().Select(r => new { r.Id, r.Scenario, r.RecordedAt, r.Reason, r.Frames, r.InputEvents, r.Score, r.Duration, favorite = favorites.Contains(r.Id) }).ToArray();
         }
     }
     public bool Favorite(string id, bool favorite)

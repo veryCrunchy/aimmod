@@ -101,3 +101,17 @@
 .cs-controls{position:absolute;top:180px;left:20px;width:230px;padding:12px;background:#0f1714;border:1px solid #2c6b52;border-radius:6px;font-size:13px;pointer-events:auto}.cs-controls strong{display:block;margin-bottom:6px}.cs-controls .button{margin-top:8px}
 
 #notice{position:relative}
+
+/* Match surfaces share compact type, square edges and side colours. */
+.cs-score.t,.cs-score.ct,.cs-me,.cs-kill,.cs-buy{border-radius:4px}
+.cs-score.t{border-top:2px solid #f0b45a}.cs-score.ct{border-top:2px solid #66ccff}
+.cs-clock-round{color:#a7bab0}.cs-clock-time{font-size:26px}
+.cs-money{font-size:20px}.cs-hp{font-size:28px}.cs-kill{min-height:30px;padding:6px 10px}
+.cs-buy{width:900px;max-height:78%;overflow-y:auto}
+.cs-buy-cols{display:flex;flex-direction:row;flex-wrap:wrap;align-items:flex-start}
+.cs-buy-group{width:33.333%;padding:8px}
+.cs-buy-cat{color:#cfe0d8;font-size:12px;margin-bottom:8px}
+.cs-item{min-height:46px;margin-bottom:6px;border-radius:3px}
+.cs-item.owned{border-left:3px solid #27e4a1}.cs-item.off{background:#101714}
+.cs-item-key{color:#cfe0d8}.cs-item:focus{border-color:#8bf5ce}
+@media(max-height:760px){.cs-buy{width:820px;top:12%;max-height:78%}.cs-buy-group{padding:4px 6px}.cs-item{min-height:38px;margin-bottom:4px}.cs-buy-cat{margin-bottom:4px}.cs-feed{width:300px}.cs-kill{font-size:12px}.cs-me{bottom:12px}}

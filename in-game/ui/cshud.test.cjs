@@ -176,3 +176,10 @@ test('the dynamic crosshair opens with the cone and is drawn only when wanted',(
   const canvas={style:{},getContext:()=>null};
   assert.equal(s.hud.sights(canvas,'not json'),null);assert.equal(canvas.style.display,'none');
 });
+
+test('buy categories form six independent cells while ownership blocks repeat buys',()=>{
+  const s=setup(),calls=[];s.hud.render(s.root,base,(a,id)=>calls.push([a,id]));
+  const categories=s.walk(s.root).find(n=>n.className==='cs-buy-cols');assert.equal(categories.children.length,6);
+  const owned=s.walk(s.root).find(n=>n.className==='cs-item owned');owned.onclick();assert.deepEqual(calls,[]);
+  assert.ok(categories.children.every(n=>n.className==='cs-buy-group'));
+});

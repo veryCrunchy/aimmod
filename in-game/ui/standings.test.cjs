@@ -12,8 +12,10 @@ test('CS standings render damage, headshot percentage and MVPs including zero',(
   vm.runInNewContext(fs.readFileSync(path.join(__dirname,'standings.js'),'utf8'),{window});
   const root=new El();
   window.AimModStandings.render(root,{kind:'cs',title:'Match',teams:[{team:1,name:'Terrorists',total:1}],rows:[
-    {team:1,name:'Player',frags:2,deaths:1,kd:2,money:800,adr:75.5,hsPercent:50,mvps:0}
+    {team:1,name:'Player',frags:2,deaths:1,kd:2,money:800,adr:75.5,hsPercent:50,mvps:0},
+    {team:1,name:'Unknown'}
   ]},'full');
   function text(el){return [el.textContent||'',...el.children.map(text)].join('|');}
+  assert.ok(!text(root).includes('—%'));
   for(const value of ['ADR','HS%','MVP','75.5','50.0%','0'])assert.ok(text(root).includes(value));
 });
