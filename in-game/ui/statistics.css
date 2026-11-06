@@ -9,3 +9,23 @@
 
 /* Scenario names in the comparison table are links, not bordered buttons. Search uses the shared input palette. */
 .stats-table .button{height:auto;line-height:20px;padding:4px 0;border:0;background:none;color:#eef5f1;font-weight:500;border-radius:0}.stats-table .button:hover{background:none;color:#27e4a1}.stats-search{background:#101916;color:#eef5f1;border-color:#30433a}
+#trends .stats-toolbar{padding:16px;background:#151f1c;border:1px solid #30433a;border-radius:8px;flex-wrap:wrap;align-items:flex-end}
+#trends .stats-heading{width:100%;flex:auto;margin-bottom:12px;padding:0}
+#trends .stats-heading h2{display:none}
+#trends .stats-heading p{margin:0 0 10px}
+#trends .stats-filter-label{display:block;font-size:12px;color:#a7bab0}
+#trends .stats-scenario-select{display:block;width:100%;max-width:520px;margin-top:6px}
+#trends .stats-toolbar .segmented{margin-top:4px;flex-wrap:wrap}
+#trends .metrics{margin-bottom:20px}
+#trends .metrics>.metric:first-child{border-top:2px solid #27e4a1}
+#trends .stats-subtabs{margin:0 0 20px;flex-wrap:wrap}
+#trends .stats-subtabs .button{background:transparent;border:0;border-bottom:2px solid transparent;border-radius:0;margin:0;padding:10px 16px;height:auto}
+#trends .stats-subtabs .button[aria-selected="true"]{border-bottom-color:#27e4a1;color:#27e4a1}
+#trends .stats-table{overflow-x:auto}#trends .stats-row{min-width:660px}
+#overview #home-pbs h2{font-size:18px;margin-bottom:12px}#overview #home-pbs .next-item{padding:12px 0}
+#overview .metric-value{font-size:30px;line-height:38px}#overview .recent-score{color:#8bf5ce}
+#history .history-head .button{background:transparent;border:0;color:#a7bab0;font-size:12px;padding:0;height:30px;max-width:100%;text-align:left}
+#history .history-head [aria-sort="ascending"] .button,#history .history-head [aria-sort="descending"] .button{color:#27e4a1;border-bottom:2px solid #27e4a1}
+#history .toolbar{flex-wrap:wrap}#history .toolbar>*{margin-bottom:8px}
+#mechanics .stats-measure-grid>.metric{background:#151f1c;border-color:#30433a;padding:18px}#mechanics .mechanics-run{min-height:54px;border-radius:6px}
+@media(max-width:1250px){#trends .stats-filter{margin-bottom:8px}#trends .stats-subtabs .button{padding:10px}#overview .metrics{flex-wrap:wrap}#overview .metrics>.metric{min-width:180px}#history .history-date{width:25%}#history .history-score{width:16%}}

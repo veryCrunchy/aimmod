@@ -85,11 +85,11 @@ test('secondary trend information is revealed one section at a time and resize p
  click('Practice pattern');assert.equal(s.all().filter(e=>e.tag==='canvas').length,2);assert.ok(s.all().some(e=>e.textContent==='Practice days'));assert.ok(s.all().some(e=>e.textContent==='Practice blocks'));
  s.api.resize();assert.ok(s.all().some(e=>e.textContent==='Practice blocks'));
  click('Compare scenarios');assert.ok(s.all().some(e=>e.className==='stats-table'));assert.ok(!s.all().some(e=>e.textContent==='Practice blocks'));
- click('Compare scenarios');assert.ok(!s.all().some(e=>e.className==='stats-table'));assert.ok(s.all().some(e=>e.textContent==='Score trend'));
+ click('Compare scenarios');assert.ok(s.all().some(e=>e.className==='stats-table'));click('Overview');assert.ok(!s.all().some(e=>e.className==='stats-table'));assert.ok(s.all().some(e=>e.textContent==='Score trend'));
 });
 test('warm-up filter switches scenario analysis without changing total practice',()=>{const s=surface(),data=fixture();for(const p of data.Periods){p.Warmup={...p.Selected,Runs:2,Best:60,Average:50,Median:50,Points:[{Score:50,RunNumber:1}],Distribution:[{From:50,To:50,Count:2}]};p.Settled={...p.Selected,Runs:4,Best:100};}s.api.render(s.root,data,()=>{});s.all().find(e=>e.tag==='button'&&e.textContent==='Warm-up (2)').onclick();assert.ok(s.all().some(e=>e.textContent==='60'));assert.ok(s.all().some(e=>e.textContent.includes('Warm-up runs are early')));s.api.resize();assert.ok(s.all().find(e=>e.tag==='button'&&e.textContent==='Warm-up (2)').className.includes('primary'));s.all().find(e=>e.tag==='button'&&e.textContent==='All runs').onclick();assert.ok(!s.all().some(e=>e.textContent==='60'));});
 test('scenario comparison shows time in readable units and labels all-scenario practice',()=>{
   const src=fs.readFileSync(path.join(__dirname,'statistics.js'),'utf8');
   assert.match(src,/F\(\)\.hours\(s\.Hours\)/,'comparison time uses F.hours');
-  assert.match(src,/'All practice'/,'the practice card says it covers every scenario');
+  assert.match(src,/'Practice time'/,'the practice card says it covers every scenario');
 });
