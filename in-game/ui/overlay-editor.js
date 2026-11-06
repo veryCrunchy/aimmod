@@ -48,7 +48,8 @@
   function saveLegacy(patch){st.busy=true;request('overlay-settings',patch,function(ok,data){st.busy=false;if(ok)st.settings=data;render();setStatus(ok?'Saved.':'Could not save. Please try again.',!ok);});}
   // ---- data for the preview ----
   function data(){var now=new Date().getTime();if(st.data==='live'&&st.feed){var d=st.feed;d.peripherals=st.store.profile.peripherals;return d;}var s=W.sample(now);if(st.store.profile.peripherals.length)s.peripherals=st.store.profile.peripherals;if(st.ctx==='match'){var m=W.sampleMatch();s.board=m.board;s.tournament=m.tournament;}if(st.ctx==='menu')s.live={available:true,active:false};return s;}
-  function pollFeed(){if(feedTimer!==null){root.clearTimeout(feedTimer);feedTimer=null;}if(!container||!st||st.data!=='live')return;request('overlay-feed',null,function(ok,d){if(ok)st.feed=d;preview();feedTimer=root.setTimeout(pollFeed,1000);});}
+  function pollFeed(){if(feedTimer!==null){root.clearTimeout(feedTimer);feedTimer=null;}if(!container||!st||st.data!=='live')return;request('overlay-feed',null,function(ok,d){if(ok)st.feed=d;preview();if(st.panel==='data'&&explorerRefresh)explorerRefresh();feedTimer=root.setTimeout(pollFeed,1000);});}
+  var explorerRefresh=null;
   var motionBusy=false;
   // Live data: the mouse path and input display follow the real motion feed while the scene shows them.
   function pollMotion(){var sc=scene();if(motionBusy||!sc||st.data!=='live')return;var n=W.needsMotion(sc,null);if(!n.path&&!n.input){st.motion=null;return;}motionBusy=true;request('overlay-motion?'+(n.path?'path=1':'')+(n.path&&n.input?'&':'')+(n.input?'input=1':''),null,function(ok,d){motionBusy=false;st.motion=ok?d:null;});}
@@ -128,7 +129,7 @@
     var sc=scene();
     if(!checkpoint)checkpoint=M.copy(st.store);
     var bar=add(container,el('div','ove-bar'));var picker=add(bar,el('div','ove-scenes'));
-    for(var i=0;i<st.store.scenes.length;i++)(function(s){var b=button(s.name,function(){st.scene=s.id;st.selected='';st.panel='';st.rename=false;render();},'ove-scene'+(s.id===st.scene?' active':''),'ove-scene-'+s.id);
+    for(var i=0;i<st.store.scenes.length;i++)(function(s){var b=button(s.name,function(){st.scene=s.id;st.selected='';selection=[];st.panel='';st.rename=false;render();},'ove-scene'+(s.id===st.scene?' active':''),'ove-scene-'+s.id);
       var tags=[];if(st.store.obsScene===s.id)tags.push('OBS');if(st.store.gameScene===s.id)tags.push('Game');if(tags.length)b.appendChild(el('span','ove-scene-tag',tags.join(' · ')));picker.appendChild(b);})(st.store.scenes[i]);
     picker.appendChild(button('New scene',function(){st.panel=st.panel==='new'?'':'new';render();},'quiet','ove-new-scene'));
     var right=add(bar,el('div','ove-bar-right'));
@@ -154,7 +155,7 @@
     var box=add(container,el('div','panel ove-drawer'));add(box,el('h3','','Data explorer'));
     var search=add(box,el('input','ove-text'));search.type='text';search.setAttribute('aria-label','Filter data paths');var list=add(box,el('div','ove-data-list'));
     function show(){list.textContent='';var fields=st.catalog||[],query=search.value.toLowerCase();for(var i=0;i<fields.length;i++)(function(f){if(f.path.toLowerCase().indexOf(query)<0)return;var b=button(f.path+' ['+f.type+(f.unit?' '+f.unit:'')+'] = '+M.formatValue(M.value(data(),f.path),{}),function(){var w=selectedWidget();if(!w||!Object.prototype.hasOwnProperty.call(w.opts,'path')){addWidget('stat');w=selectedWidget();}w.opts.path=f.path;changed();},'compact');b.title=f.description;list.appendChild(b);})(fields[i]);}
-    search.oninput=show;show();box.appendChild(button('Refresh values',function(){request('overlay-data',null,function(ok,d){if(ok)st.catalog=d.fields;request('overlay-feed',null,function(ok2,d2){if(ok2)st.feed=d2;show();});});},'compact'));
+    explorerRefresh=show;search.oninput=show;show();box.appendChild(button('Refresh values',function(){request('overlay-data',null,function(ok,d){if(ok)st.catalog=d.fields;request('overlay-feed',null,function(ok2,d2){if(ok2)st.feed=d2;show();});});},'compact'));
   }
   function templates(){
     var box=add(container,el('div','panel ove-drawer'));add(box,el('h3','','Start a new scene'));add(box,el('p','subtle','Pick a starting point. Every widget stays editable.'));
