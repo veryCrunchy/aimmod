@@ -581,6 +581,7 @@ sealed class LobbyCore
             var csPlayers = m.Players.Where(id => Find(id) is not null).ToList();
             m.Cs = new CsMatch(csPlayers, m.StartsAt.Value, m.Settings.HalfRounds, m.Settings.Overtime, csObjectives, LobbyRules.ResolveTeams(csPlayers.Select(id => (id, Find(id)!.Team)).ToList()));
             m.Combat = m.Cs.Combat;
+            m.Cs.Bots.UnionWith(csPlayers.Where(id => Find(id)?.Bot is not null));
             m.Combat.TeamDamage = m.Settings.EffectiveFriendlyFire ? CombatMatch.CsTeamDamage : 0;
         }
         if (LobbyModes.Combat(m.Settings.Mode))

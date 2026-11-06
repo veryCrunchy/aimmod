@@ -74,6 +74,7 @@ namespace aimmod::cs
     const std::vector<Part>& BombModel();
     // A knife: a steel blade with a dark guard and handle, about 30 cm long, along x.
     const std::vector<Part>& KnifeModel();
+    std::vector<Part> DropModel(const std::string& weapon);
     // Where the model sits in the first-person view, relative to the camera (cm, degrees).
     struct Hold
     {

@@ -12,7 +12,8 @@ namespace AimMod.InGame.Multiplayer;
 //            (your own side only, as in CS), kills, deaths, K/D and who is down
 // No Steam ids: rows use a match-local position for identity.
 sealed record BoardRow(string Name, bool Self, int Rank, double? Score, double? Gap, int? Wins, double? Percent,
-    int? Frags, int? Deaths, double? Kd, double? Health, int Team, string Status, bool Bot = false, int? Money = null, string? RowKey = null);
+    int? Frags, int? Deaths, double? Kd, double? Health, int Team, string Status, bool Bot = false, int? Money = null, string? RowKey = null,
+    double? Adr = null, double? HsPercent = null, int? Mvps = null);
 sealed record BoardTeam(int Team, string Name, int Total, bool Self, string? Side = null, int? Alive = null, int? Players = null);
 sealed record Board(string Mode, string Kind, string Title, string Phase, int Round, int? Rounds, int? FirstTo, int? Left, int? FragLimit,
     string Scenario, IReadOnlyList<BoardRow> Rows, IReadOnlyList<BoardTeam>? Teams);
@@ -51,7 +52,7 @@ static class Standings
                 cs.Score.Length >= t ? cs.Score[t - 1] : 0, mine == t, SideOf(t), cs.Players.Count(p => p.Team == t && p.Alive), cs.Players.Count(p => p.Team == t))).ToArray();
             var rows = cs.Players.OrderBy(p => Array.IndexOf(order, p.Team)).ThenByDescending(p => p.Kills).ThenBy(p => p.Deaths).ThenBy(p => Name(p.Member), StringComparer.Ordinal)
                 .Select((p, i) => new BoardRow(Name(p.Member), p.Member == self, i + 1, null, null, null, null, p.Kills, p.Deaths, Kd(p.Kills, p.Deaths), p.Alive ? p.Health : 0, p.Team,
-                    p.Alive ? "alive" : "down", Bot(p.Member), mine != 0 && p.Team == mine ? p.Money : null, RowKey(p.Member)));
+                    p.Alive ? "alive" : "down", Bot(p.Member), mine != 0 && p.Team == mine ? p.Money : null, RowKey(p.Member), p.Adr, p.HsPercent, p.Mvps));
             return Make("cs", rows, teams);
         }
         if (combat is not null && LobbyModes.Combat(m.Mode))
