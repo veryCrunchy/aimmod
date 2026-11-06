@@ -25,24 +25,30 @@ function snapshot(overrides){
   if(overrides&&overrides.last)s.last=overrides.last;
   return s;
 }
-test('a staged update shows one toast with plain-text release notes and a banner',()=>{
-  const t=setup(),banner=new t.El('div');let opened=0;
-  t.api.start({banner,openSettings:()=>opened++});
-  assert.equal(t.requests[0].url,'/cap/lifecycle');
-  t.requests[0].finish(200,snapshot({update:{state:'ready',version:'1.1.0',notes:'## Features\n- **Faster** replays ([#12](https://x))',applyOnClose:true}}));
-  const toast=t.body.children.find(c=>c.className==='lifecycle-toast');
-  assert.ok(toast,'toast shown');
-  assert.match(toast.text(),/Update ready/);assert.match(toast.text(),/applies when you close KovaaK’s/);
-  assert.match(toast.text(),/- Faster replays/);assert.doesNotMatch(toast.text(),/\*\*|##|\]\(/);
-  assert.match(banner.text(),/Update ready: AimMod 1\.1\.0 applies when you close KovaaK’s/);
-  t.buttons(toast).find(b=>b.textContent==='Details').onclick();assert.equal(opened,1);
-  t.api.visible(true);t.requests.at(-1).finish(200,snapshot({update:{state:'ready',version:'1.1.0',notes:'x',applyOnClose:true}}));
-  assert.equal(t.body.children.filter(c=>c.className==='lifecycle-toast').length,0,'same version is announced once');
+test('a staged update appears only in the inbox and dismissals survive reloads',()=>{
+  const t=setup(),banner=new t.El('div'),inbox=new t.El('div'),trigger=new t.El('button');let opened=0;
+  t.api.start({banner,inbox,trigger,openSettings:()=>opened++});
+  const data=snapshot({update:{state:'ready',version:'1.1.0',notes:'Fixes',applyOnClose:true}});
+  t.requests[0].finish(200,data);
+  assert.equal(banner.children.length,0);assert.equal(t.body.children.length,0);
+  assert.match(inbox.text(),/Restart KovaaK’s to apply/);assert.equal(trigger.textContent,'Inbox (1)');
+  trigger.onclick();assert.equal(trigger.attrs['aria-expanded'],'true');
+  t.buttons(inbox).find(b=>b.textContent==='What’s new').onclick();assert.equal(opened,1);
+  t.buttons(inbox).find(b=>b.textContent==='Dismiss').onclick();assert.equal(t.requests.at(-1).url,'/cap/lifecycle/dismiss');assert.deepEqual(JSON.parse(t.requests.at(-1).body),{key:'update:1.1.0'});data.dismissedNotices=['update:1.1.0'];t.requests.at(-1).finish(200,data);assert.equal(trigger.textContent,'Inbox');
+  const next=setup(),nextInbox=new next.El('div');next.api.start({inbox:nextInbox});next.requests[0].finish(200,data);
+  assert.doesNotMatch(nextInbox.text(),/Update ready/);
+  next.api.visible(true);next.requests.at(-1).finish(200,snapshot({update:{state:'ready',version:'1.2.0',applyOnClose:true}}));
+  assert.match(nextInbox.text(),/1.2.0/);
+});
+test('routine results and game warnings stay out of the page flow',()=>{
+  const t=setup(),banner=new t.El('div'),inbox=new t.El('div');t.api.start({banner,inbox});
+  t.requests[0].finish(200,snapshot({last:{message:'Updated successfully',ok:true},game:{warning:'Game changed',steamBuildId:123}}));
+  assert.equal(banner.children.length,0);assert.match(inbox.text(),/Updated successfully/);assert.match(inbox.text(),/Game changed/);
 });
 test('repair prompt asks the service to repair after the game closes',()=>{
   const t=setup(),banner=new t.El('div');t.api.start({banner});
   t.requests[0].finish(200,snapshot({repair:{needed:true,problems:['The UE4SS loader (dwmapi.dll) is missing: dwmapi.dll']}}));
-  assert.match(banner.text(),/AimMod needs a repair\. The UE4SS loader/);
+  assert.match(banner.text(),/AimMod needs a repair\./);
   t.buttons(banner).find(b=>/Repair when I close/.test(b.textContent)).onclick();
   const post=t.requests.at(-1);assert.equal(post.method,'POST');assert.equal(post.url,'/cap/lifecycle/action');
   assert.equal(post.headers['X-AimMod-UI'],'1');assert.deepEqual(JSON.parse(post.body),{action:'repair'});
@@ -72,7 +78,7 @@ test('developer installs hide update controls and unknown builds warn',()=>{
   assert.doesNotMatch(banner.text(),/needs a repair/,'developer rebuilds do not raise the repair banner');
   t.api.renderSettings(box);t.requests.at(-1).finish(200,snapshot({update:{state:'unmanaged',message:'developer installer'},game:{tested:false,warning:'KovaaK’s was updated (Steam build 1).'}}));
   assert.equal(t.buttons(box).find(b=>b.attrs['aria-label']==='Automatic updates'),undefined);
-  assert.match(banner.text(),/KovaaK’s was updated/);
+  assert.doesNotMatch(banner.text(),/KovaaK’s was updated/);
 });
 test('malformed responses are ignored',()=>{
   const t=setup(),banner=new t.El('div');t.api.start({banner});t.requests[0].finish(200,{update:null});
@@ -101,4 +107,17 @@ test('failed saves use the warning notice, not the success style',()=>{
   t.api.renderSettings(box);t.requests.at(-1).finish(200,snapshot());
   t.buttons(box).find(b=>b.attrs['aria-label']==='Automatic updates').onclick();t.requests.at(-1).finish(500,{});
   assert.ok(box.all().some(c=>c.className==='notice warn'&&/Could not save/.test(c.textContent)));
+});
+
+test('failed dismissals preserve the item and expose a retry message',()=>{
+  const t=setup(),banner=new t.El('div'),inbox=new t.El('div');t.api.start({banner,inbox});
+  t.requests[0].finish(200,snapshot({update:{state:'ready',version:'2.0',applyOnClose:true}}));
+  t.buttons(inbox).find(b=>b.textContent==='Dismiss').onclick();t.requests.at(-1).finish(500,{});
+  assert.match(inbox.text(),/Update ready/);assert.match(banner.text(),/Could not dismiss/);
+});
+test('unchanged polls preserve inbox controls and keyboard focus',()=>{
+  const t=setup(),inbox=new t.El('div');t.api.start({inbox});
+  const data=snapshot({update:{state:'ready',version:'2.0',applyOnClose:true}});t.requests[0].finish(200,data);
+  const button=t.buttons(inbox)[0];t.api.visible(true);t.requests.at(-1).finish(200,data);
+  assert.equal(t.buttons(inbox)[0],button);
 });

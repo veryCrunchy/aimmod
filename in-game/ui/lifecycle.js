@@ -1,9 +1,9 @@
 (function(root){
   'use strict';
-  // Install lifecycle in the workspace: "update ready" toast and banner, the
+  // Install lifecycle in the workspace: header inbox, the
   // repair prompt, and the Updates section in Settings. All changes to game
   // files happen in the service after KovaaK's closes; this only asks for them.
-  var state=null,timer=null,options={},settingsBox=null,pending=null,announced={},busy=false,message='';
+  var state=null,timer=null,options={},settingsBox=null,pending=null,inboxOpen=false,inboxSignature=null,busy=false,message='';
   var doc=root.document;
   function node(tag,css,text){var el=doc.createElement(tag);el.className=css||'';if(text!==undefined)el.textContent=text;return el;}
   function clear(el){while(el&&el.firstChild)el.removeChild(el.firstChild);}
@@ -19,7 +19,6 @@
   function plain(notes){
     return String(notes||'').replace(/\r/g,'').replace(/^#{1,6}\s*/gm,'').replace(/\*\*|__/g,'').replace(/\[([^\]]+)\]\([^)]*\)/g,'$1').replace(/^\s*[-*]\s+/gm,'- ').replace(/\n{3,}/g,'\n\n').trim();
   }
-  function short(text,limit){return text.length>limit?text.slice(0,limit-1).replace(/\s+\S*$/,'')+'…':text;}
   function updateText(u){
     switch(u.state){
       case 'ready':return u.applyOnClose?'AimMod '+u.version+' is ready. It installs when you close KovaaK’s.':'AimMod '+u.version+' is downloaded. Choose “Install when I close KovaaK’s” to use it.';
@@ -36,33 +35,46 @@
   function save(patch){if(busy)return;busy=true;render();send('POST','/lifecycle/settings',patch,function(ok,data){busy=false;if(ok)state=data;message=ok?'Saved.':'Could not save your settings. Please try again.';render();});}
   function button(label,primary,handler){var b=node('button','button'+(primary?' primary':''),label);b.type='button';b.disabled=busy;b.onclick=handler;return b;}
 
-  function showToast(s){
-    var u=s.update,key=u.version;
-    if(u.state!=='ready'||!key||announced[key])return;announced[key]=true;
-    var box=node('div','lifecycle-toast');box.setAttribute('role','status');
-    box.appendChild(node('strong','','Update ready'));
-    box.appendChild(node('p','','AimMod '+u.version+(u.applyOnClose?' applies when you close KovaaK’s.':' is downloaded.')));
-    var notes=plain(u.notes);if(notes)box.appendChild(node('p','lifecycle-notes',short(notes,320)));
-    var row=node('div','lifecycle-actions');
-    row.appendChild(button('Details',true,function(){close();if(options.openSettings)options.openSettings();}));
-    row.appendChild(button('Dismiss',false,close));box.appendChild(row);
-    function close(){if(box.parentNode)box.parentNode.removeChild(box);}
-    doc.body.appendChild(box);root.setTimeout(close,15000);
+  function dismiss(key){
+    if(key==='result'){act('dismiss');return;}
+    if(busy)return;busy=true;
+    send('POST','/lifecycle/dismiss',{key:key},function(ok,data){busy=false;if(ok){state=data;message='';}else message='Could not dismiss the notification. Please try again.';render();});
   }
+  function openInbox(on){inboxOpen=on;if(options.inbox)options.inbox.style.display=on?'block':'none';if(options.trigger)options.trigger.setAttribute('aria-expanded',String(on));}
   function renderBanner(){
     var el=options.banner;if(!el)return;clear(el);el.style.display='none';if(!state)return;
-    var s=state,line=null;
-    function add(text,css){line=node('div','lifecycle-banner '+(css||''));line.appendChild(node('span','',text));el.appendChild(line);el.style.display='block';return line;}
-    if(s.last){var r=add(s.last.message,s.last.ok?'':'warn');r.appendChild(button('OK',false,function(){act('dismiss');}));}
-    // Developer installs (Install-AimModCore.ps1) change files on purpose: Settings only.
-    if(s.repair.interrupted)add('An AimMod install was interrupted. It is undone when you close KovaaK’s.','warn');
-    else if(s.repair.needed&&s.installed.managed){
-      var p=add(s.repair.requested?'Repair scheduled: AimMod repairs itself when you close KovaaK’s.':'AimMod needs a repair. '+(s.repair.problems[0]||''),'warn');
-      if(s.repair.requested)p.appendChild(button('Cancel repair',false,function(){act('cancel-repair');}));
-      else if(s.repair.available)p.appendChild(button('Repair when I close KovaaK’s',true,function(){act('repair');}));
+    var s=state,r=s.repair,line;
+    function add(text){line=node('div','lifecycle-banner warn');line.setAttribute('role','status');line.appendChild(node('span','',text));el.appendChild(line);el.style.display='block';}
+    if(r.interrupted)add('An install was interrupted. Close KovaaK’s to restore AimMod.');
+    else if(r.needed&&s.installed.managed){
+      add(r.requested?'Repair scheduled: close KovaaK’s to finish.':'AimMod needs a repair. Close KovaaK’s after scheduling it.');
+      if(r.requested)line.appendChild(button('Cancel repair',false,function(){act('cancel-repair');}));
+      else if(r.available)line.appendChild(button('Repair when I close KovaaK’s',true,function(){act('repair');}));
+      else line.appendChild(button('Repair details',false,function(){if(options.openSettings)options.openSettings();}));
     }
-    if(s.update.state==='ready'){var b=add('Update ready: AimMod '+s.update.version+(s.update.applyOnClose?' applies when you close KovaaK’s.':' is downloaded.'));b.appendChild(button('What’s new',false,function(){if(options.openSettings)options.openSettings();}));}
-    if(s.game.warning)add(s.game.warning,'warn');
+    if(message&&message!=='Saved.'){if(line)line.appendChild(node('span','',message));else add(message);}
+  }
+  function renderInbox(){
+    var box=options.inbox;if(!box)return;var signature=JSON.stringify(state?[state.last,state.update.state,state.update.version,state.update.applyOnClose,state.game,state.dismissedNotices]:null);if(signature===inboxSignature)return;inboxSignature=signature;clear(box);
+    box.appendChild(node('h2','inbox-title','Notifications'));
+    var count=0;
+    function item(key,text,details){
+      if(state&&state.dismissedNotices&&state.dismissedNotices.indexOf(key)>=0)return;count++;
+      var row=node('div','inbox-item');row.appendChild(node('p','',text));
+      var actions=node('div','actions');
+      if(details)actions.appendChild(button('What’s new',false,function(){openInbox(false);if(options.openSettings)options.openSettings();}));
+      actions.appendChild(button('Dismiss',false,function(){dismiss(key);if(options.trigger&&options.trigger.focus)options.trigger.focus();}));
+      row.appendChild(actions);box.appendChild(row);
+    }
+    if(state){
+      var s=state,u=s.update;
+      if(s.last)item('result',s.last.message,false);
+      if(u.state==='ready')item('update:'+u.version,'Update ready: '+u.version+(u.applyOnClose?'. Restart KovaaK’s to apply.':'. Choose when to install in Settings.'),true);
+      if(s.game.warning)item('game:'+s.game.steamBuildId,s.game.warning,false);
+    }
+    if(!count)box.appendChild(node('p','inbox-empty',state?'You’re all caught up.':'Checking notifications…'));
+    if(options.trigger){options.trigger.textContent='Inbox'+(count?' ('+count+')':'');options.trigger.setAttribute('aria-label','Notifications, '+count+' unread');}
+    openInbox(inboxOpen);
   }
   function renderSettings(){
     var c=settingsBox;if(!c)return;
@@ -96,23 +108,23 @@
     if(s.rollback.available)row('Previous version','AimMod '+s.rollback.version+' is kept. To go back, close KovaaK’s and run Repair-AimMod.cmd -Rollback.',null);
     if(s.game.steamBuildId)row('Game build',s.game.tested?'KovaaK’s '+s.game.testedVersion+' (Steam build '+s.game.steamBuildId+'), tested with this AimMod release.':(s.game.warning||'Steam build '+s.game.steamBuildId+'.'),null);
   }
-  function render(){renderBanner();renderSettings();}
+  function render(){renderBanner();renderInbox();renderSettings();}
   function load(){
     if(pending)return;
-    pending=send('GET','/lifecycle',null,function(ok,data){pending=null;if(!ok)return;state=data;render();showToast(state);});
+    pending=send('GET','/lifecycle',null,function(ok,data){pending=null;if(!ok)return;state=data;render();});
   }
   function style(){
     if(doc.getElementById('lifecycle-style'))return;var css=node('style','');css.id='lifecycle-style';
     css.textContent='.lifecycle-banner{display:flex;align-items:center;padding:12px 16px;margin:0 0 12px;border:1px solid #2c6b52;border-left:3px solid #27e4a1;border-radius:6px;background:#173b2f;color:#dcebe3;font-size:13px}.lifecycle-banner.warn{border-color:#6b5426;border-left-color:#f0b45a;background:#3a2f17;color:#f5e6c4}.lifecycle-banner>span{flex:1;min-width:0;line-height:1.6}.lifecycle-banner>.button{margin-left:12px;flex-shrink:0}'+
-      '.lifecycle-toast{position:absolute;right:30px;bottom:80px;z-index:30;max-width:420px;padding:18px 20px;border:1px solid #2c6b52;border-top:2px solid #27e4a1;border-radius:8px;background:#151f1c;color:#eef5f1;font-size:13px}.lifecycle-toast strong{display:block;font-size:15px;margin-bottom:6px}.lifecycle-toast p{margin:0 0 10px;line-height:1.6;color:#a7bab0}'+
       '.lifecycle-notes{white-space:pre-wrap;color:#a7bab0;font-size:12px;line-height:1.6;max-height:260px;overflow-y:auto}.lifecycle-actions{display:flex;flex-wrap:wrap;margin-top:14px}.lifecycle-actions>.button{margin:0 8px 0 0}.lifecycle-actions>.button+.button{margin-left:0}.lifecycle-channels{margin:0}.lifecycle-channels>.button+.button{margin-left:0}.lifecycle-switch{display:flex;flex-direction:row;align-items:center;flex-shrink:0}.lifecycle-heading{font-size:14px;font-weight:500;margin:20px 0 8px}';
     (doc.head||doc.body).appendChild(css);
   }
   root.AimModLifecycle={
-    start:function(opts){options=opts||{};style();load();if(timer)root.clearInterval(timer);timer=root.setInterval(load,30000);},
-    visible:function(on){if(timer){root.clearInterval(timer);timer=null;}if(on){load();timer=root.setInterval(load,30000);}else if(pending){pending.abort();pending=null;}},
+    start:function(opts){options=opts||{};if(options.trigger){options.trigger.onclick=function(){openInbox(!inboxOpen);};}if(options.inbox){options.inbox.onkeydown=function(e){if(e.key==='Escape'||e.keyCode===27){openInbox(false);if(options.trigger)options.trigger.focus();e.stopPropagation();}};}style();renderInbox();load();if(timer)root.clearInterval(timer);timer=root.setInterval(load,30000);},
+    visible:function(on){if(timer){root.clearInterval(timer);timer=null;}if(on){load();timer=root.setInterval(load,30000);}else {openInbox(false);if(pending){pending.abort();pending=null;}}},
     renderSettings:function(container){settingsBox=container;message='';renderSettings();load();},
     leaveSettings:function(){settingsBox=null;},
+    closeInbox:function(){openInbox(false);},
     _plain:plain
   };
 })(window);

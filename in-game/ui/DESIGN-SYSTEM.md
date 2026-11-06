@@ -29,3 +29,11 @@ All interactive controls receive a visible mint focus ring. Use native buttons f
 The shell owns navigation, page heading, account chip, scenario context and global notifications. Pages own contextual actions within their toolbar. Keep existing IDs and class contracts intact.
 
 Use ES5 functions and XMLHttpRequest. Layout uses flex and explicit margins; avoid grid, custom properties, calculated dimensions and sticky positioning. Keep assets within the existing serving path. Run node --test from this directory before handing off changes.
+
+## Shell contracts
+
+Keep page-title, scenario-contextbar, account-shortcut, lifecycle-banner and replay-status IDs. The account button contains account-avatar and account-label. The header inbox uses notice-trigger and notice-inbox. Its count covers undismissed information; repairs remain visible in lifecycle-banner. Recording uses recording-status as a quiet text line.
+
+Lifecycle GET supplies dismissedNotices. POST lifecycle/dismiss accepts a single key, update:<version> or game:<build>; the service persists it independently of the browser port. Existing lifecycle/action dismiss handles completed installation results. Repair prompts cannot be dismissed. Release notes and install controls remain in Settings. A failed dismissal keeps the item visible and offers a retry message.
+
+Navigation keeps native Tab/Enter behavior and supports Up/Down/Home/End focus movement. Escape closes the inbox before handling deeper page navigation. At 720px height the navigation compacts to 30px rows; the footer and page body remain independently reachable.
