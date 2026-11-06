@@ -15,6 +15,11 @@ namespace csgear_checks
 
     inline void RoundLines()
     {
+        auto drop = ParseRoundState("AIMMOD_ROUND_1\t1\nmatch\tA\ndrop\t1\tawp\t10\t20\t30\n");
+        CHECK(drop && drop->drops.size() == 1 && drop->drops[0].weapon == "awp" && drop->drops[0].z == 30, "weapon drops cross the round file");
+        CHECK(!ParseRoundState("AIMMOD_ROUND_1\t1\nmatch\tA\ndrop\t1\tunknown\t0\t0\t0\n"), "unknown dropped weapons are refused");
+        CHECK(!ParseRoundState("AIMMOD_ROUND_1\t1\nmatch\tA\ndrop\t1\tawp\t0\t0\t0\ndrop\t1\tusp\t0\t0\t0\n"), "duplicate drop identities are refused");
+        CHECK(DropModel("awp").size() > DropModel("glock").size() && DropModel("defuse-kit").size() == 2, "weapon classes and kits have distinct procedural shapes");
         auto r = ParseRoundState("AIMMOD_ROUND_1\t4\nmatch\tAimMod Match - CS - 0a1b2c3d\nloadout\tAimMod CS AK-47\tAimMod CS Glock-18\t100\t1\t0\tAimMod CS Knife\tAimMod CS C4\n"
                                  "bomb\tplanted\t-1200.5\t300\t64\t1790000040000\t1\n");
         CHECK(r && r->loadout && r->loadout->knife == "AimMod CS Knife" && r->loadout->bomb == "AimMod CS C4" && r->bomb && r->bomb->state == "planted" &&

@@ -117,6 +117,22 @@ namespace aimmod::cs
         return parts;
     }
 
+    std::vector<Part> DropModel(const std::string& weapon)
+    {
+        if (weapon == "defuse-kit") return {{Cube, {0,0,3}, {18,12,6}, {0,0,0}, {0.1,0.35,0.5}, false}, {Cube, {0,0,6.5}, {8,3,1}, {0,0,0}, {0.7,0.7,0.7}, false}};
+        const bool pistol = weapon == "glock" || weapon == "usp" || weapon == "deagle";
+        const bool smg = weapon == "mac10" || weapon == "mp9";
+        const bool sniper = weapon == "awp";
+        const double length = pistol ? 22 : smg ? 40 : sniper ? 100 : 75;
+        std::vector<Part> parts = {
+            {Cube, {0,0,3}, {length * 0.5,6,6}, {0,0,0}, {0.14,0.16,0.18}, false},
+            {Cube, {length * 0.35,0,3}, {length * 0.3,2,2}, {0,0,0}, {0.3,0.32,0.34}, false},
+            {Cube, {-length * 0.15,6,3}, {6,12,5}, {0,0,0}, {0.08,0.08,0.09}, false}};
+        if (!pistol) parts.push_back({Cube, {-length * 0.4,0,3}, {length * 0.3,8,5}, {0,0,0}, {0.22,0.25,0.16}, false});
+        if (sniper) parts.push_back({Cube, {0,-6,5}, {25,4,4}, {0,0,0}, {0.05,0.05,0.06}, false});
+        return parts;
+    }
+
     Hold InHand(int slot)
     {
         // Low on the right, pointing ahead (knife), held out flat in front (bomb), or a grenade in the palm.

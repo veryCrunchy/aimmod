@@ -78,6 +78,8 @@ sealed partial class MultiplayerService
         var settings = Current?.Settings;
         yield return CsFeel.Line(match.Id, settings?.DynamicCrosshair ?? true, settings?.AdsZoom ?? AdsZooms.Cs, settings?.AdsSensitivity ?? 1);
         if (CsBombLine(cs.Bomb, HostOffset()) is { } bomb) yield return bomb;
+        foreach (var d in cs.Drops ?? [])
+            yield return FormattableString.Invariant($"drop\t{d.Id}\t{d.Weapon}\t{d.X}\t{d.Y}\t{d.Z}");
     }
 
     internal static string CsLoadoutLine(CsPlayerView me, bool carrier)
@@ -278,8 +280,10 @@ sealed partial class MultiplayerService
         }
         string? notice = cs.Events.LastOrDefault(e => e.Kind is "halftime" or "overtime-half") is { } half && hostNow - half.T < 8000
             ? (half.Kind == "halftime" ? "Halftime · Switching sides" : "Overtime · Switching sides") : null;
-        var feed = cs.Events.Where(e => e.Kind == "kill" && hostNow - e.T < 7000).TakeLast(5).Select(e =>
+        var feed = cs.Events.Where(e => (e.Kind is "kill" or "weapon-dropped" or "weapon-picked") && hostNow - e.T < 7000).TakeLast(5).Select(e =>
         {
+            if (e.Kind != "kill") return new CsFeedLine(e.Id, Name(e.Member), "", (e.Kind == "weapon-picked" ? "picked up " : "dropped ") +
+                (CsRules.Find(e.Text)?.Label ?? "Defuse kit"), false, e.Member == SelfId ? "killer" : null, cs.Players.FirstOrDefault(p => p.Member == e.Member)?.Team ?? 0);
             var parts = (e.Text ?? "").Split('\t');
             var killer = parts.Length > 0 ? parts[0] : null;
             var weapon = parts.Length > 1 ? CsRules.FindAny(parts[1])?.Label ?? "" : "";

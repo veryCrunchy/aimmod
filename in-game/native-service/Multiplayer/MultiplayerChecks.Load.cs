@@ -312,7 +312,7 @@ static partial class MultiplayerChecks
         t = CsRules.FreezeMs + 10; round.Tick(t);
         var holder = round.View().Bomb.Carrier!;
         var mate = ids.First(id => id.StartsWith('t') && id != holder);
-        Check(round.Drop(mate, t) == "no-bomb" && round.Drop("c1", t) == "no-bomb", "Only the carrier can drop the bomb");
+        Check(round.Drop(mate, t) == "no-track" && round.Drop("c1", t) == "no-track" && round.View().Bomb.Carrier == holder, "A weapon drop needs a pose and leaves another player's bomb alone");
         At(holder, 0, 0, 0);
         Check(round.Drop(holder, t + 60) is null && round.View().Bomb is { State: "dropped", Carrier: null, Position: [70, 0, 160] }, "The carrier drops the bomb 70 cm in front of them");
         t += 200; At(holder, 70, 0, 0); round.Tick(t + 60);

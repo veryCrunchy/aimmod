@@ -94,6 +94,10 @@ namespace aimmod
         std::optional<double> m_knifeShots;
         bool m_stabRequested{}, m_posed{};
 
+        void WorldDrops(game::UObject* character, const std::vector<RoundState::Drop>& drops, double now = 0);
+        std::vector<std::pair<std::int64_t, RC::Unreal::FWeakObjectPtr>> m_drops;
+        double m_nextDropTry{};
+
         // The bomb in the world.
         RC::Unreal::FWeakObjectPtr m_bombActor;
         std::vector<RC::Unreal::FWeakObjectPtr> m_bombLights;

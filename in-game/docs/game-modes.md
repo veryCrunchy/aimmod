@@ -2696,3 +2696,9 @@ message types.
 8. **Developer asks (optional):** native pickup support, a grapple ability
    type, or guidance on `UpdateClientLocAndRot` and the Duels leftovers.
    None of these block anything.
+
+### Weapon drops and CS statistics
+
+G drops the held primary or pistol. While holding the bomb, G drops the bomb. A death drops the primary (or the pistol when there is no primary), the existing grenade drop, and the defuse kit. Walk over a weapon to fill an empty slot; press E within 80 cm to swap an occupied slot. A swap leaves the previous weapon on the ground. Only Counter-Terrorists pick up kits. Bots automatically exchange a nearby weapon for a more expensive weapon in the same slot and retain the AWP over cheaper primaries. Drops clear at round end. The host owns item identities and pickup decisions; clients draw AimMod procedural models on the traced floor. Ammunition is not part of the service inventory.
+
+The CS scoreboard includes ADR (enemy health damage divided by completed rounds, with a minimum divisor of one), HS% (headshot kills as a share of kills), and MVPs. A defuse awards the round MVP to the defuser; otherwise the winning player with most kills receives it, with member order breaking ties. A round without a winning-side kill or defuse has no MVP.

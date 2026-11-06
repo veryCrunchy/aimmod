@@ -83,6 +83,8 @@ namespace aimmod
             double adsSensitivity{1};
         };
         std::optional<Feel> feel;
+        struct Drop { std::int64_t id{}; std::string weapon; double x{}, y{}, z{}; };
+        std::vector<Drop> drops;
     };
     std::optional<RoundState> ParseRoundState(std::string_view text);
 

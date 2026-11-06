@@ -183,6 +183,7 @@ namespace aimmod
         HandModels(character, hand);
         KnifeAttacks(now, player, character, hand);
         WorldBomb(now, player, character, round.bomb);
+        WorldDrops(character, round.drops, now);
     }
 
     // A slash when the knife's own shot counter moves (left mouse, KovaaK's fire), a stab on the right
@@ -401,6 +402,35 @@ namespace aimmod
         return z;
     }
 
+    void CsGear::WorldDrops(UObject* character, const std::vector<RoundState::Drop>& drops, double now)
+    {
+        for (auto it = m_drops.begin(); it != m_drops.end();)
+        {
+            const bool present = std::any_of(drops.begin(), drops.end(), [&](const auto& d) { return d.id == it->first; });
+            if (!present || !it->second.Get() || !Alive(it->second.Get()))
+            {
+                if (auto* actor = it->second.Get(); actor && Alive(actor)) Call(actor, STR("/Script/Engine.Actor:K2_DestroyActor"));
+                it = m_drops.erase(it);
+            }
+            else ++it;
+        }
+        if (drops.empty()) { m_nextDropTry = 0; return; }
+        if (now < m_nextDropTry) return;
+        m_nextDropTry = now + 0.5;
+        for (const auto& d : drops)
+        {
+            if (std::any_of(m_drops.begin(), m_drops.end(), [&](const auto& p) { return p.first == d.id; })) continue;
+            const auto floor = FloorBelow(character, d.x, d.y, d.z + 120, d.z - 500);
+            if (!floor) continue;
+            auto* actor = SpawnHolder(character, d.x, d.y, *floor + 0.5);
+            if (!actor) continue;
+            auto* root = GetObject(actor, STR("StaticMeshComponent"));
+            if (!root || !BuildModel(actor, root, cs::DropModel(d.weapon), nullptr))
+            { Call(actor, STR("/Script/Engine.Actor:K2_DestroyActor")); continue; }
+            m_drops.emplace_back(d.id, FWeakObjectPtr(actor));
+        }
+    }
+
     void CsGear::WorldBomb(double now, UObject* player, UObject* character, const std::optional<RoundState::Bomb>& bomb)
     {
         UObject* actor = m_bombActor.Get();
@@ -493,6 +523,7 @@ namespace aimmod
         if (UObject* b = m_handBomb.Get(); b && Alive(b)) SetVisible(b, false, true);
         if (UObject* a = m_bombActor.Get(); a && Alive(a)) Call(a, STR("/Script/Engine.Actor:K2_DestroyActor"));
         const bool had = m_haveLoadout || m_bombActor.Get();
+        WorldDrops(nullptr, {});
         m_bombActor = FWeakObjectPtr();
         m_bombLights.clear();
         m_bombKey.clear();
