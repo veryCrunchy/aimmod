@@ -155,7 +155,8 @@ sealed class CombatMatch
         public double EyeAbove = TrackingRound.DefaultEyeAboveCentre; public double? BodyRadius, BodyHalf;
     }
     readonly Dictionary<string, Player> players = new();
-    readonly List<CombatEvent> events = [];
+    const int EventLimit = 512;
+    readonly Queue<CombatEvent> events = new();
     readonly List<(string From, HitClaim Claim, long Received, int? Rtt)> pending = [];
     readonly List<ClaimVerdict> verdicts = [];
     long eventId;
@@ -239,7 +240,7 @@ sealed class CombatMatch
     }
 
     public IReadOnlyList<CombatEvent> EventsSince(long id) => events.Where(e => e.Id > id).ToArray();
-    public long LatestEvent => events.Count > 0 ? events[^1].Id : 0;
+    public long LatestEvent => eventId;
     int TeamFrags(int team) => players.Values.Where(p => p.Team == team).Sum(p => p.Frags);
     public int? WinnerTeam => !Teams ? null : TeamFrags(1) >= FragLimit ? 1 : TeamFrags(2) >= FragLimit ? 2 : null;
     // The player (FFA) or the top player of the team (TDM) that reached the frag limit.
@@ -253,14 +254,14 @@ sealed class CombatMatch
 
     // Every player's own camera track (same batches as the tracking duel), and where its game drew
     // the others (tagged drawn targets), from which the host measures that player's view delay.
-    public void Track(string from, TrackBatch batch)
+    public void Track(string from, TrackBatch batch, long? hostNow = null)
     {
         if (!players.TryGetValue(from, out var p)) return;
         if (batch.Hull is [var eye, var radius, var half] && eye is >= 20 and <= 400 && radius is >= 10 and <= 200 && half >= radius && half <= 400)
         { p.EyeAbove = eye; p.BodyRadius = radius; p.BodyHalf = half; }
         foreach (var s in batch.Samples)
         {
-            if (s.T < Start - 1000 || s.T > End + 1000) continue;
+            if (s.T < Start - 1000 || s.T > End + 1000 || hostNow is { } now && (s.T < now - 1000 || s.T > now + 250)) continue;
             if (p.Track.Count > 0 && s.T <= p.Track[^1].T) continue;
             p.Track.Add(s);
         }
@@ -272,6 +273,7 @@ sealed class CombatMatch
         }
         foreach (var v in batch.Seen)
         {
+            if (hostNow is { } seenNow && (v.T < seenNow - 1000 || v.T > seenNow + 250)) continue;
             if (v.Member is not { } member || member == from || !players.ContainsKey(member)) continue;
             if (!p.Drawn.TryGetValue(member, out var rows)) p.Drawn[member] = rows = [];
             if (rows.Count > 0 && v.T <= rows[^1].T) continue;
@@ -314,8 +316,11 @@ sealed class CombatMatch
         return off < lo ? lo - off : off > hi ? off - hi : 0;
     }
 
-    void Emit(string kind, long t, string member, string? attacker, double amount, bool head, double health, double? attackerHealth, double[]? spawn = null, double[]? dir = null) =>
-        events.Add(new CombatEvent(++eventId, kind, t, member, attacker, Math.Round(amount, 1), head, Math.Round(health, 1), attackerHealth is { } a ? Math.Round(a, 1) : null, spawn, dir));
+    void Emit(string kind, long t, string member, string? attacker, double amount, bool head, double health, double? attackerHealth, double[]? spawn = null, double[]? dir = null)
+    {
+        events.Enqueue(new CombatEvent(++eventId, kind, t, member, attacker, Math.Round(amount, 1), head, Math.Round(health, 1), attackerHealth is { } a ? Math.Round(a, 1) : null, spawn, dir));
+        while (events.Count > EventLimit) events.Dequeue();
+    }
 
     // The spawn for a respawning player: allowed for its team, farthest from the
     // nearest living opponent (ties: the first listed). Null when the arena has none.
@@ -334,6 +339,10 @@ sealed class CombatMatch
     // Decided claims since the last call (accepted, rejected and resends), oldest first.
     public IReadOnlyList<ClaimVerdict> TakeVerdicts() { var list = verdicts.ToArray(); verdicts.Clear(); return list; }
     public int PendingClaims => pending.Count;
+    public Func<string, HitClaim, double[], double[], bool?>? TraceShot { get; set; }
+    public Action<long>? BeforeDamage { get; set; }
+    public long DamageTime { get; private set; }
+
     // The last decision's detail (what the check measured), for tests and logs.
     public string? LastDetail { get; private set; }
     // Per shooter: claims, accepted, rejected by reason, waiting, resends.
@@ -359,6 +368,7 @@ sealed class CombatMatch
         // wait for it, at most DeferMs.
         if ((shooter.Track.Count == 0 || shooter.Track[^1].T < c.T) && c.T <= now + CombatRules.FutureMs && c.T >= now - CombatRules.ClaimWindowMs)
         {
+            if (pending.Count >= 128) return Decide(shooter, from, c, now, now, "busy", null);
             pending.Add((from, c, now, shooterRtt));
             shooter.Pending++;
             return "pending";
@@ -369,13 +379,12 @@ sealed class CombatMatch
     // Claims waiting for their shooter's track: decided once it covers the shot, or after DeferMs.
     public void ProcessPending(long now)
     {
-        for (var i = 0; i < pending.Count;)
+        var ready = pending.ToArray(); pending.Clear();
+        foreach (var (from, c, received, rtt) in ready)
         {
-            var (from, c, received, rtt) = pending[i];
-            if (!players.TryGetValue(from, out var shooter)) { pending.RemoveAt(i); continue; }
+            if (!players.TryGetValue(from, out var shooter)) continue;
             var covered = shooter.Track.Count > 0 && shooter.Track[^1].T >= c.T;
-            if (!covered && now - received < CombatRules.DeferMs) { i++; continue; }
-            pending.RemoveAt(i);
+            if (!covered && now - received < CombatRules.DeferMs) { pending.Add((from, c, received, rtt)); continue; }
             shooter.Pending = Math.Max(0, shooter.Pending - 1);
             Evaluate(shooter, c, now, received, rtt);
         }
@@ -557,6 +566,19 @@ sealed class CombatMatch
         // A knife reaches only so far.
         if (weapon.Range > 0 && !OnRay(weapon.RayLength, hit.X, hit.Y, hit.Z, hit.Radius, hit.Half)) return Reject("range", F(hit.Along) + " cm, reach " + F(weapon.RayLength));
         if (c.T < victim.ProtectedUntil) return Reject("spawn-protected", (victim.ProtectedUntil - c.T).ToString(CultureInfo.InvariantCulture) + " ms of protection left");
+        if (TraceShot is { } trace)
+        {
+            var clear = trace(shooter.Id, c, [eye.X, eye.Y, eye.Z], [c.X + dx * hit.Along, c.Y + dy * hit.Along, c.Z + dz * hit.Along]);
+            if (clear == false) return Reject("wall");
+            if (clear is null)
+            {
+                if (now - received >= 500) return Reject("trace-timeout");
+                if (pending.Count >= 128) return Reject("busy");
+                pending.Add((shooter.Id, c, received, shooterRtt)); shooter.Pending++;
+                return "pending";
+            }
+        }
+        BeforeDamage?.Invoke(c.T);
         var followUp = weapon.FollowUpDamage > 0 && shooter.LastWeapon == weapon.Name && shooter.LastShot != long.MinValue && c.T - shooter.LastShot >= 0 && c.T - shooter.LastShot <= weapon.FollowUpMs;
         shooter.LastShot = Math.Max(shooter.LastShot, c.T);
         shooter.LastWeapon = weapon.Name;
@@ -569,19 +591,9 @@ sealed class CombatMatch
     }
     static double Dist(double ax, double ay, double az, double bx, double by, double bz) => Math.Sqrt((ax - bx) * (ax - bx) + (ay - by) * (ay - by) + (az - bz) * (az - bz));
 
-    // The head zone, the same rule as AimModCore's: where the ray enters the hull (or, for a game hit
-    // just beside it, passes nearest) is at least 60 % of the half height above the centre. AimModCore's
-    // own head flag allows 4 cm for rounding, and the game's own damage (its headshot multiplier) counts
-    // anywhere in the upper body, where KovaaK's head hitbox may reach lower than AimMod's zone.
-    static bool IsHead(HitClaim c, CombatWeapon weapon, double cx, double cy, double cz, double radius, double half, double dx, double dy, double dz)
-    {
-        if (weapon.HeadMultiplier <= 1) return false;
-        var z = TrackGeometry.Pass(c.X, c.Y, c.Z, dx, dy, dz, cx, cy, cz, radius, half).Z;
-        var zone = cz + half * CombatRules.HeadZoneFraction;
-        if (z >= zone - (c.Head ? CombatRules.RayToleranceCm : 0)) return true;
-        var gameHead = c.GameHit && c.GameDamage is { } gd && gd >= weapon.Damage * (1 + (weapon.HeadMultiplier - 1) * 0.5);
-        return gameHead && z >= cz + half * 0.2;
-    }
+    // Only the validated ray and hull determine the head zone. Reported damage is diagnostic.
+    static bool IsHead(HitClaim c, CombatWeapon weapon, double cx, double cy, double cz, double radius, double half, double dx, double dy, double dz) =>
+        weapon.HeadMultiplier > 1 && TrackGeometry.Pass(c.X, c.Y, c.Z, dx, dy, dz, cx, cy, cz, radius, half).Z >= cz + half * CombatRules.HeadZoneFraction;
 
     // A host-run bot's hit (the bot logic decided it lands, after a sight trace): the same rules
     // as a claim for who can be hit and how hard, without a camera ray to check.
@@ -598,6 +610,7 @@ sealed class CombatMatch
         var teamHit = shooter.Team != 0 && victim.Team == shooter.Team;
         if (teamHit && TeamDamage <= 0) return "teammate";
         if (now < victim.ProtectedUntil) return "spawn-protected";
+        BeforeDamage?.Invoke(now);
         shooter.Claims++; shooter.Accepted++;
         shooter.LastShot = now;
         Accepted(shooter, interval, now);
@@ -614,6 +627,7 @@ sealed class CombatMatch
         if (!players.TryGetValue(from, out var shooter) || !players.TryGetValue(target, out var victim)) return "not-playing";
         if (!victim.Alive) return "dead";
         if (damage <= 0 || !double.IsFinite(damage)) return "none";
+        BeforeDamage?.Invoke(now);
         var own = shooter == victim;
         var teamHit = !own && shooter.Team != 0 && victim.Team == shooter.Team;
         if (teamHit && TeamDamage <= 0) return "teammate";
@@ -624,7 +638,7 @@ sealed class CombatMatch
         {
             victim.Health = 0; victim.Alive = false; victim.Deaths++; victim.DiedAt = now; victim.RespawnAt = Respawns ? now + CombatRules.RespawnMs(Mode) : null;
             if (own || teamHit) shooter.Frags = Math.Max(0, shooter.Frags - 1); else shooter.Frags++;
-            OnKill?.Invoke(victim.Id, shooter.Id, weapon, false);
+            DamageTime = now; OnKill?.Invoke(victim.Id, shooter.Id, weapon, false);
             Emit("death", now, victim.Id, shooter.Id, dealt, false, 0, shooter.Health);
         }
         return null;
@@ -648,7 +662,7 @@ sealed class CombatMatch
             victim.Health = 0; victim.Alive = false; victim.Deaths++; victim.DiedAt = t; victim.RespawnAt = Respawns ? now + CombatRules.RespawnMs(Mode) : null;
             // A team kill scores nothing (CS takes a kill away); the kill hook decides the rest.
             if (teamHit) shooter.Frags = Math.Max(0, shooter.Frags - 1); else shooter.Frags++;
-            OnKill?.Invoke(victim.Id, shooter.Id, weapon, head);
+            DamageTime = t; OnKill?.Invoke(victim.Id, shooter.Id, weapon, head);
             if (Mode == LobbyModes.Vampiric) shooter.Health = Math.Min(CombatRules.MaxHealth, shooter.Health + CombatRules.VampiricHealthOnKill);
             Emit("death", t, victim.Id, shooter.Id, damage, head, 0, shooter.Health);
         }

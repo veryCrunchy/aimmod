@@ -282,6 +282,7 @@ sealed partial class CsMatch
                 : slot == CsRules.StabSlot ? CsRules.Stab : CsRules.InSlot(slot, p.Primary?.Id, p.Secondary?.Id, false)?.Combat,
             DamageModel = Damage,
             OnKill = Killed,
+            BeforeDamage = ResolveObjectives,
             // CS spread and movement inaccuracy: the weapon in that slot (the knife and grenades have none).
             SpreadFor = (id, slot) => !players.TryGetValue(id, out var p) || slot is CsRules.StabSlot ? null : CsFeel.ByProfile(CsRules.InSlot(slot, p.Primary?.Id, p.Secondary?.Id, false)?.Combat.Name),
         };
@@ -310,9 +311,20 @@ sealed partial class CsMatch
         return health;
     }
 
+    string? plantedBy; long plantedAt, plantRoundDeadline; int plantRewardPaid;
     void Killed(string victim, string killer, CombatWeapon weapon, bool head)
     {
-        var now = Combat.Position(victim)?.T ?? 0;
+        var now = Combat.DamageTime;
+        // A delayed validated kill at or before plant completion cancels that plant.
+        if (victim == plantedBy && now <= plantedAt && Phase == "planted")
+        {
+            Phase = "live"; PhaseEndsAt = plantRoundDeadline; bombState = "carried"; carrier = victim;
+            explodesAt = null; plantedThisRound = false; plantedBy = null;
+            defuser = null; defuseDoneAt = null;
+            if (players.TryGetValue(victim, out var planterPlayer)) Pay(planterPlayer, -plantRewardPaid, now, "plant-cancelled");
+            events.RemoveAll(e => e.Kind == "planted" && e.T == plantedAt);
+            Event("plant-cancelled", now, victim, "killed");
+        }
         if (players.TryGetValue(killer, out var k))
         {
             k.Kills++;
@@ -392,7 +404,7 @@ sealed partial class CsMatch
         carrier = carrier is { } last && ts.Any(t => t.Id == last) ? last
             : ts.Count > 0 ? ts[new Random(unchecked((int)(Combat.Start ^ Round * 7919L))).Next(ts.Count)].Id : null;
         dropper = null; dropperBlockedUntil = 0;
-        bombState = carrier is null ? "none" : "carried"; site = null; planter = null; defuser = null; bombAt = null; explodesAt = null; plantDoneAt = null; defuseDoneAt = null; plantedThisRound = false;
+        bombState = carrier is null ? "none" : "carried"; site = null; planter = null; defuser = null; bombAt = null; explodesAt = null; plantDoneAt = null; defuseDoneAt = null; plantedThisRound = false; plantedBy = null;
         Event("round", now, null, "Round " + Round);
     }
 
@@ -589,31 +601,8 @@ sealed partial class CsMatch
         if (Phase is "live" or "planted" or "end") Grenades.Tick(now);
         if (Phase is "live" or "planted")
         {
-            // Plant and defuse progress: the holder must stay alive and in place.
-            if (planter is { } pl && plantDoneAt is { } pd)
-            {
-                var at = Combat.Position(pl);
-                if (!Combat.Alive(pl) || at is null || plantFrom is not { } from || Math.Sqrt((at.X - from[0]) * (at.X - from[0]) + (at.Y - from[1]) * (at.Y - from[1])) > CsRules.PlantMoveCm) { planter = null; plantDoneAt = null; }
-                else if (now >= pd)
-                {
-                    Phase = "planted"; bombState = "planted"; carrier = null; bombAt = [at.X, at.Y, Centre(pl, at)]; explodesAt = now + CsRules.BombMs; PhaseEndsAt = explodesAt.Value; plantedThisRound = true;
-                    if (players.TryGetValue(pl, out var pp)) Pay(pp, CsRules.PlantReward, now, "plant");
-                    Event("planted", now, pl, site);
-                    planter = null; plantDoneAt = null;
-                }
-            }
-            if (defuser is { } df && defuseDoneAt is { } dd)
-            {
-                var at = Combat.Position(df);
-                if (!Combat.Alive(df) || at is null || bombAt is not { } b || Math.Sqrt((at.X - b[0]) * (at.X - b[0]) + (at.Y - b[1]) * (at.Y - b[1])) > CsRules.DefuseRadiusCm) { defuser = null; defuseDoneAt = null; }
-                else if (now >= dd)
-                {
-                    if (players.TryGetValue(df, out var dp)) Pay(dp, CsRules.DefuseReward, now, "defuse");
-                    bombState = "defused"; Event("defused", now, df, site);
-                    EndRound(now, TeamOf(CsRules.CT), "defuse");
-                    return;
-                }
-            }
+            ResolveObjectives(now);
+            if (Phase == "end") return;
             PickUp(now);
             PickUpGrenades();
             var tAlive = Side(CsRules.T).Count(p => Combat.Alive(p.Id)); var ctAlive = Side(CsRules.CT).Count(p => Combat.Alive(p.Id));
@@ -631,6 +620,41 @@ sealed partial class CsMatch
             }
         }
         else if (Phase == "end" && now >= PhaseEndsAt) NextRound(now);
+    }
+
+    void ResolveObjectives(long now)
+    {
+        if (Phase is not ("live" or "planted")) return;
+            // Plant and defuse progress: the holder must stay alive and in place.
+            if (planter is { } pl && plantDoneAt is { } pd)
+            {
+                var at = Combat.Position(pl);
+                if (!Combat.Alive(pl) || at is null || plantFrom is not { } from || Math.Sqrt((at.X - from[0]) * (at.X - from[0]) + (at.Y - from[1]) * (at.Y - from[1])) > CsRules.PlantMoveCm) { planter = null; plantDoneAt = null; }
+                else if (now >= pd && pd <= PhaseEndsAt)
+                {
+                    plantedBy = pl; plantedAt = pd; plantRoundDeadline = PhaseEndsAt;
+                    Phase = "planted"; bombState = "planted"; carrier = null; bombAt = [at.X, at.Y, Centre(pl, at)]; explodesAt = pd + CsRules.BombMs; PhaseEndsAt = explodesAt.Value; plantedThisRound = true;
+                    plantRewardPaid = 0;
+                    if (players.TryGetValue(pl, out var pp)) { var before = pp.Money; Pay(pp, CsRules.PlantReward, pd, "plant"); plantRewardPaid = pp.Money - before; }
+                    Event("planted", pd, pl, site);
+                    planter = null; plantDoneAt = null;
+                }
+            }
+            if (defuser is { } df && defuseDoneAt is { } dd)
+            {
+                var at = Combat.Position(df);
+                if (!Combat.Alive(df) || at is null || bombAt is not { } b || Math.Sqrt((at.X - b[0]) * (at.X - b[0]) + (at.Y - b[1]) * (at.Y - b[1])) > CsRules.DefuseRadiusCm) { defuser = null; defuseDoneAt = null; }
+                else if (now >= dd && dd < explodesAt)
+                {
+                    if (players.TryGetValue(df, out var dp)) Pay(dp, CsRules.DefuseReward, dd, "defuse");
+                    bombState = "defused"; Event("defused", dd, df, site);
+                    EndRound(dd, TeamOf(CsRules.CT), "defuse");
+                    return;
+                }
+            }
+        if (Phase == "planted" && explodesAt is { } explosion && now >= explosion)
+        { bombState = "exploded"; Event("exploded", explosion, null, site); EndRound(explosion, TeamOf(CsRules.T), "bomb"); }
+        else if (Phase == "live" && now >= PhaseEndsAt) EndRound(PhaseEndsAt, TeamOf(CsRules.CT), "time");
     }
 
     int TeamOf(string side) => SideOf(1) == side ? 1 : 2;

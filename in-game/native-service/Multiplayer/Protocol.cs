@@ -21,6 +21,8 @@ static class Protocol
         new("hello", true, "client>host", "{name, proto, app}: join request"),
         new("welcome", true, "host>client", "{member, snapshot}: accepted, with the full lobby"),
         new("reject", true, "host>client", "{code, message}: full, kicked, in-match, closed or version"),
+        new("state-part", true, "host>client", "{id, part, total, kind, data}: bounded snapshot fragments"),
+        new("chat", true, "host>client", "{lines}: bounded visible chat lines"),
         new("snapshot", true, "host>all", "{snapshot}: full lobby after a change, at most 4 per second"),
         new("command", true, "client>host", "{id, action, args}: ready, content, settings, kick, transfer, chat, role, start, next, end, rematch"),
         new("result", true, "host>client", "{id, ok, code, message}: outcome of a command"),

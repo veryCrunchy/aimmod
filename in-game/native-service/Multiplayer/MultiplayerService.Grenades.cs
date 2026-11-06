@@ -23,20 +23,32 @@ sealed partial class MultiplayerService
     void StepGrenades()
     {
         if (outputFolder is null || core is null) return;
-        core.WithCsGrenades(field =>
-        {
-            field.Trace ??= line => Console.Error.WriteLine("[grenades] " + line);
-            ReadGrenadePaths(field);
-            var paths = field.PathRequests; var los = field.LosRequests; var floors = field.FloorRequests;
-            var body = paths.Count + los.Count + floors.Count == 0 ? "" : GrenadeFiles.Sim(0, paths, los, floors);
-            var now = clock();
-            if (body == lastGrenadeSim && (body.Length == 0 || now - grenadeSimWrittenAt < 1000)) return;
-            lastGrenadeSim = body; grenadeSimWrittenAt = now;
-            try { AtomicFile.WriteText(Path.Combine(outputFolder, GrenadeSimFile), body.Length == 0 ? "AIMMOD_GRENADESIM_1\t" + ++grenadeSimSequence + "\n" : GrenadeFiles.Sim(++grenadeSimSequence, paths, los, floors)); }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
-        });
+        CsGrenadeField? field = null;
+        core.WithCsGrenades(value => field = value);
+        ReadGrenadePaths(field);
+        var now = clock();
+        foreach (var key in shotTraces.Where(x => now - x.Value.At > 2000).Select(x => x.Key).ToArray()) shotTraces.Remove(key);
+        var paths = field?.PathRequests ?? [];
+        var los = shotTraces.Values.Where(x => x.Clear is null).Select(x => new GrenadeLosRequest(x.Tag, x.From, x.To)).Concat(field?.LosRequests ?? []).ToArray();
+        var floors = field?.FloorRequests ?? [];
+        var body = GrenadeFiles.Sim(0, paths, los, floors);
+        if (body == lastGrenadeSim && now - grenadeSimWrittenAt < 1000) return;
+        lastGrenadeSim = body; grenadeSimWrittenAt = now;
+        try { AtomicFile.WriteText(Path.Combine(outputFolder, GrenadeSimFile), GrenadeFiles.Sim(++grenadeSimSequence, paths, los, floors)); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
     }
-    void ReadGrenadePaths(CsGrenadeField field)
+    sealed record ShotTrace(int Tag, long At, double[] From, double[] To, bool? Clear = null);
+    readonly Dictionary<string, ShotTrace> shotTraces = new();
+    int shotTraceTag = 1_000_000;
+    bool? TraceShot(string shooter, HitClaim claim, double[] from, double[] to)
+    {
+        var key = claim.MatchId + ":" + claim.Round + ":" + shooter + ":" + claim.Seq;
+        if (shotTraces.TryGetValue(key, out var trace)) return trace.Clear;
+        if (shotTraces.Count >= 128) return null;
+        shotTraces[key] = new(++shotTraceTag, clock(), from, to);
+        return null;
+    }
+    void ReadGrenadePaths(CsGrenadeField? field)
     {
         var path = Path.Combine(outputFolder!, GrenadePathsFile);
         try
@@ -46,9 +58,13 @@ sealed partial class MultiplayerService
             if (info.Length > 256 * 1024 || info.LastWriteTimeUtc.Ticks == grenadePathsStamp) return;
             grenadePathsStamp = info.LastWriteTimeUtc.Ticks;
             if (GrenadeFiles.Paths(File.ReadAllText(path), clock()) is not { } answer) return;
-            foreach (var (id, keys) in answer.Paths) field.SetPath(id, keys);
-            foreach (var (tag, clear) in answer.Los) field.AnswerLos(tag, clear);
-            foreach (var (tag, z) in answer.Floors) field.AnswerFloor(tag, z);
+            foreach (var (id, keys) in answer.Paths) field?.SetPath(id, keys);
+            foreach (var (tag, clear) in answer.Los)
+            {
+                if (tag < 1_000_000) field?.AnswerLos(tag, clear);
+                else foreach (var key in shotTraces.Where(x => x.Value.Tag == tag).Select(x => x.Key).ToArray()) shotTraces[key] = shotTraces[key] with { Clear = clear };
+            }
+            foreach (var (tag, z) in answer.Floors) field?.AnswerFloor(tag, z);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
     }

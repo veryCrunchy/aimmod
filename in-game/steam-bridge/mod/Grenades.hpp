@@ -38,7 +38,7 @@ namespace aimmod
         void FindPawns(double now);
         // One line trace by object type (the map's static and dynamic geometry, no pawns): the impact
         // point and the surface normal, or nullopt (no hit, or a trace that starts inside geometry).
-        std::optional<bridge::grenades::Hit> Trace(RC::Unreal::UObject* context, const bridge::grenades::Vec& a, const bridge::grenades::Vec& b);
+        std::optional<bridge::grenades::Hit> Trace(RC::Unreal::UObject* context, const bridge::grenades::Vec& a, const bridge::grenades::Vec& b, bool occlusion = false);
 
         bridge::LogFn m_log;
         std::wstring m_stateDir;
