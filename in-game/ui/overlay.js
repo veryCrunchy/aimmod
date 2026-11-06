@@ -13,6 +13,9 @@
   var surface=param('surface')==='game'?'game':param('surface')==='obs'||page==='scene'?'obs':'game';
   var sceneParam=param('id'),widgetParam=param('widget');
   var store=null,storeRevision=-1,feed=null,motion=null,images={},lastShown=false;
+  var stream=null,streamHealthy=false,animationTimer=null;
+  function animate(){animationTimer=null;if(!visible)return;var sc=scene(),needed=false;if(sc)for(var i=0;i<sc.widgets.length;i++)if(sc.widgets[i].visible&&sc.widgets[i].opts.animation&&sc.widgets[i].opts.animation!=='none')needed=true;if(needed)draw();animationTimer=root.setTimeout(animate,needed?50:1000);}
+  function connect(){if(surface!=='obs'||typeof root.EventSource!=='function'||stream)return;stream=new root.EventSource(base()+'/overlay-stream');stream.onmessage=function(e){try{feed=JSON.parse(e.data);streamHealthy=true;draw();}catch(ignore){streamHealthy=false;}};stream.onerror=function(){streamHealthy=false;};}
   function base(){var p=root.location.pathname;return p.slice(0,p.lastIndexOf('/'));}
   function get(path,timeout,done){
     var ticket=generation,x=new root.XMLHttpRequest(),finished=false;requests.push(x);x.open('GET',base()+'/'+path,true);x.timeout=timeout;
@@ -20,7 +23,7 @@
     x.onreadystatechange=function(){if(x.readyState!==4)return;if(x.status!==200){finish(false,null);return;}try{finish(true,JSON.parse(x.responseText));}catch(e){finish(false,null);}};
     x.onerror=x.ontimeout=function(){finish(false,null);};x.send(null);
   }
-  function scene(){if(!store)return null;var id=sceneParam||(surface==='game'?store.gameScene:store.obsScene);return M.find(store,id)||(sceneParam?null:store.scenes[0]);}
+  function scene(){if(!store)return null;var id=sceneParam||(surface==='game'?store.gameScene:store.obsScene);if(!sceneParam&&feed){var ctx=feed.live&&feed.live.replay?'replay':M.context(feed);for(var i=0;i<store.scenes.length;i++)if(store.scenes[i].auto===ctx){id=store.scenes[i].id;break;}}return M.find(store,id)||(sceneParam?null:store.scenes[0]);}
   function image(name){
     if(!name)return null;var key=String(name);if(images[key])return images[key];if(typeof root.Image!=='function')return null;
     var img=new root.Image();img.onload=function(){draw();};img.src=base()+'/overlay-crosshair?file='+encodeURIComponent(key);images[key]=img;return img;
@@ -50,13 +53,13 @@
       draw();schedule(liveShown()?100:500);motionLoop();
     });
   }
-  function schedule(delay){if(visible&&timer===null)timer=root.setTimeout(poll,delay);}
+  function schedule(delay){if(visible&&timer===null)timer=root.setTimeout(poll,streamHealthy?3000:delay);}
   function motionLoop(){
     if(motionTimer!==null||!visible)return;var n=needs();if(!n.path&&!n.input){motion=null;return;}
     motionTimer=root.setTimeout(function(){motionTimer=null;get('overlay-motion?surface='+surface+(n.path?'&path=1':'')+(n.input?'&input=1':''),1000,function(ok,data){motion=ok?data:null;draw();motionLoop();});},33);
   }
   function stop(){generation++;if(timer!==null){root.clearTimeout(timer);timer=null;}if(motionTimer!==null){root.clearTimeout(motionTimer);motionTimer=null;}for(var i=0;i<requests.length;i++)requests[i].abort();requests=[];}
-  function setVisible(value){visible=value!==false;stop();if(visible)poll();else hide();}
+  function setVisible(value){visible=value!==false;stop();if(animationTimer!==null){root.clearTimeout(animationTimer);animationTimer=null;}if(stream){stream.close();stream=null;streamHealthy=false;}if(visible){connect();poll();animate();}else hide();}
   if(root.engine&&root.engine.on)root.engine.on('AimModVisibility',setVisible);
   if(root.addEventListener){root.addEventListener('resize',function(){draw();});root.addEventListener('pagehide',function(){setVisible(false);});}
   root.AimModLiveOverlay={setVisible:setVisible,surface:surface,draw:draw};setVisible(true);

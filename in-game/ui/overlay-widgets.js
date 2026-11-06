@@ -311,10 +311,29 @@
     if(o.caption)kids.push(styled(h('div','amw-note',safe(o.caption,160)),{color:env.theme.muted,textAlign:align}));return kids;
   };
   R.image=function(w,data,env){
-    var url=w.opts.url&&/^https:\/\/[^\s"'<>\\()]+$/.test(w.opts.url)?w.opts.url:'';
+    var source=w.opts.path?M.value(data,w.opts.path):w.opts.url;var url=typeof source==='string'&&/^https:\/\/[^\s"'<>\\()]+$/.test(source)?source:'';
     if(!url)return [empty(env,'Set an https:// image address in the widget settings.')];
     return [styled(h('div','amw-image',''),{backgroundImage:'url('+url+')',backgroundSize:w.opts.fit==='cover'?'cover':'contain',height:Math.max(10,w.h-env.padY*2)+'px'})];
   };
+  R.stat=function(w,data,env){var v=M.value(data,w.opts.path),node=styled(h('div','amw-value',M.formatValue(v,w.opts)),{color:known(v)&&v>=w.opts.threshold?w.opts.highColor:env.theme.text});
+    if(known(v)&&w.opts.animation!=='none')node.attrs.paint=function(n){if(n.amTarget!==v){n.amFrom=known(n.amTarget)?n.amTarget:v;n.amTarget=v;n.amStart=env.now;}var progress=M.clamp((env.now-n.amStart)/600,0,1);if(w.opts.animation==='count')n.textContent=M.formatValue(n.amFrom+(v-n.amFrom)*progress,w.opts);if(w.opts.animation==='flash')n.style.opacity=progress<1&&v>=w.opts.threshold?(Math.floor(progress*6)%2?'0.45':'1'):'1';};
+    return [label(w.opts.label||w.opts.path,env),node];};
+  R.timer=function(w,data,env){var v=M.value(data,w.opts.path);return [label(w.opts.label||w.opts.path,env),h('div','amw-value',clock(v))];};
+  R.template=function(w,data,env){return [h('div','amw-text',M.template(w.opts.template,data))];};
+  R.html=function(w,data,env){function build(n){var kids=[];if(n.kids)for(var i=0;i<n.kids.length;i++)kids.push(build(n.kids[i]));return styled(h(n.tag,'',n.text===undefined?kids:n.text),n.style||{});}return [build(M.markup(w.opts.template,data))];};
+  R.table=function(w,data,env){var rows=M.value(data,w.opts.path),cols=w.opts.columns.split(','),out=[];if(!Array.isArray(rows))return [empty(env,'No rows available')];
+    for(var i=0;i<Math.min(rows.length,12);i++){var cells=[];for(var j=0;j<Math.min(cols.length,6);j++)cells.push(h('td','',M.formatValue(M.value(rows[i],cols[j].replace(/^\s+|\s+$/g,'')),w.opts)));out.push(h('tr','',cells));}return [h('table','',out)];};
+  function seriesWidget(w,data,env){var raw=M.value(data,w.opts.path),pts=[],i;if(Array.isArray(raw)){for(i=0;i<raw.length&&i<200;i++){var n=typeof raw[i]==='number'?raw[i]:M.value(raw[i],w.opts.column);if(known(n))pts.push(n);}}else if(known(raw))pts=[raw];
+    if(!pts.length)return [empty(env,'No numeric data available')];env.width=Math.max(20,w.w-env.padX*2);
+    return [label(w.opts.label||w.opts.path,env),canvasNode(w,env,function(c){var ctx=c.getContext('2d');if(!ctx)return;var width=c.width,height=c.height,lo=w.opts.min,hi=Math.max(lo+0.001,w.opts.max),acc=accentOf(w,env);ctx.clearRect(0,0,width,height);ctx.strokeStyle=acc;ctx.fillStyle=acc;ctx.lineWidth=3;
+      function y(v){return height*(1-M.clamp((v-lo)/(hi-lo),0,1));}
+      if(w.type==='gauge'){var ratio=M.clamp((pts[pts.length-1]-lo)/(hi-lo),0,1);ctx.beginPath();ctx.arc(width/2,height*0.85,Math.min(width/2,height*0.8)-4,Math.PI,Math.PI+ratio*Math.PI);ctx.stroke();}
+      else if(w.type==='progress')ctx.fillRect(0,0,width*M.clamp((pts[pts.length-1]-lo)/(hi-lo),0,1),height);
+      else if(w.type==='bar'){for(var j=0;j<pts.length;j++)ctx.fillRect(j*width/pts.length,y(pts[j]),Math.max(1,width/pts.length-2),height-y(pts[j]));}
+      else{ctx.beginPath();for(var k=0;k<pts.length;k++){var x=k*width/Math.max(1,pts.length-1);if(k)ctx.lineTo(x,y(pts[k]));else ctx.moveTo(x,y(pts[k]));}ctx.stroke();}
+    },w.id,Math.max(20,w.h-70))];
+  }
+  R.sparkline=R.line=R.bar=R.gauge=R.progress=seriesWidget;
   // ---- frame ----
   var PAD={x:18,y:14};
   function frame(w,data,env){
@@ -326,6 +345,7 @@
     var style={left:w.x+'px',top:w.y+'px',width:w.w+'px',opacity:String(w.opacity),fontSize:(16*w.font).toFixed(2)+'px',color:theme.text,background:bg,
       borderRadius:theme.radius+'px',padding:padY+'px '+padX+'px',border:theme.borders&&w.background!=='none'?'1px solid '+rgba(theme.border,theme.preset==='contrast'?0.9:0.75):'1px solid transparent'};
     if(!entry.auto)style.height=w.h+'px';
+    style.fontFamily=w.family;style.fontWeight=String(w.weight);if(w.textColor)style.color=w.textColor;if(w.padding>=0)style.padding=w.padding+'px';if(w.radius>=0)style.borderRadius=w.radius+'px';if(w.shadow)style.boxShadow='0 3px 12px #000000';
     // The standings component draws its own card (the same one as the in-game corner panel).
     if(w.type==='standings'&&data.board){style.background='transparent';style.border='1px solid transparent';style.padding='0px';}
     // Minimal panels are faint: a soft shadow keeps their text readable on bright scenes.
@@ -337,6 +357,7 @@
     options=options||{};var doc=options.document||root.document,theme=M.resolveTheme(scene),ctx=options.context||M.context(data),list=[];
     var env={theme:theme,now:options.now||new Date().getTime(),dpr:options.dpr||1,motion:options.motion||null,image:options.image||null,doc:doc};
     for(var i=0;i<scene.widgets.length;i++){var w=scene.widgets[i];if(options.only&&w.id!==options.only)continue;if(!options.all&&!M.shownIn(w,ctx))continue;if(options.all&&!w.visible&&!options.hidden)continue;
+      if(!options.all&&!M.condition(data,w.opts.condition))continue;
       var copyEnv={theme:env.theme,now:env.now,dpr:env.dpr,motion:env.motion,image:env.image,doc:doc,width:0,padX:0,padY:0},f=frame(w,data,copyEnv);if(!f)continue;
       f.key='w:'+w.id+':'+w.type;if(options.only){f.attrs.style.left='0px';f.attrs.style.top='0px';}if(options.decorate)options.decorate(f,w);list.push(f);}
     patch(doc,container,list);return list.length;

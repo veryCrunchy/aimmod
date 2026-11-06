@@ -76,6 +76,8 @@ sealed class OverlayService(OverlaySettings settings, OverlayScenes scenes, Func
     static string Surface(HttpRequest request, bool obs) => obs ? "obs" : request.Query["surface"].ToString() is "game" ? "game" : "preview";
     void MapReads(IEndpointRouteBuilder routes, string prefix, bool obs)
     {
+        routes.MapGet(prefix + "/overlay-data", (HttpRequest request) => Results.Json(new { v = 1, fields = OverlayDataCatalog.Read(Feed(Surface(request, obs))) }));
+        routes.MapGet(prefix + "/overlay-stream", (HttpContext context) => OverlayDataCatalog.Stream(context, () => Feed(Surface(context.Request, obs))));
         routes.MapGet(prefix + "/overlay-scenes", () => Results.Bytes(scenes.Bytes, "application/json"));
         routes.MapGet(prefix + "/overlay-feed", (HttpRequest request) => Results.Json(Feed(Surface(request, obs))));
         routes.MapGet(prefix + "/overlay-motion", (HttpRequest request) =>
