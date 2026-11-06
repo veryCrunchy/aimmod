@@ -21,6 +21,13 @@ static class OverlayScenesChecks
     public static async Task Run()
     {
         count = 0;
+        var catalog = OverlayDataCatalog.Read(new { enabled = true, live = new { score = 0, active = false }, session = new { runs = 0 } });
+        Check(catalog.Single(f => f.Path == "live.score").Value.GetInt32() == 0, "catalog preserves zero");
+        Check(catalog.Single(f => f.Path == "live.accuracy").Type == "number" && catalog.Single(f => f.Path == "live.accuracy").Unit == "%", "nullable catalog types stay stable");
+        Check(catalog.Select(f => f.Path).Distinct().Count() == catalog.Length, "catalog paths are unique");
+        Check(OverlayDataCatalog.Event(new { label = "line\nbreak" }).Split('\n').Length == 3, "stream escapes embedded newlines");
+        var bound = OverlayScenes.CleanWidget(JsonNode.Parse("""{"id":"sample","type":"html","locked":true,"weight":700,"opts":{"path":"live.score","template":"<b>{{live.score}}</b>"}}"""));
+        Check(bound is not null && (bool)bound["locked"]! && (double)bound["weight"]! == 700 && (string)bound["opts"]!["path"]! == "live.score", "bound widget style and options survive validation");
         Store(); Migration(); History(); Settings(); Motion();
         await Routes();
         Console.WriteLine($"PASS {count} overlay scene checks");
@@ -190,6 +197,18 @@ static class OverlayScenesChecks
             await host.Start(CancellationToken.None);
             using var client = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false, UseProxy = false }) { Timeout = TimeSpan.FromSeconds(5) };
             var root = host.Url[..^3];
+            using (var catalogResponse = JsonDocument.Parse(await client.GetStringAsync(root + "/overlay-data")))
+                Check(catalogResponse.RootElement.GetProperty("fields").EnumerateArray().Any(f => f.GetProperty("path").GetString() == "live.score"), "catalog endpoint lists binding paths");
+            using (var streamTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(5)))
+            using (var response = await client.GetAsync(root + "/overlay-stream", HttpCompletionOption.ResponseHeadersRead, streamTimeout.Token))
+            {
+                Check(response.Content.Headers.ContentType?.MediaType == "text/event-stream", "stream has event content type");
+                using var reader = new StreamReader(await response.Content.ReadAsStreamAsync(streamTimeout.Token));
+                var line = await reader.ReadLineAsync(streamTimeout.Token);
+                Check(line?.StartsWith("data: ") == true, "stream emits a snapshot immediately");
+                using var streamed = JsonDocument.Parse(line![6..]);
+                Check(streamed.RootElement.GetProperty("enabled").GetBoolean(), "stream uses presentation feed");
+            }
             using (var scenes = JsonDocument.Parse(await client.GetStringAsync(root + "/overlay-scenes")))
                 Check(scenes.RootElement.GetProperty("scenes").GetArrayLength() == 3 && scenes.RootElement.GetProperty("gameScene").GetString() == "game", "first start serves the migrated scenes");
             Check(File.Exists(Path.Combine(folder, "overlay-scenes.json")), "the migrated scenes are saved");
