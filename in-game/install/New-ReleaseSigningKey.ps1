@@ -4,7 +4,7 @@ $ErrorActionPreference = 'Stop'
 # Choose a private directory outside the checkout. Existing files are never replaced.
 $directory = [IO.Path]::GetFullPath($OutputDirectory)
 New-Item -ItemType Directory -Force -Path $directory | Out-Null
-$key = [Security.Cryptography.ECDsa]::Create([Security.Cryptography.ECCurve]::NamedCurves.nistP256)
+$key = [Security.Cryptography.ECDsa]::Create([Security.Cryptography.ECCurve+NamedCurves]::nistP256)
 try {
     $private = Join-Path $directory 'release-private.pem'
     $stream = [IO.File]::Open($private, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
