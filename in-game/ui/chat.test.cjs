@@ -106,7 +106,7 @@ test('the radio menu: numbered callouts that click, kept in place between polls;
   assert.deepEqual(s.sent,[{action:'chat-radio',group:1,item:1}]);
   s.render(view({}));assert.ok(!find(),'closed');
   s.render(view({open:'all',session:9,clashes:['KovaaK’s also uses Y (all chat).']}));
-  assert.ok(s.text().includes('KovaaK’s also uses Y (all chat).')&&s.text().includes('Enter sends · Esc cancels'),'KovaaK’s binds on the chat keys, as a note');
+  assert.ok(s.text().includes("Y is also bound in KovaaK's. Chat still works;")&&s.text().includes('Enter sends · Esc cancels'),'KovaaK’s binds on the chat keys, as a note');
 });
 
 test('the notice layer: the chat takes input while open, and the polled pointer file types too',()=>{

@@ -251,8 +251,8 @@ root.AimModFormat={known:known,number:number,fixed:fixed,percent:percent,signed:
 var state=null,active='overview',lastJson='',visible=true,timer=null,pending=false,chartPoints=[],toastTimer;
 var prefix=location.pathname.slice(0,-2);
 // Order defines the sidebar. run-details is reached from History and is not listed.
-var titles={overview:['Home'],trends:['Statistics'],history:['History'],replays:['Replays'],multiplayer:['Multiplayer'],tournaments:['Tournaments'],coaching:['Coaching'],mechanics:['Mechanics'],benchmarks:['Benchmarks'],account:['Account'],overlays:['Overlays'],settings:['Settings'],developer:['Developer'],'run-details':['Run analysis']};
-var groups={overview:'Practice',multiplayer:'Play',coaching:'Improve',account:'App'};
+var titles={multiplayer:['Multiplayer'],tournaments:['Tournaments'],overview:['Home'],trends:['Statistics'],history:['History'],coaching:['Coaching'],mechanics:['Mechanics'],benchmarks:['Benchmarks'],replays:['Replays'],account:['Account'],overlays:['Overlays'],settings:['Settings'],developer:['Developer'],'run-details':['Run analysis']};
+var groups={multiplayer:'Play',overview:'Improve',account:'You'};
 var SCENARIO_PAGES=['overview','trends','coaching','mechanics'];
 function el(id){return document.getElementById(id)}
 function node(tag,cls,text){var x=document.createElement(tag);if(cls)x.className=cls;if(text!==undefined)x.textContent=text;return x}

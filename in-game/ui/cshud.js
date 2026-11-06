@@ -5,18 +5,20 @@
 // time; number keys still buy). Gameface: DOM and canvas only, solid colours.
 (function(root){
   'use strict';
-  function node(tag,css,text){var el=root.document.createElement(tag);if(css)el.className=css;if(text!==undefined&&text!==null)el.textContent=String(text);return el;}
+  function node(tag,css,text){if(root.AimModUi)return root.AimModUi.node(tag,css,text);var el=root.document.createElement(tag);if(css)el.className=css;if(text!==undefined&&text!==null)el.textContent=String(text);return el;}
   function money(v){return '$'+String(Math.round(v)).replace(/\B(?=(\d{3})+(?!\d))/g,',');}
-  function clock(s){if(typeof s!=='number')return '';var m=Math.floor(s/60),r=s%60;return m+':'+(r<10?'0':'')+r;}
+  function clock(s){if(root.AimModUi)return root.AimModUi.clock(s);if(typeof s!=='number')return '';var m=Math.floor(s/60),r=s%60;return m+':'+(r<10?'0':'')+r;}
   // Small solid icons: armour shield, helmet, defuse kit.
+  var icons={};
   function icon(kind,on){
-    var c=node('canvas','cs-icon'+(on?' on':''));c.width=36;c.height=36;var x=c.getContext&&c.getContext('2d');if(!x)return c;x.scale(2,2);
+    var c=node('canvas','cs-icon'+(on?' on':''));c.width=36;c.height=36;var x=c.getContext&&c.getContext('2d');if(!x)return c;var key=kind+':'+on;if(icons[key]&&x.drawImage){x.drawImage(icons[key],0,0);return c;}icons[key]=c;x.scale(2,2);
     x.fillStyle=on?'#66ccff':'#3a4a44';x.strokeStyle=on?'#66ccff':'#3a4a44';x.lineWidth=1.6;
     if(kind==='armor'){x.beginPath();x.moveTo(9,2);x.lineTo(16,5);x.lineTo(15,11);x.lineTo(9,16);x.lineTo(3,11);x.lineTo(2,5);x.closePath();x.fill();}
     else if(kind==='helmet'){x.beginPath();x.arc(9,11,7,Math.PI,0);x.fill();x.fillRect(1,11,16,3);}
     else{x.fillRect(3,6,12,9);x.fillStyle=on?'#0f1714':'#16211d';x.fillRect(6,9,6,3);x.fillStyle=on?'#f0b45a':'#3a4a44';x.fillRect(7,3,4,3);}
     return c;
   }
+  function helpfulClash(text){var match=/also uses ([^ ]+) \(([^)]+)\)/.exec(text);return match?match[1]+" is also bound in KovaaK's. "+match[2]+" still works; rebind in KovaaK's settings if needed.":text;}
   var CATS=[['pistol','Pistols'],['smg','SMGs'],['rifle','Rifles'],['heavy','Heavy'],['gear','Gear'],['grenade','Grenades']];
   // The menu is built once per change of what it offers and kept in place while the clock or the
   // rest of the HUD redraws, so a click is never lost to a redraw between press and release.
@@ -47,19 +49,21 @@
     });
     return box;
   }
-  function render(root2,c,act){
+  var controlsSeen={};
+  function draw(root2,c,act){
     // Two layers: the HUD (redrawn every time) and the buy menu (kept while it offers the same).
     var layers=root2.csLayers;
     if(!layers){while(root2.firstChild)root2.removeChild(root2.firstChild);layers=root2.csLayers={hud:node('div','cs-layer'),menu:node('div','cs-layer'),key:null};root2.appendChild(layers.hud);root2.appendChild(layers.menu);}
-    var target=layers.hud;
+    var liveTarget=layers.hud;var target=root.AimModUi&&liveTarget.insertBefore?node('div',''):liveTarget;
     while(target.firstChild)target.removeChild(target.firstChild);
     var menuKey=c&&c.buyOpen?JSON.stringify([c.buy,c.money,c.buyKey]):null;
     if(menuKey!==layers.key){while(layers.menu.firstChild)layers.menu.removeChild(layers.menu.firstChild);layers.key=menuKey;if(menuKey)layers.menu.appendChild(buyMenu(c,act));}
     else if(menuKey&&layers.menu.firstChild&&layers.menu.firstChild.timeNode)layers.menu.firstChild.timeNode.textContent=typeof c.buyLeft==='number'?'Buy time '+clock(c.buyLeft):'Buy time over';
-    if(!c){root2.className='';return;}
+    if(!c){root2.className='';while(liveTarget.firstChild)liveTarget.removeChild(liveTarget.firstChild);return;}
     root2.className='show';
+    if(c.sessionId&&c.controls&&c.round===1&&c.phase==='freeze'&&!controlsSeen[c.sessionId]){var help=node('div','cs-controls');help.appendChild(node('strong','','Your controls'));for(var binding in c.controls)help.appendChild(node('div','',binding+': '+c.controls[binding]));var dismiss=node('button','button','Got it');dismiss.onclick=function(){controlsSeen[c.sessionId]=true;draw(root2,c,act);};help.appendChild(dismiss);target.appendChild(help);}else if(c.sessionId&&(c.round!==1||c.phase!=='freeze'))controlsSeen[c.sessionId]=true;
     // Top: score strip and the clock for this phase.
-    var top=node('div','cs-top');
+    var group=node('div','cs-top-group');target.appendChild(group);var top=node('div','cs-top');
     var t=node('div','cs-score t'+(c.side==='T'?' mine':''));t.appendChild(node('span','cs-team','T'));t.appendChild(node('span','cs-points',c.tScore));
     var mid=node('div','cs-clock'+(c.phase==='planted'?' bomb':''));
     // Freeze time here; the buy menu counts the buy window (freeze plus buy time) and says so.
@@ -68,16 +72,16 @@
     mid.appendChild(node('span','cs-clock-time',c.phase==='planted'&&typeof c.bombIn==='number'?clock(c.bombIn):clock(c.left)));
     mid.appendChild(node('span','cs-clock-round','Round '+c.round+' of '+c.rounds+(typeof c.tAlive==='number'?' · T '+c.tAlive+' · CT '+c.ctAlive:'')));
     var ct=node('div','cs-score ct'+(c.side==='CT'?' mine':''));ct.appendChild(node('span','cs-points',c.ctScore));ct.appendChild(node('span','cs-team','CT'));
-    top.appendChild(t);top.appendChild(mid);top.appendChild(ct);target.appendChild(top);
+    top.appendChild(t);top.appendChild(mid);top.appendChild(ct);group.appendChild(top);
     // Bomb sites on a compass under the strip (90 degrees either side; behind clamps to an edge), and
     // the site letter (and callout) while you stand in one.
     if(c.sites&&c.sites.length&&!c.buyOpen){
       var comp=node('div','cs-compass');
       c.sites.forEach(function(s){var b=Math.max(-90,Math.min(90,s.bearing));var m=node('div','cs-mark'+(Math.abs(s.bearing)>90?' behind':'')+(c.inSite===s.name?' here':''));
         m.style.left=Math.round((b+90)/180*100)+'%';m.appendChild(node('span','cs-mark-name',s.name));m.appendChild(node('span','cs-mark-dist',s.meters+' m'));comp.appendChild(m);});
-      target.appendChild(comp);
+      group.appendChild(comp);
     }
-    if(c.inSite||c.callout){var here=node('div','cs-site');if(c.inSite)here.appendChild(node('strong','','Bomb site '+c.inSite));if(c.callout)here.appendChild(node('span','',c.callout));target.appendChild(here);}
+    if(c.inSite||c.callout){var here=node('div','cs-site');if(c.inSite)here.appendChild(node('strong','','Bomb site '+c.inSite));if(c.callout)here.appendChild(node('span','',c.callout));group.appendChild(here);}
     // Banners: round end with the reason, halftime side switch.
     if(c.banner){var bn=node('div','cs-banner team'+c.banner.team+(c.banner.won?' won':' lost'));bn.appendChild(node('strong','',c.banner.title));bn.appendChild(node('span','',c.banner.reason));target.appendChild(bn);}
     if(c.notice)target.appendChild(node('div','cs-notice',c.notice));
@@ -115,7 +119,7 @@
     if(c.hasBomb){var bomb=node('div','cs-bomb');bomb.appendChild(node('span','cs-bomb-icon','C4'));bomb.appendChild(node('span','','You have the bomb · '+(c.dropKey||'G')+' drops it'));me.appendChild(bomb);}
     else if(c.bombCarrier)me.appendChild(node('div','cs-bomb mate','Bomb: '+c.bombCarrier));
     if(c.buyWindow&&!c.buyOpen)me.appendChild(node('div','cs-key-hint','Press '+c.buyKey+' to buy'));
-    (c.keyClashes||[]).forEach(function(k){me.appendChild(node('div','cs-clash',k));});
+    (c.keyClashes||[]).forEach(function(k){me.appendChild(node('div','cs-clash',helpfulClash(k)));});
     target.appendChild(me);
     // Inside a smoke the view greys over, under the HUD (CS keeps the HUD readable in a smoke).
     if(typeof c.smoke==='number'&&c.smoke>0){var fog=node('div','cs-smoke');fog.style.opacity=String(Math.min(0.97,c.smoke*0.97));
@@ -123,6 +127,7 @@
     // A flash whites out everything, the HUD too: the page's own top layer plays it (flash()); this
     // is the fallback when the service sends only the white's level.
     if(!c.flashFx&&typeof c.flash==='number'&&c.flash>0){var white=node('div','cs-flash');white.style.opacity=String(Math.min(1,c.flash));target.appendChild(white);}
+    if(target!==liveTarget){root.AimModUi.sync(liveTarget,target);top=liveTarget.querySelector?liveTarget.querySelector('.cs-top'):top;}
     settle(layers,top,root);
   }
   // The menu stays hidden until it is placed: Gameface may not have laid it out yet when it is
@@ -234,5 +239,5 @@
     var x=el.getContext&&el.getContext('2d');if(x)drawSights(x,p,W,H);
     return p;
   }
-  root.AimModCsHud={render:render,place:place,flash:flash,flashAlpha:flashAlpha,sights:sights,sightsPlan:sightsPlan};
+  root.AimModCsHud={render:draw,place:place,flash:flash,flashAlpha:flashAlpha,sights:sights,sightsPlan:sightsPlan};
 })(window);

@@ -20,6 +20,7 @@
     var c=n&&n.cs||null;
     // The flash's white plays on its own top layer, over the HUD and the name tags.
     if(root.AimModCsHud&&root.AimModCsHud.flash&&flashLayer&&flashLayer!==csRoot)root.AimModCsHud.flash(flashLayer,c&&c.flashFx||null);
+    if(flashLayer&&c&&!c.flashFx&&c.flash>0){flashLayer.style.display='block';flashLayer.style.opacity=String(Math.min(1,c.flash));}
     var key=c?JSON.stringify(c):'';if(key===lastCs||!root.AimModCsHud||!csRoot)return;lastCs=key;root.AimModCsHud.render(csRoot,c,answer);
   }
   // The strips (duel, combat, badge) and the toast live in their own containers and are rebuilt
@@ -36,7 +37,7 @@
   function chat(n){if(root.AimModChat&&chatRoot)root.AimModChat.render(chatRoot,n&&n.chat||null,post);}
   function chatHolds(n){return !!(n&&n.chat&&(n.chat.open||n.chat.radio));}
   function render(n){
-    boards(n);cs(n);chat(n);parts();showDebug(!!(n&&n.cs&&n.cs.buyOpen),chatHolds(n));
+    if(!n||(!n.cs&&!n.combat&&!n.duel)){scope(null);if(root.AimModWorldTags)root.AimModWorldTags.render(null);}boards(n);cs(n);chat(n);parts();showDebug(!!(n&&n.cs&&n.cs.buyOpen),chatHolds(n),n&&n.chat&&n.chat.session||0);
     var body=root.document.body,page=root.document.documentElement;
     function input(on){if(body)body.className=on?'input':'';if(page)page.className=on?'input':'';}
     if(!n||(!n.active&&!n.badge&&!n.duel&&!n.combat&&!n.cs)){box.className='';input(chatHolds(n)&&!!n.interactive);clear(strips);clear(card);stripKey=toastKey='';return;}
@@ -169,13 +170,14 @@
   }
   // A request with its own fields (the chat's line, its session, a radio pick).
   function post(body){
+    if(root.AimModUi){root.AimModUi.request('POST',base()+'/multiplayer',body,function(){appliedSequence=pollSequence;poll();});return;}
     var x=new root.XMLHttpRequest();x.open('POST',base()+'/multiplayer',true);x.timeout=5000;
     x.setRequestHeader('X-AimMod-UI','1');x.setRequestHeader('Content-Type','application/json');
     x.onreadystatechange=function(){if(x.readyState===4)poll();};
     x.send(JSON.stringify(body));
   }
   // A missed poll keeps what is on screen, so a button doesn't vanish under the cursor; eight in a row (2 s) clear it.
-  function miss(){misses++;if(misses>=8)render(null);}
+  function miss(){scope(null);if(root.AimModWorldTags)root.AimModWorldTags.render(null);misses++;if(misses>=8)render(null);}
   // Pointer fallback: while the buy menu holds input AimModCore sends the cursor (game window
   // client pixels) and the left button as AimModPointer(x, y, down, width, height). The button
   // under it gets a hover state and is pressed on release, like a click, unless Gameface's own
@@ -191,7 +193,7 @@
     return null;
   }
   function pointer(x,y,down,width,height){
-    counts.amMove++;
+    directAt=Date.now();counts.amMove++;
     var px=x*((root.innerWidth||width)/(width||1)),py=y*((root.innerHeight||height)/(height||1));
     var el=buttonAt(px,py);
     if(el!==pointerState.hover){if(pointerState.hover)dropClass(pointerState.hover,'hover');pointerState.hover=el;if(el)addClass(el,'hover');}
@@ -208,13 +210,13 @@
   // buying, for when the direct event doesn't reach the page: the cursor for hover, and each new
   // click by where it went down and up (a click between two polls isn't lost).
   // The same file carries what is typed in the chat input (key lines, by id), for chat.js.
-  var pointerTimer=null,clickSeen=null,holding=false;
+  var pointerTimer=null,clickSeen=null,holding=false,pointerInFlight=false,inputSession=0,directAt=0,heldSession=0;
   function keyOf(el){return el?el.className.replace(' hover','')+'|'+el.textContent:null;}
   function filePointer(text){
     var lines=String(text||'').split('\n'),head=lines[0].split('\t');
     if(head[0]!=='AIMMOD_POINTER_1')return;
     if(root.AimModChat){var typed=[],typedIn=0;for(var k=1;k<lines.length;k++){var kc=lines[k].split('\t');if(kc[0]==='keys')typedIn=+kc[1];else if(kc[0]==='key'&&kc.length>=3)typed.push({id:+kc[1],code:+kc[2]});}if(typed.length)root.AimModChat.fileKeys(typed,typedIn);}
-    if(head[1]!=='on'||counts.amMove>0)return;
+    if(head[1]!=='on')return;var suppressClicks=directAt>0&&Date.now()-directAt<300;
     var w=+head[5]||1,h=+head[6]||1,sx=(root.innerWidth||w)/w,sy=(root.innerHeight||h)/h;
     counts.fileMove++;
     var el=buttonAt(+head[2]*sx,+head[3]*sy);
@@ -225,48 +227,56 @@
       if(clickSeen===null){newest=Math.max(newest||0,id);continue;} // clicks from before the menu opened
       if(id<=clickSeen)continue;newest=Math.max(newest,id);
       var down=buttonAt(+c[2]*sx,+c[3]*sy),up=buttonAt(+c[4]*sx,+c[5]*sy);
-      if(down&&up&&keyOf(down)===keyOf(up)&&!up.disabled&&Date.now()-nativeDownAt>800&&typeof up.onclick==='function'){counts.fileClick++;up.onclick();}
+      if(!suppressClicks&&down&&up&&keyOf(down)===keyOf(up)&&!up.disabled&&Date.now()-nativeDownAt>800&&typeof up.onclick==='function'){counts.fileClick++;up.onclick();}
     }
     clickSeen=newest===null?0:newest;debug();
   }
   function pointerPoll(){
-    pointerTimer=null;if(!(buying||holding)||!root.setTimeout)return;
+    pointerTimer=null;if(!(buying||holding)||pointerInFlight||!root.setTimeout)return;
+    pointerInFlight=true;var session=inputSession,finished=false;
     var x=new root.XMLHttpRequest();x.open('GET',base()+'/multiplayer-pointer',true);x.timeout=1000;
-    x.onreadystatechange=function(){if(x.readyState!==4)return;if(x.status===200)filePointer(x.responseText);if((buying||holding)&&!pointerTimer)pointerTimer=root.setTimeout(pointerPoll,50);};
-    x.send(null);
+    function finish(ok){if(finished)return;finished=true;pointerInFlight=false;if(ok&&session===inputSession&&(buying||holding))filePointer(x.responseText);if((buying||holding)&&!pointerTimer)pointerTimer=root.setTimeout(pointerPoll,50);}
+    x.onreadystatechange=function(){if(x.readyState===4)finish(x.status===200);};x.onerror=x.ontimeout=function(){finish(false);};x.send(null);
   }
   function debug(){
     var line='Gameface mouse '+counts.gfMove+' moves, '+counts.gfDown+' downs, '+counts.gfClick+' clicks; AimMod pointer '+counts.amMove+' updates, '+counts.amDown+' downs, '+counts.amClick+' presses; via service '+counts.fileMove+' updates, '+counts.fileClick+' presses';
     if(debugNode)debugNode.textContent=line;
     // Into the service log every few seconds while the buy menu is open, when it changed.
-    if(buying&&line!==reported&&Date.now()-reportedAt>3000){reported=line;reportedAt=Date.now();
+    if(root.AimModDeveloperDiagnostics&&buying&&line!==reported&&Date.now()-reportedAt>3000){reported=line;reportedAt=Date.now();
       var x=new root.XMLHttpRequest();x.open('POST',base()+'/multiplayer',true);x.setRequestHeader('X-AimMod-UI','1');x.setRequestHeader('Content-Type','application/json');x.send(JSON.stringify({action:'pointer-debug',counts:line}));}
   }
   // on: the buy menu is open (counts on screen and in the log); hold: the chat input or a radio menu
   // holds input (the pointer file is polled for their clicks and typed keys, no counts).
-  function showDebug(on,hold){
-    buying=on;holding=!!hold;var body=root.document.body;
-    if(on&&!debugNode&&body){debugNode=node('div','pointer-debug');body.appendChild(debugNode);debug();}
-    if((on||holding)&&!pointerTimer&&root.setTimeout){clickSeen=null;pointerTimer=root.setTimeout(pointerPoll,50);}
+  function showDebug(on,hold,session){
+    var was=buying||holding;buying=on;holding=!!hold;var body=root.document.body;if(was!==!!(buying||holding)||(holding&&session!==heldSession)){inputSession++;directAt=0;clickSeen=null;pointerState.down=false;pointerState.pressed=null;}heldSession=session;
+    if(root.AimModDeveloperDiagnostics&&on&&!debugNode&&body){debugNode=node('div','pointer-debug');body.appendChild(debugNode);debug();}
+    if((on||holding)&&!pointerTimer&&!pointerInFlight&&root.setTimeout){pointerTimer=root.setTimeout(pointerPoll,50);}
     if(!on&&debugNode){if(debugNode.parentNode)debugNode.parentNode.removeChild(debugNode);debugNode=null;}
   }
   // AimModCore's events reach the page through Gameface's engine (cohtml.js, loaded first by notify.html).
   if(root.AimModListen)root.AimModListen('AimModPointer',pointer);else if(root.engine&&root.engine.on)root.engine.on('AimModPointer',pointer);
   // CS sights from AimModCore (AimModScope): the scope view and the dynamic crosshair, every frame they change.
   var sightsLayer=root.document.getElementById('cs-sights');
-  function scope(json){if(root.AimModCsHud&&root.AimModCsHud.sights&&sightsLayer)root.AimModCsHud.sights(sightsLayer,json);}
+  var sightsAt=0;function scope(json){sightsAt=json?Date.now():0;if(root.AimModCsHud&&root.AimModCsHud.sights&&sightsLayer)root.AimModCsHud.sights(sightsLayer,json);}
   if(root.AimModListen)root.AimModListen('AimModScope',scope);else if(root.engine&&root.engine.on)root.engine.on('AimModScope',scope);
   if(root.document.addEventListener){
     root.document.addEventListener('mousemove',function(){counts.gfMove++;},true);
     root.document.addEventListener('mousedown',function(){counts.gfDown++;nativeDownAt=Date.now();debug();},true);
     root.document.addEventListener('click',function(){counts.gfClick++;debug();},true);
   }
+  var pollInFlight=false,pollSequence=0,appliedSequence=0,lastRevision=null;
   function poll(){
+    if(pollInFlight)return;pollInFlight=true;clearTimeout(timer);
+    var sequence=++pollSequence,finished=false;
     var x=new root.XMLHttpRequest();x.open('GET',base()+'/multiplayer-notify',true);x.timeout=2000;
-    x.onreadystatechange=function(){if(x.readyState!==4)return;var n=null;if(x.status===200){try{n=JSON.parse(x.responseText);}catch(e){n=null;}}if(n){misses=0;render(n);}else miss();};
-    x.ontimeout=miss;
-    x.send(null);
-    clearTimeout(timer);timer=setTimeout(poll,250);
+    function finish(ok){
+      if(finished)return;finished=true;pollInFlight=false;var n=null;
+      if(ok){try{n=JSON.parse(x.responseText);}catch(e){n=null;}}
+      if(n&&sequence>appliedSequence){var revision=typeof n.revision==='number'?n.revision:null;if(revision===null||lastRevision===null||revision>=lastRevision){appliedSequence=sequence;lastRevision=revision;misses=0;render(n);}}else miss();
+      if(sightsAt&&Date.now()-sightsAt>2000)scope(null);
+      timer=setTimeout(poll,250);
+    }
+    x.onreadystatechange=function(){if(x.readyState===4)finish(x.status===200);};x.onerror=x.ontimeout=function(){finish(false);};x.send(null);
   }
   poll();
   root.AimModNotify={render:render,pointer:pointer,filePointer:filePointer,scope:scope};

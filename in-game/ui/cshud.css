@@ -90,5 +90,14 @@
 .cs-flash{position:absolute;left:0;top:0;width:100%;height:100%;background:#ffffff;pointer-events:none}
 /* The flash's white (cshud.js flash()): the top layer of the page, over the HUD and the name tags. */
 #cs-flash{display:none;position:absolute;left:0;top:0;width:100%;height:100%;background:#ffffff;pointer-events:none;z-index:100}
-/* The scope view and the dynamic crosshair (cshud.js sights()): over the HUD and the name tags, under the flash. */
-#cs-sights{display:none;position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none;z-index:90}
+/* The scope view and the dynamic crosshair (cshud.js sights()): over world tags and under essential controls. */
+#cs-sights{display:none;position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none;z-index:60}
+
+#cs-hud{z-index:70}
+#notice,#board-corner,#board-full,#chat-hud{z-index:80}
+.cs-top-group{position:absolute;top:0;left:0;right:0}
+@media(min-height:1300px){.cs-top{transform:none}.cs-top-group{transform:scale(1.33);transform-origin:50% 0}}
+
+.cs-controls{position:absolute;top:180px;left:20px;width:230px;padding:12px;background:#0f1714;border:1px solid #2c6b52;border-radius:6px;font-size:13px;pointer-events:auto}.cs-controls strong{display:block;margin-bottom:6px}.cs-controls .button{margin-top:8px}
+
+#notice{position:relative}

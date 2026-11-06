@@ -7,6 +7,31 @@
   function num(v,d){if(typeof v!=='number'||!isFinite(v))return '—';var f=Math.pow(10,d||0);var r=Math.round(v*f)/f;var s=r.toFixed(d||0).split('.');s[0]=s[0].replace(/\B(?=(\d{3})+(?!\d))/g,',');return s.join('.');}
   function signed(v){return typeof v==='number'&&isFinite(v)?(v>0?'+':'')+num(v,0):'';}
   function clock(sec){if(typeof sec!=='number')return '';var m=Math.floor(sec/60),s=sec%60;return m+':'+(s<10?'0':'')+s;}
+  // Shared ES5 primitives for the workspace and notice surfaces.
+  function request(method,url,body,done){
+    var x=new root.XMLHttpRequest(),finished=false;x.open(method,url,true);x.timeout=8000;
+    if(body){x.setRequestHeader('X-AimMod-UI','1');x.setRequestHeader('Content-Type','application/json');}
+    function finish(){if(finished)return;finished=true;var data=null;try{data=JSON.parse(x.responseText);}catch(e){}done(x.status>=200&&x.status<300,data);}
+    x.onreadystatechange=function(){if(x.readyState===4)finish();};x.onerror=x.ontimeout=finish;x.send(body?JSON.stringify(body):null);return x;
+  }
+  function sync(target,source){
+    var old=Array.prototype.slice.call(target.children||[]),used=[],next=Array.prototype.slice.call(source.children||[]);
+    for(var i=0;i<next.length;i++){
+      var fresh=next[i],key=fresh.amKey||fresh.id||String(fresh.className).split(' ')[0],found=null;
+      for(var j=0;j<old.length;j++)if(!used[j]&&(old[j].amKey||old[j].id||String(old[j].className).split(' ')[0])===key&&old[j].tagName===fresh.tagName){found=old[j];used[j]=true;break;}
+      if(found){
+        found.className=fresh.className;found.disabled=fresh.disabled;found.title=fresh.title;
+        if(found.style&&fresh.style){if(typeof fresh.style.cssText==='string')found.style.cssText=fresh.style.cssText;else{for(var k in found.style)found.style[k]='';for(var k2 in fresh.style)found.style[k2]=fresh.style[k2];}}
+        if(fresh.attributes)for(var a=0;a<fresh.attributes.length;a++)found.setAttribute(fresh.attributes[a].name,fresh.attributes[a].value);
+        var handlers=['onclick','onchange','oninput','onkeydown'];for(var h=0;h<handlers.length;h++)found[handlers[h]]=fresh[handlers[h]];
+        if(fresh.tagName==='CANVAS'){var ctx=found.getContext&&found.getContext('2d');if(ctx&&ctx.drawImage){ctx.clearRect(0,0,found.width,found.height);ctx.drawImage(fresh,0,0);}}
+        else if(fresh.children&&fresh.children.length)sync(found,fresh);else if(found.textContent!==fresh.textContent)found.textContent=fresh.textContent;
+      }else found=fresh;
+      if(target.children[i]!==found)target.insertBefore(found,target.children[i]||null);
+    }
+    for(var n=target.children.length-1;n>=next.length;n--)target.removeChild(target.children[n]);
+  }
+  root.AimModUi={node:node,clock:clock,request:request,sync:sync};
   function columns(b){
     var hp=b.mode==='vampiric'||b.kind==='team'&&b.rows.some(function(r){return typeof r.health==='number';});
     if(b.kind==='duel')return [['Wins',function(r){return num(r.wins);}],['Score',function(r){return num(r.score);}]];
@@ -15,7 +40,7 @@
     return [['Score',function(r){return num(r.score);}],['Gap',function(r){return signed(r.gap);}]];
   }
   function header(b){
-    var h=node('div','sb-head');h.appendChild(node('span','sb-title',b.title));
+    var h=node('div','sb-head');h.appendChild(node('span','sb-title',b.mode==='ffa-rounds'?'Placement rounds':b.mode==='vampiric'?'Vampiric duel':b.title));
     var parts=[];if(b.rounds&&b.rounds>1)parts.push('Round '+b.round+' of '+b.rounds);else if(b.firstTo)parts.push('First to '+b.firstTo);
     if(b.fragLimit&&!b.firstTo)parts.push('First to '+b.fragLimit+' frags');if(b.phase==='countdown')parts.push('Starting');if(b.phase==='round')parts.push('Round over');if(b.phase==='final')parts.push('Final');
     h.appendChild(node('span','sb-sub',parts.join(' · ')));if(typeof b.left==='number')h.appendChild(node('span','sb-time',clock(b.left)));
@@ -23,6 +48,7 @@
   }
   function row(b,r,cols,showRank){
     var tr=node('div','sb-row'+(r.self?' self':'')+(r.status==='down'?' down':'')+(r.team?' team'+r.team:''));
+    tr.amKey='player:'+(r.rowKey||r.id||r.memberId||r.name);
     if(showRank)tr.appendChild(node('span','sb-rank',r.rank));
     // Bots: a BOT tag before the name (their names start with "BOT").
     var nm=node('span','sb-name');if(r.bot)nm.appendChild(node('span','sb-bot','BOT'));
@@ -50,7 +76,7 @@
     return side;
   }
   // mode: corner (compact, in game), full (hold-to-show) or stream (OBS).
-  function render(target,b,mode){
+  function draw(target,b,mode){
     while(target.firstChild)target.removeChild(target.firstChild);
     if(!b||!b.rows)return;
     var box=node('div','sb sb-'+mode+' sb-'+b.kind);target.appendChild(box);
@@ -67,5 +93,6 @@
     }
     b.rows.forEach(function(r){box.appendChild(row(b,r,cols,rank));});
   }
+  function render(target,b,mode){if(!target.insertBefore){draw(target,b,mode);return;}var draft=node('div','');draw(draft,b,mode);sync(target,draft);}
   root.AimModStandings={render:render};
 })(window);

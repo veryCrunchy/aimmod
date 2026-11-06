@@ -54,10 +54,10 @@ test('a member sees read-only settings and readies up; missing content blocks re
   const guest=lobby({self:'p2',isHost:false,hostId:'p1',content:{scenario:'ok',map:'missing',profiles:'none'}});
   s.requests[0].finish(200,view({lobby:guest}));
   assert.ok(!s.button('Edit'),'only the host edits settings');assert.ok(s.text().includes('Hosted by Synthetic One'));
-  assert.ok(s.button('Ready').disabled,'cannot ready without the map');assert.ok(s.text().includes('You need the map'));
+  assert.ok(s.button('Ready up').disabled,'cannot ready without the map');assert.ok(s.text().includes('You need the map'));
   const ok=lobby({self:'p2',isHost:false,content:{scenario:'ok',map:'ok',profiles:'none'}});ok.members[1].map='ok';
   s.api.leave();s.api.enter(s.container);s.requests[s.requests.length-1].finish(200,view({lobby:ok}));
-  s.button('Ready').onclick();assert.deepEqual(JSON.parse(s.last().body),{action:'ready',ready:true});
+  s.button('Ready up').onclick();assert.deepEqual(JSON.parse(s.last().body),{action:'ready',ready:true});
 });
 test('incoming Steam invites ask before joining',()=>{
   const s=setup();s.api.enter(s.container);
@@ -74,7 +74,7 @@ test('host settings editor sends validated keys, and score race locks overrides'
   lib.finish(200,{available:true,scenarios:[{name:'Synthetic Scenario',map:'synthetic_map',mapSource:'game',timeLimit:60}],maps:[{name:'synthetic_port',source:'ported',hash:'abc'}],weapons:['Synthetic Rifle'],characters:[],presets:[]});
   s.button('Show').onclick();assert.ok(s.all().some(e=>e.tag==='button'&&e.className.indexOf('mp-pick')===0&&e.disabled),'map override is locked in score race');
   s.button('60 s').onclick&&assert.ok(s.button('60 s').disabled,'time limit is locked in score race');
-  s.all().find(e=>e.tag==='button'&&/^mp-mode( |$)/.test(e.className)&&e.children.some(c=>c.tag==='strong'&&c.textContent==='Free-for-all')).onclick();
+  s.all().find(e=>e.tag==='button'&&/^mp-mode( |$)/.test(e.className)&&e.children.some(c=>c.tag==='strong'&&c.textContent==='Placement rounds')).onclick();
   assert.deepEqual(JSON.parse(s.last().body),{action:'settings',settings:{mode:'ffa-rounds'}});
   s.button('Done').onclick();assert.ok(s.button('Edit'));
 });
@@ -257,8 +257,8 @@ test('first run shows the tour once: keys, privacy, Hub and Discord, then saves 
   s.button('Next').onclick();s.button('Next').onclick();
   const ask=s.requests.find(r=>r.url==='/private/discord-settings');assert.ok(ask,'asks whether Discord presence exists');
   ask.finish(200,{settings:{discordPresenceEnabled:false,discordShowScore:true,discordShowPersonalBest:true,discordShowHubButton:true},status:{state:'off'}});
-  assert.ok(s.text().includes('Discord status')&&s.text().includes('AimMod Hub'));
-  s.all().find(e=>e.tag==='button'&&e.attrs['aria-label']==='Discord status').onclick();assert.deepEqual(JSON.parse(s.last().body),{discordPresenceEnabled:true});
+  assert.ok(s.text().includes('Multiplayer settings')&&s.text().includes('AimMod Hub'));
+  assert.ok(!s.all().some(e=>e.attrs['aria-label']==='Discord status'),'Discord is configured only in Settings');
   s.button('Done').onclick();assert.deepEqual(JSON.parse(s.last().body),{action:'prefs',prefs:{onboarded:true}});
   assert.ok(!s.text().includes('Step 4 of 4'),'the tour closes');
 });
@@ -292,7 +292,7 @@ const CATALOG=()=>({available:true,problem:null,version:2,show:'all',unavailable
   {id:'acc-scarf',version:1,kind:'accessory',name:'Scarf',models:['Meso'],role:'neck',swatch:['#ef6b6b'],shine:0,equipped:false},
   {id:'finish-ice',version:1,kind:'weapon_finish',name:'Ice',models:[],swatch:['#7ccfff','#6fbcee'],shine:0,equipped:false}]});
 function openLook(s,catalog){
-  s.button('Look').onclick();
+  s.button('Cosmetics').onclick();
   s.requests.find(r=>r.url==='/private/multiplayer?part=cosmetics').finish(200,catalog||CATALOG());
   s.requests.find(r=>r.url==='/private/multiplayer?part=looks').finish(200,LOOKS);
 }
@@ -300,8 +300,8 @@ const tileOf=(s,name)=>s.all().find(e=>e.tag==='button'&&/^mp-look-tile/.test(e.
 const category=(s,name)=>s.all().find(e=>e.tag==='button'&&/^mp-look-cat/.test(e.className)&&e.children.some(c=>c.textContent===name)).onclick();
 test('Look is a tab beside Play: models and skins pick a free look, and changes save at once',()=>{
   const s=setup();s.api.enter(s.container);s.requests[0].finish(200,view());
-  assert.ok(s.button('Play')&&s.button('Look'),'Play and Look tabs');
-  assert.ok(!s.button('Cosmetics'),'no separate Cosmetics page link');
+  assert.ok(s.button('Play')&&s.button('Cosmetics'),'Play and Look tabs');
+  assert.equal(s.buttons().filter(b=>b.textContent==='Cosmetics').length,1,'one Cosmetics tab');
   openLook(s);
   const t=s.text();
   assert.ok(t.includes('Meso · McCree')&&t.includes('Changes save automatically'));
@@ -387,7 +387,7 @@ test('mode cards show the line icon in a panel, mint when selected, and every mo
   const card=label=>s.all().find(e=>e.tag==='button'&&/^mp-mode( |$)/.test(e.className)&&e.children.some(c=>c.tag==='strong'&&c.textContent===label));
   card('Score duel').onclick();
   const icon=label=>card(label).getElementsByTagName('img').find(e=>e.className==='mp-mode-icon');
-  assert.equal(icon('Score duel').src,'art/modes/duel-on@2x.png');assert.equal(icon('Free-for-all').src,'art/modes/ffa-rounds@2x.png');
+  assert.equal(icon('Score duel').src,'art/modes/duel-on@2x.png');assert.equal(icon('Placement rounds').src,'art/modes/ffa-rounds@2x.png');
   assert.equal(card('Score duel').getElementsByTagName('canvas').length,0,'no canvas art on the cards');
   const dir=path.join(__dirname,'art','modes');
   const ids=fs.readFileSync(path.join(__dirname,'multiplayer.js'),'utf8').match(/MODE_ICONS=\[([^\]]+)\]/)[1].match(/[a-z-]+/g);
@@ -455,7 +455,7 @@ test('the lobby lists the match keybinds and names the ones that differ; ready a
   const t=s.text();
   assert.ok(t.includes('Keybinds|Fire Mouse 1 · Walk Q · Reload none · Scoreboard Tab'),'movement stays out of the row while it is standard');
   assert.ok(t.includes('Walk is on Q here (usually Shift) · Reload has no key'));
-  assert.ok(!s.button('Ready').disabled,'a differing bind never blocks ready');
+  assert.ok(!s.button('Ready up').disabled,'a differing bind never blocks ready');
   const loading={id:'m1',phase:'loading',mode:'deathmatch',scenario:'Synthetic Scenario',timeLimit:60,round:1,totalRounds:1,startsAt:null,nextAt:46000,players:['p1','p2'],loaded:[],live:[],rounds:[],standings:[],winnerId:null,rematch:[],loadAttempt:0};
   s.api.leave();s.api.enter(s.container);s.requests[s.requests.length-1].finish(200,view({lobby:lobby({match:loading,binds})}));
   assert.ok(s.text().includes('Walk is on Q here (usually Shift)'),'the load screen repeats it');
@@ -471,4 +471,16 @@ test('names of only punctuation keep their characters, in the name and the circl
   const circles=s.all().filter(e=>/^mp-avatar\b/.test(e.className)).map(e=>e.textContent);
   assert.equal(circles.filter(c=>c==='-.').length,2,'the circle shows the first two characters, not "?"');
   assert.ok(t.includes('|Friend|')&&circles.includes('?'),'a name with nothing drawable still falls back (its Steam picture covers the circle)');
+});
+
+test('leave during library and map requests permits fresh loads',()=>{
+ const s=setup();s.api.enter(s.container);s.requests[0].finish(200,view({lobby:lobby()}));s.button('Edit').onclick();
+ const old=s.requests.find(r=>r.url.endsWith('part=library'));s.api.leave();s.api.enter(s.container);s.last().finish(200,view({lobby:lobby()}));
+ assert.equal(s.requests.filter(r=>r.url.endsWith('part=library')).length,2);old.finish(200,{available:false});
+ s.api.leave();s.api.enter(s.container);s.last().finish(200,view());s.button('Map library').onclick();s.api.leave();s.api.enter(s.container);s.requests.filter(r=>r.url==='/private/multiplayer').at(-1).finish(200,view());
+ assert.ok(s.requests.filter(r=>r.url.endsWith('part=maps')).length>=2);
+});
+test('Cosmetics failures retry and empty models have an explicit state',()=>{
+ const s=setup();s.api.enter(s.container);s.requests[0].finish(200,view());s.button('Cosmetics').onclick();s.requests.find(r=>r.url.endsWith('part=looks')).finish(503,{});
+ const retry=s.button("Couldn't load character options. Retry.");assert.ok(retry);retry.onclick();s.requests.filter(r=>r.url.endsWith('part=looks')).at(-1).finish(200,{models:[]});assert.ok(s.text().includes('No character options available.'));
 });

@@ -92,10 +92,10 @@
   function paint(){
     var el=s.el,c=s.view;if(!el)return;var p=parts(el);
     var typing=!!(c&&opened());
-    if(!c){el.className='';clear(p.feed);clear(p.radio);clear(p.input);p.radioKey=p.inputKey=null;s.draftNode=null;return;}
+    if(!c){el.className='';clear(p.feed);p.rows={};clear(p.radio);clear(p.input);p.radioKey=p.inputKey=null;s.draftNode=null;return;}
     el.className='show'+(c.cs?' cs':'')+(typing?' typing':'')+(c.radio?' radio-open':'');
-    clear(p.feed);var since=now()-s.at,shown=0;
-    (c.lines||[]).forEach(function(l){var row=line(l,(l.age||0)+since,typing);if(row.style.display!=='none')shown++;p.feed.appendChild(row);});
+    var previous=p.rows||{},rows={},since=now()-s.at,shown=0;
+    (c.lines||[]).forEach(function(l,index){var key=String(l.id===undefined?index:l.id),age=(l.age||0)+since,row=previous[key];var content=JSON.stringify([l.scope,l.name,l.team,l.dead,l.place,l.text,l.radio,l.you]);if(!row){row=line(l,age,typing);p.feed.appendChild(row);}else if(row.content!==content){var fresh=line(l,age,typing);clear(row);row.className=fresh.className;while(fresh.firstChild){var child=fresh.firstChild;fresh.removeChild(child);row.appendChild(child);}}row.content=content;var opacity=typing?1:age>=FADE_MS?0:age>FADE_MS-FADE_OUT_MS?(FADE_MS-age)/FADE_OUT_MS:1;row.style.opacity=String(Math.round(opacity*100)/100);row.style.display=opacity<=0?'none':'';rows[key]=row;if(opacity>0)shown++;});for(var key in previous)if(!rows[key])p.feed.removeChild(previous[key]);p.rows=rows;
     var rk=c.radio?JSON.stringify(c.radio):null;
     if(rk!==p.radioKey){
       p.radioKey=rk;clear(p.radio);
@@ -120,7 +120,7 @@
         p.input.appendChild(box);
         p.input.appendChild(node('div','chat-hint','Enter sends · Esc cancels'+(c.teams?' · '+c.allKey+' all chat · '+c.teamKey+' team chat':'')));
       }
-      clashes.forEach(function(t){p.input.appendChild(node('div','chat-clash',t));});
+      clashes.forEach(function(t){var match=/also uses ([^ ]+)/.exec(t);if(match)t=match[1]+" is also bound in KovaaK's. Chat still works; rebind in KovaaK's settings if needed.";p.input.appendChild(node('div','chat-clash',t));});
     }
     draftPaint();
   }
