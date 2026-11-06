@@ -14,9 +14,9 @@
   function add(parent,child){parent.appendChild(child);return child;}
   function base(){var p=root.location.pathname;return p.slice(0,p.lastIndexOf('/'));}
   function request(path,body,done){
-    var ticket=generation,x=new root.XMLHttpRequest();pending.push(x);x.open(body?'POST':'GET',base()+'/'+path,true);x.timeout=12000;
+    var ticket=generation,x=new root.XMLHttpRequest();if(!body)pending.push(x);x.open(body?'POST':'GET',base()+'/'+path,true);x.timeout=12000;
     if(body){x.setRequestHeader('X-AimMod-UI','1');x.setRequestHeader('Content-Type','application/json');}
-    var finished=false;function finish(ok,data){if(finished)return;finished=true;pending=pending.filter(function(y){return y!==x;});if(ticket!==generation||!container)return;done(ok,data);}
+    var finished=false;function finish(ok,data){if(finished)return;finished=true;pending=pending.filter(function(y){return y!==x;});if(!body&&(ticket!==generation||!container))return;done(ok,data);}
     x.onreadystatechange=function(){if(x.readyState!==4)return;var data=null;try{data=JSON.parse(x.responseText);}catch(e){data=null;}finish(x.status===200&&data!==null,data);};
     x.onerror=x.ontimeout=function(){finish(false,null);};x.send(body?JSON.stringify(body):null);
   }
@@ -31,8 +31,16 @@
   function sceneUrl(id,widget){var b=obsBase();if(!b)return '';var r=st.resolution.split('x');return b+'/scene?id='+encodeURIComponent(id)+(widget?'&widget='+encodeURIComponent(widget):'')+'&w='+r[0]+'&h='+r[1];}
   // ---- persistence ----
   function setStatus(text,warn){st.status=text;st.warn=!!warn;var n=root.document.getElementById('ove-status');if(n){n.textContent=text;n.className='ove-status'+(warn?' warn':'')+(text?'':' idle');}}
-  function changed(rebuild){setStatus('Saving…');if(saveTimer!==null)root.clearTimeout(saveTimer);saveTimer=root.setTimeout(save,450);if(rebuild!==false)render();else preview();}
-  function save(){saveTimer=null;if(!st||!st.store)return;var body=M.normalize(st.store);request('overlay-scenes',body,function(ok,data){if(ok&&data&&data.scenes){setStatus(saveTimer===null?'All changes saved.':'Saving…');}else setStatus('Could not save. Your last change will retry when you edit again.',true);});}
+  var dirtyRevision=0,savedRevision=0,writeInFlight=false;
+  function changed(rebuild){dirtyRevision++;setStatus('Saving…');if(saveTimer!==null)root.clearTimeout(saveTimer);saveTimer=root.setTimeout(save,450);if(rebuild!==false)render();else preview();}
+  function save(){
+    saveTimer=null;if(writeInFlight||!st||!st.store||dirtyRevision===savedRevision)return;
+    writeInFlight=true;var revision=dirtyRevision,body=M.normalize(st.store);
+    request('overlay-scenes',body,function(ok,data){writeInFlight=false;
+      if(ok&&data&&data.scenes){savedRevision=revision;setStatus(dirtyRevision===savedRevision?'All changes saved.':'Saving…');if(dirtyRevision>savedRevision)save();}
+      else{setStatus('Could not save. Retry.',true);if(container)render();}
+    });
+  }
   function saveLegacy(patch){st.busy=true;request('overlay-settings',patch,function(ok,data){st.busy=false;if(ok)st.settings=data;render();setStatus(ok?'Saved.':'Could not save. Please try again.',!ok);});}
   // ---- data for the preview ----
   function data(){var now=new Date().getTime();if(st.data==='live'&&st.feed){var d=st.feed;d.peripherals=st.store.profile.peripherals;return d;}var s=W.sample(now);if(st.store.profile.peripherals.length)s.peripherals=st.store.profile.peripherals;if(st.ctx==='match'){var m=W.sampleMatch();s.board=m.board;s.tournament=m.tournament;}if(st.ctx==='menu')s.live={available:true,active:false};return s;}
@@ -104,7 +112,7 @@
     if(!st.store){var p=add(container,el('div','panel ove-loading'));if(st.failed){var f=add(p,el('div','empty'));add(f,el('h3','','Could not load your overlays'));add(f,el('p','','AimMod couldn’t reach its local service. Your overlays keep their last saved layout.'));var a=add(f,el('div','actions center'));a.appendChild(button('Try again',function(){st.failed=false;render();load();},'primary'));}else add(p,el('p','subtle','Loading overlays…'));return;}
     var head=add(container,el('div','ove-top'));var tabs=add(head,el('div','ove-tabs'));tabs.setAttribute('role','tablist');tabs.setAttribute('aria-label','Overlay pages');
     for(var i=0;i<TABS.length;i++)(function(t){var b=button(t[1],function(){st.tab=t[0];st.panel='';render();tick();},'ove-tab'+(st.tab===t[0]?' active':''),'ove-tab-'+t[0]);b.setAttribute('role','tab');b.setAttribute('aria-selected',String(st.tab===t[0]));tabs.appendChild(b);})(TABS[i]);
-    var status=add(head,el('div','ove-status'+(st.warn?' warn':'')+(st.status?'':' idle'),st.status));status.id='ove-status';status.setAttribute('role','status');
+    var status=add(head,el('div','ove-status'+(st.warn?' warn':'')+(st.status?'':' idle'),st.status));status.id='ove-status';status.setAttribute('role','status');if(st.warn&&dirtyRevision>savedRevision)head.appendChild(button('Retry',save,'compact','ove-save-retry'));
     if(st.tab==='editor')editor();else if(st.tab==='outputs')outputs();else if(st.tab==='profile')profile();else opponent();
   }
   function editor(){
@@ -287,7 +295,7 @@
     var a=add(card,el('div','actions'));a.appendChild(button('Refresh opponents',function(){request('overlay-opponents',null,function(ok,d){if(ok)st.opponents=d;render();if(!ok)setStatus('Could not refresh opponents.',true);});}));
   }
   function load(){
-    request('overlay-scenes',null,function(ok,d){if(ok&&d&&d.scenes){st.store=M.normalize(d);if(!M.find(st.store,st.scene))st.scene=st.store.gameScene||st.store.scenes[0].id;}else st.failed=true;render();tick();});
+    if(!st.store)request('overlay-scenes',null,function(ok,d){if(ok&&d&&d.scenes){st.store=M.normalize(d);if(!M.find(st.store,st.scene))st.scene=st.store.gameScene||st.store.scenes[0].id;}else st.failed=true;render();tick();});
     request('overlay-settings',null,function(ok,d){st.settings=ok?d:{gameEnabled:false,obsEnabled:false};if(st.store)render();});
     request('overlay-setup',null,function(ok,d){if(ok)st.setup=d;if(st.store)render();});
     request('overlay-opponents',null,function(ok,d){if(ok)st.opponents=d;});
@@ -296,7 +304,7 @@
   function leave(){generation++;motionBusy=false;pending.forEach(function(x){x.abort();});pending=[];if(saveTimer!==null){root.clearTimeout(saveTimer);saveTimer=null;if(st&&st.store)save();}
     if(feedTimer!==null)root.clearTimeout(feedTimer);if(tickTimer!==null)root.clearTimeout(tickTimer);feedTimer=tickTimer=null;drag=null;unlisten();if(root.document.removeEventListener)root.document.removeEventListener('keydown',nudge);container=null;}
   root.AimModOverlayEditor={
-    enter:function(target){leave();generation++;container=target;st=blank();st.settings={gameEnabled:false,obsEnabled:false};if(container){if(root.document.addEventListener)root.document.addEventListener('keydown',nudge);render();load();}},
+    enter:function(target){leave();generation++;container=target;if(!st||(!writeInFlight&&dirtyRevision===savedRevision))st=blank();st.settings={gameEnabled:false,obsEnabled:false};if(container){if(root.document.addEventListener)root.document.addEventListener('keydown',nudge);render();load();}},
     leave:leave,resize:function(){if(container&&st&&st.store&&!drag)render();},
     state:function(){return st;}
   };

@@ -10,7 +10,7 @@ function setup(){
     byId:id=>w.document.getElementById(id),button:t=>container.find(n=>n.tagName==='BUTTON'&&n.textContent===t),
     route:p=>w.requests.filter(r=>r.url==='/cap/'+p),last:p=>w.requests.filter(r=>r.url==='/cap/'+p).at(-1),
     posts:p=>w.requests.filter(r=>r.url==='/cap/'+p&&r.method==='POST'),
-    saveNow(){const t=w.timers.filter(x=>x.delay===450&&!x.cleared&&!x.ran).at(-1);assert.ok(t,'a save is pending');t.ran=true;t.fn();return JSON.parse(s.posts('overlay-scenes').at(-1).body);}};
+    saveNow(){const previous=s.posts('overlay-scenes').at(-1);if(previous&&!previous.acknowledged){previous.acknowledged=true;previous.finish(200,JSON.parse(previous.body));}const t=w.timers.filter(x=>x.delay===450&&!x.cleared&&!x.ran).at(-1);assert.ok(t,'a save is pending');t.ran=true;t.fn();return JSON.parse(s.posts('overlay-scenes').at(-1).body);}};
   s.ready=(store=M.defaultStore(settings))=>{s.route('overlay-scenes')[0].finish(200,store);s.route('overlay-settings')[0].finish(200,settings);s.route('overlay-setup')[0].finish(200,setupInfo);s.route('overlay-opponents')[0].finish(200,{selectedKey:'',rows:[{key:'r1',name:'Example',score:120,scenario:'Practice'}]});s.route('overlay-feed')[0].finish(200,{enabled:true,kovaaks:{available:true,dpi:800,sens:30,sensScale:'cm/360',cm360:30,fov:103,fovScale:'Overwatch'}});};
   return s;
 }
@@ -102,4 +102,13 @@ test('live data previews the real feed and polls motion only when the scene show
   s.run();assert.ok(!s.requests.some(r=>r.url.indexOf('overlay-motion')>=0),'the in-game scene has no motion widget');
   s.byId('ove-add-input').onclick();s.run();const m=s.requests.find(r=>r.url.indexOf('overlay-motion')>=0);assert.ok(m);assert.equal(m.url,'/cap/overlay-motion?input=1');
   m.finish(200,{input:{available:true,w:true}});s.run();const key=s.container.findAll(n=>/^amw-key( |$)/.test(n.className)).find(k=>k.textContent==='W');assert.equal(key.style.background,'#27e4a1');
+});
+
+test('writes survive leave, serialize revisions and expose Retry after failure',()=>{
+ const s=setup();s.ready();s.byId('ove-add-mouse-path').onclick();const first=s.saveNow(),write=s.posts('overlay-scenes')[0];
+ s.byId('ove-remove').onclick();s.api.leave();assert.ok(!write.aborted);assert.equal(s.posts('overlay-scenes').length,1);
+ write.finish(200,first);assert.equal(s.posts('overlay-scenes').length,2);const second=s.posts('overlay-scenes')[1];
+ assert.ok(!JSON.parse(second.body).scenes.find(x=>x.id==='game').widgets.some(w=>w.type==='mouse-path'));
+ second.finish(500,{});s.api.enter(s.container);assert.ok(s.byId('ove-save-retry'));s.byId('ove-save-retry').onclick();assert.equal(s.posts('overlay-scenes').length,3);
+ const retry=s.posts('overlay-scenes')[2];retry.finish(200,JSON.parse(retry.body));assert.match(s.byId('ove-status').textContent,/All changes saved/);
 });

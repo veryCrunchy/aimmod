@@ -34,3 +34,7 @@
 .sb-cs .sb-row.down .sb-num{color:#7f968a}
 .sb-full.sb-cs{width:720px}
 .sb-bot{margin-right:6px;padding:0 4px;border-radius:3px;background:#2b3a46;color:#9fc3d9;font-size:10px;font-weight:700}
+
+.sb-cs-side.t .sb-name,.sb-cs-side.t .sb-cs-score{color:#f0b45a}
+.sb-cs-side.ct .sb-name,.sb-cs-side.ct .sb-cs-score{color:#66ccff}
+.sb-cs-side.t{border-color:#f0b45a}.sb-cs-side.ct{border-color:#66ccff}

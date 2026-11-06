@@ -69,8 +69,10 @@
   // What arrived, for the service log (AimModCore logs what it pushed): the events, the tags in the
   // last one, and how the page listens. Reported every 10 s while it changes.
   var stats={events:0,bad:0,last:0,via:'none'},reported='',reportTimer=null;
-  function onTags(json){var data=null;try{data=typeof json==='string'?JSON.parse(json):json;}catch(e){data=null;}
+  var tagsAt=0;function onTags(json){tagsAt=Date.now();var data=null;try{data=typeof json==='string'?JSON.parse(json):json;}catch(e){data=null;}
     stats.events++;if(!data)stats.bad++;stats.last=data&&data.tags&&data.tags.length?data.tags.length:0;render(data);}
+  function watchdog(){if(tagsAt&&Date.now()-tagsAt>2000){render(null);tagsAt=0;}if(root.setTimeout)root.setTimeout(watchdog,500);}
+  if(root.setTimeout)root.setTimeout(watchdog,500);
   function report(){
     reportTimer=null;
     var line='listening via '+stats.via+'; '+stats.events+' events in the last 10 s'+(stats.bad?' ('+stats.bad+' unreadable)':'')+', '+stats.last+' tags in the last one';

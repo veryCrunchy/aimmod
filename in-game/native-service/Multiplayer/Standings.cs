@@ -10,9 +10,9 @@ namespace AimMod.InGame.Multiplayer;
 //   team     team totals, then players by team with frags, deaths and K/D (TDM)
 //   cs       CS-style: each side with its score and players alive, then its players with money
 //            (your own side only, as in CS), kills, deaths, K/D and who is down
-// No Steam ids: rows carry names and a self flag only.
+// No Steam ids: rows use a match-local position for identity.
 sealed record BoardRow(string Name, bool Self, int Rank, double? Score, double? Gap, int? Wins, double? Percent,
-    int? Frags, int? Deaths, double? Kd, double? Health, int Team, string Status, bool Bot = false, int? Money = null);
+    int? Frags, int? Deaths, double? Kd, double? Health, int Team, string Status, bool Bot = false, int? Money = null, string? RowKey = null);
 sealed record BoardTeam(int Team, string Name, int Total, bool Self, string? Side = null, int? Alive = null, int? Players = null);
 sealed record Board(string Mode, string Kind, string Title, string Phase, int Round, int? Rounds, int? FirstTo, int? Left, int? FragLimit,
     string Scenario, IReadOnlyList<BoardRow> Rows, IReadOnlyList<BoardTeam>? Teams);
@@ -31,6 +31,7 @@ static class Standings
     public static Board? Build(LobbySnapshot lobby, MatchSnapshot m, string self, long hostNow, CombatView? combat)
     {
         string Name(string id) => LobbyRules.CleanName(lobby.Members.FirstOrDefault(x => x.Id == id)?.Name ?? m.Standings.FirstOrDefault(s => s.MemberId == id)?.Name, "Player");
+        string RowKey(string id) => "p" + Array.IndexOf(m.Players.ToArray(), id).ToString(System.Globalization.CultureInfo.InvariantCulture);
         int Wins(string id) => m.Rounds.Count(r => r.WinnerId == id);
         bool Bot(string id) => lobby.Members.Any(x => x.Id == id && x.Bot is not null);
         int? left = m.Phase == MatchPhases.Live && m.StartsAt is { } start ? (int)Math.Max(0, Math.Ceiling((start + m.TimeLimit * 1000 - hostNow) / 1000.0)) : null;
@@ -50,7 +51,7 @@ static class Standings
                 cs.Score.Length >= t ? cs.Score[t - 1] : 0, mine == t, SideOf(t), cs.Players.Count(p => p.Team == t && p.Alive), cs.Players.Count(p => p.Team == t))).ToArray();
             var rows = cs.Players.OrderBy(p => Array.IndexOf(order, p.Team)).ThenByDescending(p => p.Kills).ThenBy(p => p.Deaths).ThenBy(p => Name(p.Member), StringComparer.Ordinal)
                 .Select((p, i) => new BoardRow(Name(p.Member), p.Member == self, i + 1, null, null, null, null, p.Kills, p.Deaths, Kd(p.Kills, p.Deaths), p.Alive ? p.Health : 0, p.Team,
-                    p.Alive ? "alive" : "down", Bot(p.Member), mine != 0 && p.Team == mine ? p.Money : null));
+                    p.Alive ? "alive" : "down", Bot(p.Member), mine != 0 && p.Team == mine ? p.Money : null, RowKey(p.Member)));
             return Make("cs", rows, teams);
         }
         if (combat is not null && LobbyModes.Combat(m.Mode))
@@ -58,7 +59,7 @@ static class Standings
             var ordered = combat.Players.OrderByDescending(p => p.Frags).ThenBy(p => p.Deaths).ToList();
             var vampiric = m.Mode == LobbyModes.Vampiric;
             BoardRow Row(CombatPlayerView p, int rank) => new(Name(p.Member), p.Member == self, rank, null, null, null, null, p.Frags, p.Deaths, Kd(p.Frags, p.Deaths),
-                vampiric || m.Mode == LobbyModes.TeamDeathmatch ? Math.Round(p.Alive ? p.Health : 0) : null, p.Team, p.Alive ? "alive" : "down", Bot(p.Member));
+                vampiric || m.Mode == LobbyModes.TeamDeathmatch ? Math.Round(p.Alive ? p.Health : 0) : null, p.Team, p.Alive ? "alive" : "down", Bot(p.Member), RowKey: RowKey(p.Member));
             if (m.Mode == LobbyModes.TeamDeathmatch)
             {
                 var teams = new[] { 1, 2 }.Select(t => new BoardTeam(t, t == 1 ? "Mint" : "Rose", combat.TeamFrags is { Count: >= 2 } tf ? tf[t - 1] : combat.Players.Where(p => p.Team == t).Sum(p => p.Frags),
@@ -71,7 +72,7 @@ static class Standings
         {
             var rows = m.Players.Select(id => (id, t: m.Tracking?.FirstOrDefault(x => x.Member == id)))
                 .OrderByDescending(x => Wins(x.id)).ThenByDescending(x => x.t?.Percent ?? 0)
-                .Select((x, i) => new BoardRow(Name(x.id), x.id == self, i + 1, null, null, Wins(x.id), x.t is null ? null : Math.Round(x.t.Percent, 1, MidpointRounding.AwayFromZero), null, null, null, null, 0, x.t?.Disputed == true ? "disputed" : "playing"));
+                .Select((x, i) => new BoardRow(Name(x.id), x.id == self, i + 1, null, null, Wins(x.id), x.t is null ? null : Math.Round(x.t.Percent, 1, MidpointRounding.AwayFromZero), null, null, null, null, 0, x.t?.Disputed == true ? "disputed" : "playing", RowKey: RowKey(x.id)));
             return Make("tracking", rows);
         }
         // Score modes: the live round's score; duels add round wins.
@@ -79,9 +80,9 @@ static class Standings
         var leader = lines.FirstOrDefault().line?.Score;
         if (m.Mode == LobbyModes.Duel)
             return Make("duel", lines.OrderByDescending(x => Wins(x.id)).ThenByDescending(x => x.line?.Score ?? 0)
-                .Select((x, i) => new BoardRow(Name(x.id), x.id == self, i + 1, x.line?.Score, null, Wins(x.id), null, null, null, null, null, 0, x.line?.Status ?? "waiting")));
+                .Select((x, i) => new BoardRow(Name(x.id), x.id == self, i + 1, x.line?.Score, null, Wins(x.id), null, null, null, null, null, 0, x.line?.Status ?? "waiting", RowKey: RowKey(x.id))));
         return Make("score", lines.Select((x, i) => new BoardRow(Name(x.id), x.id == self, i + 1, x.line?.Score,
-            i > 0 && leader is { } top && x.line?.Score is { } sc ? Math.Round(sc - top, 1) : null, null, null, null, null, null, null, 0, x.line?.Status ?? "waiting")));
+            i > 0 && leader is { } top && x.line?.Score is { } sc ? Math.Round(sc - top, 1) : null, null, null, null, null, null, null, 0, x.line?.Status ?? "waiting", RowKey: RowKey(x.id))));
     }
 
     // The corner panel: the top three and you, so it stays small.
