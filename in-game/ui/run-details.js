@@ -73,7 +73,7 @@
     if(linkCount)add(identity,links);
     var score=add(head,node('div',undefined,'run-score'));add(score,node('span','Score','metric-label'));add(score,node('strong',n(run.Score)));
     if(data.MissingTelemetry)add(host,node('p','No detailed telemetry was recorded for this run.','notice run-notice'));
-    var tabs=add(host,node('div',undefined,'segmented run-tabbar'));tabs.setAttribute('role','tablist');[['summary','Summary'],['responses','Target responses'],['shots','Shots']].forEach(function(item){var b=add(tabs,button(item[1],function(){tab=item[0];render()},tab===item[0]));b.setAttribute('role','tab');b.setAttribute('aria-selected',String(tab===item[0]))});
+    var tabs=add(host,node('div',undefined,'segmented run-tabbar'));tabs.setAttribute('aria-label','Run details');tabs.setAttribute('role','tablist');[['summary','Summary'],['responses','Target responses'],['shots','Shots']].forEach(function(item,index){var b=add(tabs,button(item[1],function(){tab=item[0];render()},tab===item[0]));b.setAttribute('role','tab');b.setAttribute('aria-selected',String(tab===item[0]));b.setAttribute('tabindex',tab===item[0]?'0':'-1');b.id='run-tab-'+item[0];b.onkeydown=function(e){var next=e.keyCode===39?(index+1)%3:e.keyCode===37?(index+2)%3:e.keyCode===36?0:e.keyCode===35?2:-1;if(next<0)return;e.preventDefault();tab=['summary','responses','shots'][next];render();var selected=global.document&&global.document.getElementById('run-tab-'+tab);if(selected)selected.focus();}});
     if(tab==='windows')tab='summary';
     if(tab==='summary'){
       var s=data.Details&&data.Details.Summary||{};var metrics=add(host,node('div',undefined,'metrics run-kpis'));
