@@ -114,9 +114,13 @@ static partial class MultiplayerChecks
         late.Tick(deadline + 100);
         Check(late.View().LastReason == "time", "Late plant cannot defeat round timeout");
         var before = Ready(); var begun = start + CsRules.FreezeMs + 100;
+        var roster = (System.Collections.IDictionary)typeof(CsMatch).GetField("players", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(before)!;
+        var richPlanter = roster["t"]!;
+        richPlanter.GetType().GetField("Money")!.SetValue(richPlanter, CsRules.MaxMoney);
         before.Use("t", true, begun); before.Tick(begun + CsRules.PlantMs + 50);
         before.Combat.AreaHit("ct", "t", 10000, before.Combat.Weapon, begun + CsRules.PlantMs - 1, null);
         Check(before.View().Bomb.State != "planted", "Delayed kill before completion cancels the published plant");
+        Check(before.View().Players.Single(p => p.Member == "t").Money == CsRules.MaxMoney, "Cancelled plant refunds only the reward actually paid at the money cap");
         var kill = Ready(); var plant = start + CsRules.FreezeMs + 100;
         kill.Use("t", true, plant);
         kill.Combat.BeforeDamage!(plant + CsRules.PlantMs + 1);

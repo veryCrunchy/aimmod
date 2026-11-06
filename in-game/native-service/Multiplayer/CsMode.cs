@@ -310,7 +310,7 @@ sealed class CsMatch
         return health;
     }
 
-    string? plantedBy; long plantedAt, plantRoundDeadline;
+    string? plantedBy; long plantedAt, plantRoundDeadline; int plantRewardPaid;
     void Killed(string victim, string killer, CombatWeapon weapon, bool head)
     {
         var now = Combat.DamageTime;
@@ -320,7 +320,7 @@ sealed class CsMatch
             Phase = "live"; PhaseEndsAt = plantRoundDeadline; bombState = "carried"; carrier = victim;
             explodesAt = null; plantedThisRound = false; plantedBy = null;
             defuser = null; defuseDoneAt = null;
-            if (players.TryGetValue(victim, out var planterPlayer)) planterPlayer.Money = Math.Max(0, planterPlayer.Money - CsRules.PlantReward);
+            if (players.TryGetValue(victim, out var planterPlayer)) Pay(planterPlayer, -plantRewardPaid, now, "plant-cancelled");
             events.RemoveAll(e => e.Kind == "planted" && e.T == plantedAt);
             Event("plant-cancelled", now, victim, "killed");
         }
@@ -626,7 +626,8 @@ sealed class CsMatch
                 {
                     plantedBy = pl; plantedAt = pd; plantRoundDeadline = PhaseEndsAt;
                     Phase = "planted"; bombState = "planted"; carrier = null; bombAt = [at.X, at.Y, Centre(pl, at)]; explodesAt = pd + CsRules.BombMs; PhaseEndsAt = explodesAt.Value; plantedThisRound = true;
-                    if (players.TryGetValue(pl, out var pp)) Pay(pp, CsRules.PlantReward, pd, "plant");
+                    plantRewardPaid = 0;
+                    if (players.TryGetValue(pl, out var pp)) { var before = pp.Money; Pay(pp, CsRules.PlantReward, pd, "plant"); plantRewardPaid = pp.Money - before; }
                     Event("planted", pd, pl, site);
                     planter = null; plantDoneAt = null;
                 }
