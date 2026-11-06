@@ -381,6 +381,11 @@ static class LifecycleChecks
             var lifecycle = new Lifecycle(output, cliGame, handler, _ => false);
             var snapshot = JsonSerializer.Serialize(lifecycle.Snapshot());
             Check(snapshot.Contains("\"version\":\"1.1.0\"") && snapshot.Contains("\"kind\":\"update\"") && snapshot.Contains("\"available\":true"), "UI snapshot reports the update and rollback");
+            lifecycle.DismissNotice("update:1.1.0");
+            await using (var reopened = new Lifecycle(output, cliGame, handler, _ => false))
+                Check(JsonSerializer.Serialize(reopened.Snapshot()).Contains("update:1.1.0"), "notice dismissal survives a service restart");
+            Throws<JsonException>(() => lifecycle.DismissNotice("repair:all"), "urgent repair cannot be dismissed");
+            Throws<JsonException>(() => lifecycle.DismissNotice("update:../bad"), "invalid notice key rejected");
             lifecycle.Act("dismiss");
             Check(!JsonSerializer.Serialize(lifecycle.Snapshot()).Contains("\"kind\":\"update\""), "result dismissed");
             lifecycle.Act("repair");
