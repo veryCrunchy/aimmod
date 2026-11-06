@@ -80,23 +80,6 @@ namespace aimmod
                  });
             return ok;
         }
-        struct RawArray
-        {
-            void* data;
-            std::int32_t num, max;
-        };
-        // A TArray parameter filled from `bytes` (engine allocator); freed by the caller.
-        void* WriteArray(std::uint8_t* value, const void* bytes, std::size_t count, std::size_t elementSize)
-        {
-            if (count == 0) return nullptr;
-            void* data = RC::Unreal::FMemory::Malloc(count * elementSize);
-            if (!data) return nullptr;
-            std::memcpy(data, bytes, count * elementSize);
-            RawArray raw{data, static_cast<std::int32_t>(count), static_cast<std::int32_t>(count)};
-            std::memcpy(value, &raw, sizeof(raw));
-            return data;
-        }
-
         // One mesh section on a ProceduralMeshComponent, no collision. Each
         // triangle is added in both windings, so the piece shows from any side
         // whatever the material's culling.
@@ -124,21 +107,17 @@ namespace aimmod
                 t[0] /= l, t[1] /= l;
                 std::memcpy(&tangents[i * 16], t, 12);
             }
-            std::vector<void*> owned;
             const bool ok = Call(component, STR("/Script/ProceduralMeshComponent.ProceduralMeshComponent:CreateMeshSection_LinearColor"),
                                  [&](const std::wstring& n, FProperty* p, std::uint8_t* v) {
-                                     void* data = nullptr;
-                                     if (n == STR("Vertices")) data = WriteArray(v, m.positions.data(), m.positions.size(), 12);
-                                     else if (n == STR("Triangles")) data = WriteArray(v, triangles.data(), triangles.size(), 4);
-                                     else if (n == STR("Normals")) data = WriteArray(v, m.normals.data(), m.normals.size(), 12);
-                                     else if (n == STR("UV0")) data = WriteArray(v, m.uvs.data(), m.uvs.size() / 2, 8);
-                                     else if (n == STR("VertexColors")) data = WriteArray(v, colours.data(), colours.size() / 4, 16);
+                                     if (n == STR("Vertices")) WriteArray(v, m.positions.data(), m.positions.size(), 12);
+                                     else if (n == STR("Triangles")) WriteArray(v, triangles.data(), triangles.size(), 4);
+                                     else if (n == STR("Normals")) WriteArray(v, m.normals.data(), m.normals.size(), 12);
+                                     else if (n == STR("UV0")) WriteArray(v, m.uvs.data(), m.uvs.size() / 2, 8);
+                                     else if (n == STR("VertexColors")) WriteArray(v, colours.data(), colours.size() / 4, 16);
                                      else if (n == STR("Tangents") && RC::Unreal::CastField<RC::Unreal::FArrayProperty>(p) && RC::Unreal::CastField<RC::Unreal::FArrayProperty>(p)->GetInner()->GetSize() == 16)
-                                         data = WriteArray(v, tangents.data(), m.normals.size(), 16);
+                                         WriteArray(v, tangents.data(), m.normals.size(), 16);
                                      else if (n == STR("bCreateCollision")) WriteBoolParam(v, p, false);
-                                     if (data) owned.push_back(data);
                                  });
-            for (void* data : owned) RC::Unreal::FMemory::Free(data);
             return ok;
         }
     } // namespace

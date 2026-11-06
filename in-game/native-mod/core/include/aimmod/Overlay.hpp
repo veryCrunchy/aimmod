@@ -15,6 +15,7 @@ namespace aimmod::overlay
     // multiplayer-notify.json, the fields the host acts on.
     struct Notice
     {
+        bool operator==(const Notice&) const = default;
         bool content{};     // a notice, badge, mode HUD or standings: the layer shows
         bool full{};        // layout "full" (HUDs at the screen edges) or the top-centre toast
         bool interactive{}; // something on it takes clicks (buttons, the buy menu)
@@ -23,6 +24,10 @@ namespace aimmod::overlay
         bool swallowMenu{}; // Escape just closed the buy menu: KovaaK's pause menu it opened closes again
         bool boardHeld{};   // the full scoreboard (its key is held)
     };
+    inline bool LeaseFresh(std::uint64_t stamp, std::uint64_t now)
+    {
+        return stamp != 0 && now >= stamp && now - stamp < 3ull * 10000000ull;
+    }
     inline constexpr std::size_t MaxNoticeBytes = 16384;
     // nullopt: absent, too large or not an AimMod notice (the layer hides).
     std::optional<Notice> ParseNotice(std::string_view json);
@@ -74,6 +79,8 @@ namespace aimmod::overlay
         bool replay{};           // replay playback owns the screen and input
         bool pauseMenuVisible{}; // KovaaK's own menus are up (they own input and the cursor)
         bool gameCursor{};       // the game shows its cursor anyway
+        bool serviceAlive{true};
+        bool haveWidget{};
         bool haveView{};         // the Gameface view exists
         bool focused{true};      // KovaaK's window is in front (alt-tab: it isn't)
         bool escapeRecent{};     // Escape went down in the last half second (with the window in front)
@@ -103,6 +110,7 @@ namespace aimmod::overlay
     {
     public:
         Plan Next(const Frame& frame);
+        void Acquired(bool success) { m_holding = success; }
         bool holding() const { return m_holding; }
 
     private:

@@ -132,7 +132,8 @@ namespace bridge::ghost
                 if (cursor >= candidates.size()) phase = Phase::Lurk;
                 break;
             case Phase::Lurk:
-                if (lurkIndex < entrances.size()) Lurk(g, clear, entrances[lurkIndex++], used);
+                if (lurkIndex < entrances.size() && Lurk(g, clear, entrances[lurkIndex], used, budget))
+                { ++lurkIndex; lurkCursor = 0; lurkBest = -1; }
                 if (lurkIndex >= entrances.size())
                 {
                     Select();
@@ -317,13 +318,16 @@ namespace bridge::ghost
         }
 
         // A lurker's spot by an entrance's outer point: off the way, the way in sight, walled in.
-        void Lurk(const NavGrid& g, const Clear& clear, Entrance& e, int& used)
+        std::size_t lurkCursor = 0;
+        double lurkBest = -1;
+        bool Lurk(const NavGrid& g, const Clear& clear, Entrance& e, int& used, int budget)
         {
-            if (Hyp(e.outer, e.at) < g.spacing * 2) return;
+            if (Hyp(e.outer, e.at) < g.spacing * 2) return true;
             const int cx = static_cast<int>(std::lround(e.outer[0] / g.spacing)), cy = static_cast<int>(std::lround(e.outer[1] / g.spacing));
             const int r = std::max(2, static_cast<int>(std::lround(std::min(700.0, request.entry * 0.4) / g.spacing)));
             const std::array<double, 3> mark{e.outer[0], e.outer[1], e.outer[2] + ChestAbove(g)};
-            double best = -1;
+            double& best = lurkBest;
+            std::size_t position = 0;
             for (int ox = -r; ox <= r; ++ox)
                 for (int oy = -r; oy <= r; ++oy)
                 {
@@ -331,6 +335,9 @@ namespace bridge::ghost
                     if (it == g.cells.end()) continue;
                     for (const int n : it->second)
                     {
+                        if (position++ < lurkCursor) continue;
+                        if (used >= budget) return false;
+                        lurkCursor = position;
                         const auto p = At(g, n);
                         if (std::fabs(p[2] - e.outer[2]) > 300) continue;
                         double off = std::numeric_limits<double>::infinity();
@@ -343,6 +350,7 @@ namespace bridge::ghost
                         e.lurk = p;
                     }
                 }
+            return true;
         }
 
         static int Bits(unsigned m)
@@ -374,6 +382,7 @@ namespace bridge::ghost
             take([](const Spot&) { return true; }, MaxSpots);
             found.clear();
             candidates.clear();
+            lurkCursor = 0; lurkBest = -1;
             candidateWalk.clear();
         }
     };

@@ -216,7 +216,7 @@ namespace aimmod
         return true;
     }
 
-    bool SeedAllowed(std::string_view scenario, bool inChallenge) { return !inChallenge || scenario.starts_with(MatchScenarioPrefix); }
+    bool SeedAllowed(std::string_view, bool inChallenge) { return !inChallenge; }
 
     bool MapFixAllowed(std::string_view scenario)
     {

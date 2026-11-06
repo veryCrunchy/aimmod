@@ -6,8 +6,44 @@ namespace overlay_checks
 {
     using namespace aimmod::overlay;
 
+    inline Plan Next(Machine& machine, const aimmod::overlay::Frame& frame)
+    {
+        auto plan = machine.Next(frame);
+        if (plan.enterMenuInput) machine.Acquired(true);
+        return plan;
+    }
     inline void Run()
     {
+        CHECK(LeaseFresh(10000000, 20000000) && !LeaseFresh(10000000, 40000000) &&
+              !LeaseFresh(0, 1) && !LeaseFresh(20000000, 10000000), "service lease expiry and invalid timestamps");
+        Notice typingBefore, typingAfter;
+        typingAfter.typing = true;
+        CHECK(typingBefore != typingAfter, "typing-only changes are distinct");
+        Machine input;
+        aimmod::overlay::Frame state;
+        state.notice = Notice{.content = true, .interactive = true, .cursor = true, .typing = true};
+        CHECK(!input.Next(state).holdMenuInput, "no view cannot take input");
+        state.haveView = true; state.haveWidget = true;
+        state.haveWidget = false;
+        CHECK(!input.Next(state).holdMenuInput, "no widget cannot take input");
+        state.haveWidget = true;
+        CHECK(input.Next(state).enterMenuInput, "usable view requests input");
+        input.Acquired(false);
+        CHECK(!input.holding() && input.Next(state).enterMenuInput, "failed acquisition retries");
+        input.Acquired(true);
+        state.serviceAlive = false;
+        auto expired = input.Next(state);
+        CHECK(expired.releaseMenuInput && !expired.captureText && !expired.clickable, "service loss releases typing and input");
+        state.serviceAlive = true;
+        input.Next(state);
+        input.Acquired(true);
+        state.haveView = false;
+        CHECK(input.Next(state).releaseMenuInput, "view loss releases input");
+        state.haveView = true;
+        input.Next(state);
+        input.Acquired(true);
+        state.haveWidget = false;
+        CHECK(input.Next(state).releaseMenuInput, "widget loss releases input");
         // Notice parsing: only AimMod notices, only the fields the host acts on.
         auto toast = ParseNotice(R"({"version":1,"active":true,"layout":"toast","interactive":true,"actions":[{"label":"Retry"}]})");
         CHECK(toast && toast->content && !toast->full && toast->interactive && !toast->cursor, "toast notice with buttons");
@@ -68,17 +104,17 @@ namespace overlay_checks
         // The input state machine.
         aimmod::overlay::Machine m;
         aimmod::overlay::Frame f;
-        f.haveView = true;
+        f.haveView = true; f.haveWidget = true;
         f.notice = buy;
-        aimmod::overlay::Plan p = m.Next(f);
+        aimmod::overlay::Plan p = Next(m, f);
         CHECK(p.visible && p.full && p.holdMenuInput && p.enterMenuInput && p.clickable && p.zOrder >= 20000, "buy menu opens: UI-only input held, clickable, on top");
         CHECK(p.viewVisibility == Visibility::SelfHitTestInvisible && p.widgetVisibility == Visibility::Visible, "only the Gameface widget takes clicks");
-        p = m.Next(f);
+        p = Next(m, f);
         CHECK(p.holdMenuInput && !p.enterMenuInput && !p.releaseMenuInput, "held, not re-entered, while open");
         // Escape: KovaaK's pause menu opens over the buy menu; it closes again and the hold continues.
         f.pauseMenuVisible = true;
         f.escapeRecent = true;
-        p = m.Next(f);
+        p = Next(m, f);
         f.escapeRecent = false;
         CHECK(p.hidePauseMenu && p.holdMenuInput && !p.releaseMenuInput && !p.forgetMenuInput, "pause menu over the buy menu closes, input stays ours");
         f.pauseMenuVisible = false;
@@ -87,110 +123,110 @@ namespace overlay_checks
         closed.cursor = false;
         closed.interactive = false;
         f.notice = closed;
-        p = m.Next(f);
+        p = Next(m, f);
         CHECK(p.releaseMenuInput && !p.holdMenuInput && !p.clickable && p.viewVisibility == Visibility::HitTestInvisible,
               "closing gives input back; the HUD stays click-through");
-        p = m.Next(f);
+        p = Next(m, f);
         CHECK(!p.releaseMenuInput && !p.enterMenuInput, "released once");
         // Escape just closed it (swallowMenu): the pause menu it opened closes, and the game keeps its input.
         closed.swallowMenu = true;
         f.notice = closed;
         f.pauseMenuVisible = true;
         f.escapeRecent = true;
-        p = m.Next(f);
+        p = Next(m, f);
         f.escapeRecent = false;
         CHECK(p.hidePauseMenu && p.releaseMenuInput && !p.holdMenuInput, "Escape's pause menu closes after the buy menu did");
         // A deliberate Escape later (no buy menu, no swallow): KovaaK's menu is the player's.
         closed.swallowMenu = false;
         f.notice = closed;
         f.pauseMenuVisible = false;
-        m.Next(f);
+        Next(m, f);
         f.pauseMenuVisible = true;
-        p = m.Next(f);
+        p = Next(m, f);
         CHECK(!p.hidePauseMenu && !p.holdMenuInput && !p.enterMenuInput, "a deliberate pause menu is left alone");
         // In KovaaK's menus a notice with buttons takes clicks (the menu shows the cursor); no input changes.
         f.notice = toast;
-        p = m.Next(f);
+        p = Next(m, f);
         CHECK(p.visible && p.clickable && !p.full && !p.holdMenuInput && !p.enterMenuInput && !p.releaseMenuInput, "menu notice clickable, input untouched");
         // In game without a cursor the same notice is click-through (the hotkey answers it).
         f.pauseMenuVisible = false;
-        p = m.Next(f);
+        p = Next(m, f);
         CHECK(p.visible && !p.clickable && p.viewVisibility == Visibility::HitTestInvisible, "in game without a cursor: click-through");
         // The AimMod panel shows the same things: the layer hides; a held buy menu is handed over, not released.
         aimmod::overlay::Machine m2;
         aimmod::overlay::Frame g;
-        g.haveView = true;
+        g.haveView = true; g.haveWidget = true;
         g.notice = buy;
-        m2.Next(g);
+        Next(m2, g);
         g.panelOpen = true;
-        p = m2.Next(g);
+        p = Next(m2, g);
         CHECK(!p.visible && p.forgetMenuInput && !p.releaseMenuInput && p.viewVisibility == Visibility::Collapsed, "panel open: hidden, input left to the panel");
         // Replay playback owns the screen.
         aimmod::overlay::Machine m3;
         aimmod::overlay::Frame r;
-        r.haveView = true;
+        r.haveView = true; r.haveWidget = true;
         r.notice = buy;
         r.replay = true;
-        p = m3.Next(r);
+        p = Next(m3, r);
         CHECK(!p.visible && !p.enterMenuInput, "never during a replay");
         // The scoreboard is display-only: focus back to the viewport, never input or clicks.
         aimmod::overlay::Machine m4;
         aimmod::overlay::Frame t;
-        t.haveView = true;
+        t.haveView = true; t.haveWidget = true;
         t.notice = board;
-        p = m4.Next(t);
+        p = Next(m4, t);
         CHECK(p.focusViewport && !p.clickable && !p.holdMenuInput && !p.enterMenuInput, "held scoreboard keeps game focus only");
         t.pauseMenuVisible = true;
-        p = m4.Next(t);
+        p = Next(m4, t);
         CHECK(!p.focusViewport, "never steals focus from KovaaK's menus");
-        // No view yet: nothing is clickable, the hold still starts (applied once the view exists).
+        // No view yet: input remains with the game.
         aimmod::overlay::Machine m5;
         aimmod::overlay::Frame v;
         v.notice = buy;
-        p = m5.Next(v);
-        CHECK(p.holdMenuInput && !p.clickable, "no view: hold, not clickable yet");
+        p = Next(m5, v);
+        CHECK(!p.holdMenuInput && !p.clickable, "no view: no input hold");
         // Alt-tab with the buy menu open: input is let go at once (never set to game-only while
         // KovaaK's may be opening its menu), and the pause menu focus loss opens is never hidden.
         aimmod::overlay::Machine m7;
         aimmod::overlay::Frame a;
-        a.haveView = true;
+        a.haveView = true; a.haveWidget = true;
         a.notice = buy;
-        p = m7.Next(a);
+        p = Next(m7, a);
         CHECK(p.enterMenuInput && p.forwardPointer, "buy menu holds input and forwards the mouse");
         a.focused = false;
-        p = m7.Next(a);
+        p = Next(m7, a);
         CHECK(p.forgetMenuInput && !p.releaseMenuInput && !p.holdMenuInput && !p.forwardPointer, "focus lost: let go without touching input");
         a.pauseMenuVisible = true; // KovaaK's opened its menu on focus loss
-        p = m7.Next(a);
+        p = Next(m7, a);
         CHECK(!p.hidePauseMenu && !p.releaseMenuInput, "a menu opened by focus loss is left alone");
         a.focused = true;
-        p = m7.Next(a);
+        p = Next(m7, a);
         CHECK(!p.hidePauseMenu && !p.holdMenuInput && !p.releaseMenuInput, "back in front: KovaaK's menu stays, its Escape or Resume returns to the game");
         a.pauseMenuVisible = false; // the player closed it
-        p = m7.Next(a);
+        p = Next(m7, a);
         CHECK(p.enterMenuInput, "menu closed and the buy menu still open: input taken again");
         // Alt-tab, the buy menu closes meanwhile, no KovaaK's menu: input goes back to the game on return.
         aimmod::overlay::Machine m8;
         aimmod::overlay::Frame b;
-        b.haveView = true;
+        b.haveView = true; b.haveWidget = true;
         b.notice = buy;
-        m8.Next(b);
+        Next(m8, b);
         b.focused = false;
-        m8.Next(b);
+        Next(m8, b);
         b.notice = closed;
-        p = m8.Next(b);
+        p = Next(m8, b);
         CHECK(!p.releaseMenuInput, "nothing while away");
         b.focused = true;
-        p = m8.Next(b);
+        p = Next(m8, b);
         CHECK(p.releaseMenuInput && !p.holdMenuInput, "on return: game-only, cursor off");
         // Without an Escape press a pause menu over the buy menu is the game's own: never hidden.
         aimmod::overlay::Machine m9;
         aimmod::overlay::Frame c;
-        c.haveView = true;
+        c.haveView = true; c.haveWidget = true;
         c.notice = buy;
-        m9.Next(c);
+        Next(m9, c);
         c.pauseMenuVisible = true;
-        p = m9.Next(c);
+        p = Next(m9, c);
         CHECK(!p.hidePauseMenu && p.forgetMenuInput, "no Escape: KovaaK's menu is left alone and input handed to it");
         // KovaaK's menu closes while the buy menu is closed too: the game gets game-only input, once.
         aimmod::overlay::Notice shut = *buy;
@@ -198,9 +234,9 @@ namespace overlay_checks
         shut.interactive = false;
         c.notice = shut;
         c.pauseMenuVisible = false;
-        p = m9.Next(c);
+        p = Next(m9, c);
         CHECK(p.releaseMenuInput && !p.holdMenuInput, "after KovaaK's menu: game-only, never left in UI-only");
-        p = m9.Next(c);
+        p = Next(m9, c);
         CHECK(!p.releaseMenuInput, "once");
         // The chat input: held like the buy menu (UI-only on our widget, fire blocked), with the typed
         // characters relayed; Enter or Escape (typing off), alt-tab and KovaaK's menu always give the game its input back.
@@ -210,29 +246,29 @@ namespace overlay_checks
         CHECK(feed && feed->content && !feed->typing && !feed->interactive, "a chat feed alone shows the layer, click-through");
         aimmod::overlay::Machine mc;
         aimmod::overlay::Frame k;
-        k.haveView = true;
+        k.haveView = true; k.haveWidget = true;
         k.notice = chat;
-        p = mc.Next(k);
+        p = Next(mc, k);
         CHECK(p.enterMenuInput && p.holdMenuInput && p.captureText && p.clickable && p.forwardPointer, "chat opens: input held, typed characters relayed");
-        p = mc.Next(k);
+        p = Next(mc, k);
         CHECK(p.holdMenuInput && p.captureText && !p.enterMenuInput, "held while typing");
         k.notice = feed;
-        p = mc.Next(k);
+        p = Next(mc, k);
         CHECK(p.releaseMenuInput && !p.holdMenuInput && !p.captureText && !p.clickable, "Enter or Escape: input back to the game, no more characters");
         k.notice = chat;
-        mc.Next(k);
+        Next(mc, k);
         k.focused = false;
-        p = mc.Next(k);
+        p = Next(mc, k);
         CHECK(p.forgetMenuInput && !p.captureText && !p.holdMenuInput, "alt-tab while typing: let go at once");
         k.notice = feed; // the service closes the input when the window loses focus
         k.focused = true;
-        p = mc.Next(k);
+        p = Next(mc, k);
         CHECK(p.releaseMenuInput && !p.captureText, "back in front: the game has its input");
         k.notice = chat;
-        mc.Next(k);
+        Next(mc, k);
         k.pauseMenuVisible = true;
         k.escapeRecent = true;
-        p = mc.Next(k);
+        p = Next(mc, k);
         k.escapeRecent = false;
         CHECK(p.hidePauseMenu && p.captureText, "Escape's pause menu over the chat input closes again");
         k.pauseMenuVisible = false;
@@ -241,13 +277,13 @@ namespace overlay_checks
         closedChat.interactive = false;
         closedChat.swallowMenu = true;
         k.notice = closedChat;
-        p = mc.Next(k);
+        p = Next(mc, k);
         CHECK(p.releaseMenuInput && !p.captureText, "the input closed by Escape: the game gets its input back");
-        CHECK(Describe(aimmod::overlay::Plan{}, [&] { aimmod::overlay::Machine md; aimmod::overlay::Frame d; d.haveView = true; d.notice = chat; return md.Next(d); }()).find("chat input") != std::string::npos,
+        CHECK(Describe(aimmod::overlay::Plan{}, [&] { aimmod::overlay::Machine md; aimmod::overlay::Frame d; d.haveView = true; d.haveWidget = true; d.notice = chat; return Next(md, d); }()).find("chat input") != std::string::npos,
               "chat input changes are logged");
         // One log line per change.
         aimmod::overlay::Machine m6;
-        aimmod::overlay::Plan before{}, after = m6.Next(f);
+        aimmod::overlay::Plan before{}, after = Next(m6, f);
         CHECK(Describe(before, after).find("shown") != std::string::npos && Describe(after, after).empty(), "describe changes only");
     }
 } // namespace overlay_checks

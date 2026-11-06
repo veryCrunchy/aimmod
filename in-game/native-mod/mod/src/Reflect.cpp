@@ -4,6 +4,7 @@
 #include <Unreal/CoreUObject/UObject/UnrealType.hpp>
 #include <Unreal/Core/HAL/UnrealMemory.hpp>
 #include <Unreal/FProperty.hpp>
+#include <Unreal/FWeakObjectPtr.hpp>
 #include <Unreal/NameTypes.hpp>
 #include <Unreal/Property/FArrayProperty.hpp>
 #include <Unreal/Property/FBoolProperty.hpp>
@@ -20,6 +21,7 @@
 #include <Windows.h>
 
 #include <cstring>
+#include <map>
 
 namespace aimmod::reflect
 {
@@ -168,34 +170,55 @@ namespace aimmod::reflect
 
     bool Call(UObject* self, const wchar_t* path, const Fill& fill, UObject** returned, const Read& read)
     {
-        auto* fn = InObjectArray(self) ? UObjectGlobals::StaticFindObject<UFunction*>(nullptr, nullptr, path) : nullptr;
-        if (!fn || fn->GetParmsSize() > 1024) return false;
-        alignas(16) std::uint8_t buffer[1024];
-        std::memset(buffer, 0, fn->GetParmsSize());
-        std::vector<std::uint8_t*> strings;
-        FProperty* ret = nullptr;
-        for (FProperty* p : fn->ForEachProperty())
+        if (!InObjectArray(self)) return false;
+        struct Parameter { FProperty* property; std::wstring name; int offset; bool returned; bool allocated; };
+        struct Descriptor { FWeakObjectPtr weak; UFunction* function{}; int size{}; std::vector<Parameter> params; };
+        static std::map<std::wstring, Descriptor> cache;
+        auto& descriptor = cache[path];
+        if (descriptor.weak.Get() != descriptor.function || !InObjectArray(descriptor.function))
         {
-            if (!p->HasAnyPropertyFlags(CPF_Parm)) continue;
-            if (p->HasAnyPropertyFlags(CPF_ReturnParm)) { ret = p; continue; }
-            std::uint8_t* value = buffer + p->GetOffset_Internal();
-            if (fill) fill(p->GetName(), p, value);
-            if (CastField<FStrProperty>(p)) strings.push_back(value);
+            descriptor = {};
+            auto* function = UObjectGlobals::StaticFindObject<UFunction*>(nullptr, nullptr, path);
+            if (!function || function->GetParmsSize() > 1024) return false;
+            descriptor.function = function;
+            descriptor.weak = FWeakObjectPtr(function);
+            descriptor.size = function->GetParmsSize();
+            for (FProperty* p : function->ForEachProperty())
+                if (p->HasAnyPropertyFlags(CPF_Parm))
+                {
+                    if (p->GetOffset_Internal() < 0 || p->GetOffset_Internal() + p->GetSize() > descriptor.size)
+                    { descriptor = {}; return false; }
+                    descriptor.params.push_back({p, p->GetName(), p->GetOffset_Internal(), p->HasAnyPropertyFlags(CPF_ReturnParm),
+                                                 CastField<FStrProperty>(p) || CastField<FArrayProperty>(p)});
+                }
         }
-        const bool ok = Guarded(self, fn, buffer);
-        if (ok && read)
-            for (FProperty* p : fn->ForEachProperty())
-                if (p->HasAnyPropertyFlags(CPF_Parm)) read(p->GetName(), p, buffer + p->GetOffset_Internal());
-        for (std::uint8_t* s : strings)
+        alignas(16) std::uint8_t buffer[1024]{};
+        // This scope ends before the parameter storage, including on callback failure.
+        struct OwnedParameters
         {
-            RawArray raw;
-            std::memcpy(&raw, s, sizeof(raw));
-            if (raw.data) FMemory::Free(raw.data);
-        }
-        if (ok && returned && ret && CastField<FObjectPropertyBase>(ret))
+            std::uint8_t* buffer;
+            const std::vector<Parameter>& params;
+            ~OwnedParameters()
+            {
+                for (const auto& p : params) if (p.allocated)
+                {
+                    RawArray raw{};
+                    std::memcpy(&raw, buffer + p.offset, sizeof(raw));
+                    if (raw.data) FMemory::Free(raw.data);
+                }
+            }
+        } owned{buffer, descriptor.params};
+        for (const auto& p : descriptor.params)
+            if (!p.returned && fill) fill(p.name, p.property, buffer + p.offset);
+        const bool ok = Guarded(self, descriptor.function, buffer);
+        if (ok) for (const auto& p : descriptor.params)
         {
-            std::memcpy(returned, buffer + ret->GetOffset_Internal(), sizeof(UObject*));
-            if (!InObjectArray(*returned)) *returned = nullptr;
+            if (read) read(p.name, p.property, buffer + p.offset);
+            if (returned && p.returned && CastField<FObjectPropertyBase>(p.property))
+            {
+                std::memcpy(returned, buffer + p.offset, sizeof(UObject*));
+                if (!InObjectArray(*returned)) *returned = nullptr;
+            }
         }
         return ok;
     }
@@ -232,19 +255,39 @@ namespace aimmod::reflect
     {
         if (auto* b = CastField<FBoolProperty>(p)) b->SetPropertyValue(value, on);
     }
+    namespace
+    {
+        class OwnedArray
+        {
+        public:
+            OwnedArray(const void* source, std::size_t bytes, std::int32_t count)
+                : raw{FMemory::Malloc(bytes), count, count}
+            {
+                if (raw.data) std::memcpy(raw.data, source, bytes);
+            }
+            OwnedArray(const OwnedArray&) = delete;
+            ~OwnedArray() { if (raw.data) FMemory::Free(raw.data); }
+            void Transfer(std::uint8_t* destination)
+            {
+                if (!raw.data) return;
+                std::memcpy(destination, &raw, sizeof(raw));
+                raw.data = nullptr;
+            }
+        private:
+            RawArray raw;
+        };
+    }
+    void WriteArray(std::uint8_t* value, const void* bytes, std::size_t count, std::size_t elementSize)
+    {
+        if (count) OwnedArray(bytes, count * elementSize, static_cast<std::int32_t>(count)).Transfer(value);
+    }
     void WriteObjectArray(std::uint8_t* value, UObject* object)
     {
-        auto* data = static_cast<UObject**>(FMemory::Malloc(sizeof(UObject*)));
-        if (!data) return;
-        data[0] = object;
-        RawArray raw{data, 1, 1};
-        std::memcpy(value, &raw, sizeof(raw));
+        OwnedArray(&object, sizeof(object), 1).Transfer(value);
     }
-    void FreeObjectArray(std::uint8_t* value)
+    void WriteByteArray(std::uint8_t* value, std::initializer_list<std::uint8_t> bytes)
     {
-        RawArray raw;
-        std::memcpy(&raw, value, sizeof(raw));
-        if (raw.data) FMemory::Free(raw.data);
+        OwnedArray(bytes.begin(), bytes.size(), static_cast<std::int32_t>(bytes.size())).Transfer(value);
     }
 
     bool Location(UObject* component, float out[3])
@@ -347,16 +390,12 @@ namespace aimmod::reflect
     {
         if (!meshComponent) return false;
         // The game's own defaults for every material data slot ...
-        std::uint8_t* array = nullptr;
         const bool defaults = Call(Default(STR("/Script/GameSkillsTrainer.Default__SkinFunctionLibrary")),
                                    STR("/Script/GameSkillsTrainer.SkinFunctionLibrary:ApplyAllCustomPrimitiveDataDefaultsBatch"),
                                    [&](const std::wstring& n, FProperty*, std::uint8_t* v) {
-                                       if (n == STR("It")) WriteObjectArray(v, meshComponent), array = v;
+                                       if (n == STR("It")) WriteObjectArray(v, meshComponent);
                                    },
-                                   nullptr, [&](const std::wstring& n, FProperty*, const std::uint8_t* v) {
-                                       if (n == STR("It")) FreeObjectArray(const_cast<std::uint8_t*>(v));
-                                   });
-        if (!defaults && array) FreeObjectArray(array); // the call did not run: free here
+                                   nullptr);
         // ... and full opacity, in case the defaults leave the model faded out.
         std::int32_t opacity = -1;
         Call(Default(STR("/Script/GameSkillsTrainer.Default__MaterialPrimitiveDataIndices")), STR("/Script/GameSkillsTrainer.MaterialPrimitiveDataIndices:Opacity"), {},

@@ -119,10 +119,15 @@ namespace bridge::grenades
         }
     } // namespace detail
 
-    inline std::vector<Key> Simulate(const Vec& origin, const Vec& velocity, const Trace& trace)
+    class Simulation
     {
-        std::vector<Key> keys{{0, origin[0], origin[1], origin[2], velocity[0], velocity[1], velocity[2], Flight, NoImpact}};
-        Key cur = keys.front();
+    public:
+        std::vector<Key> keys;
+        Simulation(const Vec& origin, const Vec& velocity)
+            : keys{{0, origin[0], origin[1], origin[2], velocity[0], velocity[1], velocity[2], Flight, NoImpact}}, cur(keys.front()), prev(Pos(cur, 0)) {}
+        bool Advance(const Trace& world, int& budget)
+        {
+        const auto trace = [&](const Vec& a, const Vec& b) { --budget; return world(a, b); };
         while (cur.motion != Rest)
         {
             if (keys.size() >= MaxKeys)
@@ -131,10 +136,9 @@ namespace bridge::grenades
                 break;
             }
             std::optional<Key> next;
-            double prevTau = 0;
-            Vec prev = Pos(cur, 0);
-            for (int i = 1; !next; ++i)
+            for (; !next; ++i)
             {
+                if (budget < 2) return false;
                 const double tau = i * Step;
                 if (cur.t / 1000 + tau > MaxSeconds)
                 {
@@ -216,8 +220,23 @@ namespace bridge::grenades
             }
             keys.push_back(*next);
             cur = *next;
+            i = 1; prevTau = 0; prev = Pos(cur, 0);
         }
-        return keys;
+        return true;
+        }
+    private:
+        Key cur;
+        int i = 1;
+        double prevTau = 0;
+        Vec prev;
+    };
+
+    inline std::vector<Key> Simulate(const Vec& origin, const Vec& velocity, const Trace& trace)
+    {
+        Simulation simulation(origin, velocity);
+        int budget = 100000;
+        simulation.Advance(trace, budget);
+        return simulation.keys;
     }
 
     // A level floor at height z, hit from above (the service's GrenadePhysics.Floor).

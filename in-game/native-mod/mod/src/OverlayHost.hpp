@@ -41,7 +41,7 @@ namespace aimmod
         void Remove(const char* why);
         void Apply(const overlay::Plan& plan, UObject* player, double now);
         void Layout(bool full);
-        void EnterMenuInput(UObject* player);
+        bool EnterMenuInput(UObject* player);
         void ReleaseMenuInput(UObject* player);
         void Reassert(UObject* player, double now);
         void BlockFire(UObject* player, bool block);

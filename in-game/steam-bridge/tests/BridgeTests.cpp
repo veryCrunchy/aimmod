@@ -1286,11 +1286,11 @@ int main()
         while (!area.Done() && steps < 1000)
         {
             const int before = sightTraces;
-            area.Step(grid, 300, clear);
+            area.Step(grid, 7, clear);
             most = std::max(most, sightTraces - before);
             ++steps;
         }
-        Check(area.Done() && !area.noGrid && steps > 3 && most <= 300 + 8, "holding spots are worked out a trace budget at a time");
+        Check(area.Done() && !area.noGrid && steps > 3 && most <= 7, "holding spots are worked out a trace budget at a time");
         bool north = false, east = false;
         for (const auto& e : area.entrances)
         {
@@ -1561,6 +1561,16 @@ int main()
             return Hit{{a[0] + (b[0] - a[0]) * *best, a[1] + (b[1] - a[1]) * *best, a[2] + (b[2] - a[2]) * *best}, normal};
         };
         const auto keys = Simulate({0, 0, 180}, full, room);
+        Simulation resumed({0, 0, 180}, full);
+        bool complete = false;
+        int slices = 0;
+        while (!complete && ++slices < 10000)
+        {
+            int budget = 7, actual = 0;
+            complete = resumed.Advance([&](const Vec& a, const Vec& b) { ++actual; return room(a, b); }, budget);
+            Check(actual <= 7 && budget == 7 - actual, "resumed flight respects the shared trace budget");
+        }
+        Check(complete && resumed.keys == keys && slices > 1, "resumed flight is identical to uninterrupted flight");
         bool inside = true, ordered = true, exact = true, wall = false;
         for (std::size_t i = 0; i < keys.size(); ++i)
         {
@@ -1600,6 +1610,19 @@ int main()
         const auto fr = ParseSim("AIMMOD_GRENADESIM_1\t8\nfloor\t12\t100\t200\t260\t-150\nfloor\tx\t1\t2\t3\t4\nfloor\t13\t1\t2\t3\n");
         Check(fr && fr->floors.size() == 1 && fr->floors[0].tag == 12 && fr->floors[0].y == 200 && fr->floors[0].bottom == -150 && fr->throws.empty(), "grenade-sim.tsv: floor requests");
         Check(FormatPaths(1, {}, {}, {{12, -60.5}, {13, std::nullopt}}) == "AIMMOD_GRENADEPATHS_1\t1\nfloor\t12\t-60.5\nfloor\t13\t-\n", "grenade-paths.tsv: a floor's height, or none");
+    }
+    {
+        bridge::ghost::Walker walker;
+        walker.spawns = {{0, 0, 100}, {0, 0, 1100}};
+        const auto floor = [](double, double, double z) -> std::optional<double> { return z > 1000 ? 1000.0 : 0.0; };
+        Check(walker.NodeFloor(0, floor) != walker.NodeFloor(1, floor), "stacked floors use separate cache entries");
+        const auto clear = [](double, double, double az, double, double, double) { return az < 500; };
+        walker.at = 0; walker.z = 100;
+        walker.PlanRoute({500, 0, 100}, 100, floor, clear);
+        walker.at = 1; walker.z = 1100;
+        walker.PlanRoute({500, 0, 1100}, 100, floor, clear);
+        Check(walker.Cache().links.contains({0, 0, 10, 50, 0, 10}) && walker.Cache().links.contains({0, 0, 110, 50, 0, 110}),
+              "stacked routes retain both vertical link identities");
     }
     std::printf("%d/%d checks passed\n", checks - failures, checks);
     return failures == 0 ? 0 : 1;

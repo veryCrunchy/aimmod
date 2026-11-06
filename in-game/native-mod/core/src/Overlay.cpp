@@ -166,7 +166,7 @@ namespace aimmod::overlay
         Plan p;
         p.zOrder = ZOrder;
         const bool blocked = f.panelOpen || f.replay;
-        const Notice n = f.notice.value_or(Notice{});
+        const Notice n = f.serviceAlive ? f.notice.value_or(Notice{}) : Notice{};
         p.visible = f.notice.has_value() && n.content && !blocked;
         p.full = n.full;
         p.focused = f.focused;
@@ -183,7 +183,7 @@ namespace aimmod::overlay
         m_pauseWasVisible = pause;
         // The buy menu (and the chat input, the same way) holds input only while KovaaK's is in front:
         // alt-tab lets go at once.
-        const bool menu = p.visible && (n.cursor || n.typing) && !pause && f.focused;
+        const bool menu = f.haveView && f.haveWidget && f.serviceAlive && p.visible && (n.cursor || n.typing) && !pause && f.focused;
         p.holdMenuInput = menu;
         p.forwardPointer = menu && f.haveView;
         p.captureText = menu && n.typing && f.haveView;
@@ -196,7 +196,8 @@ namespace aimmod::overlay
         {
             // KovaaK's menu or the AimMod panel took over: leave their input alone. Focus loss: let
             // go without touching input (KovaaK's may open its menu now); settled when focus returns.
-            if (pause || blocked)
+            if (!f.haveView || !f.haveWidget || !f.serviceAlive) p.releaseMenuInput = true;
+            else if (pause || blocked)
             {
                 p.forgetMenuInput = true;
                 m_handed = true;
@@ -225,8 +226,8 @@ namespace aimmod::overlay
             m_handed = false;
         }
         if (menu) m_handed = false;
-        m_holding = menu;
-        p.clickable = p.visible && f.haveView && n.interactive && (pause || menu || f.gameCursor);
+        if (!menu) m_holding = false;
+        p.clickable = p.visible && f.haveView && f.haveWidget && n.interactive && (pause || menu || f.gameCursor);
         // The scoreboard is display-only: when Tab moved keyboard focus off the game, it goes back.
         p.focusViewport = p.visible && n.boardHeld && !menu && !pause;
         // The view itself never takes a click; only the Gameface widget inside it does, and only when clickable.

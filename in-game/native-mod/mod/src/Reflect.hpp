@@ -57,9 +57,10 @@ namespace aimmod::reflect
     bool ReadFloats(const std::uint8_t* value, FProperty* p, float* out, std::size_t count);
     void WriteObject(std::uint8_t* value, UObject* object);
     void WriteBoolParam(std::uint8_t* value, FProperty* p, bool on);
-    // TArray<UObject*> parameter of one element; FreeObjectArray after the call.
+    // Transfers a one-element array to Call; callers never retain parameter pointers.
     void WriteObjectArray(std::uint8_t* value, UObject* object);
-    void FreeObjectArray(std::uint8_t* value);
+    void WriteArray(std::uint8_t* value, const void* bytes, std::size_t count, std::size_t elementSize);
+    void WriteByteArray(std::uint8_t* value, std::initializer_list<std::uint8_t> bytes);
 
     // Scene component helpers.
     bool Location(UObject* component, float out[3]);

@@ -229,6 +229,8 @@ namespace aimmod
         bool m_traceBound = false;
         bool m_traceForObjects = false; // LineTraceSingleForObjects (WorldStatic + WorldDynamic) rather than the Visibility channel
         int m_traceCount = 0, m_traceHits = 0;
+        int m_tickTraces = 0, m_traceLimit = 1500;
+        double m_budgetLogAt = 0;
         int m_floorTraces = 0, m_floorHits = 0, m_wallTraces = 0, m_wallHits = 0; // walker diagnostics
         double m_nextTraceLog = 0;
         game::Getter m_lineTraceChannel; // Visibility channel fallback when the object trace finds nothing

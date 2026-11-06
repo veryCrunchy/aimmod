@@ -121,13 +121,9 @@ namespace aimmod
     {
         // No pawn stops a grenade or a line of sight: every player's and bot's body is left out, its
         // hitbox components too (they block line traces under their own object type).
-        TArray<AActor*> ignore;
-        for (const FWeakObjectPtr& weak : m_pawns)
-            if (UObject* pawn = weak.Get(); pawn && game::IsLiveInstance(pawn)) ignore.Add(static_cast<AActor*>(pawn));
-        // Every object type but pawns (2).
-        TArray<std::uint8_t> objectTypes;
-        for (std::uint8_t t = 0; t < 32; ++t)
-            if (t != 2) objectTypes.Add(t);
+        struct ArrayView { void* data; std::int32_t num, max; };
+        ArrayView ignore{m_ignore.data(), static_cast<std::int32_t>(m_ignore.size()), static_cast<std::int32_t>(m_ignore.size())};
+        ArrayView objectTypes{m_objectTypes.data(), 31, 31};
         bool hit = false, inside = false;
         g::Hit result{};
         int vectors = 0;
@@ -168,44 +164,53 @@ namespace aimmod
         const std::filesystem::path file = std::filesystem::path(m_stateDir) / L"grenade-sim.tsv";
         std::uint64_t size = 0;
         const std::uint64_t stamp = FileStamp(file, size);
-        if (stamp == 0 || stamp == m_stamp || size > 64 * 1024) return;
-        m_stamp = stamp;
-        std::ifstream in(file, std::ios::binary);
-        const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-        const auto requests = g::ParseSim(text);
-        if (!requests || requests->sequence == m_sequence) return;
-        m_sequence = requests->sequence;
-        if (requests->throws.empty() && requests->los.empty() && requests->floors.empty())
+        if (stamp == 0 || size > 64 * 1024) { m_requests.reset(); m_pending.clear(); return; }
+        if (stamp != m_stamp)
         {
-            m_paths.clear();
-            m_los.clear();
-            m_floors.clear();
-            return;
+            std::ifstream in(file, std::ios::binary);
+            const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+            if (auto parsed = g::ParseSim(text)) { m_requests = std::move(parsed); m_stamp = stamp; }
         }
+        if (!m_requests) return;
+        const auto& requests = m_requests;
         UObject* context = Context();
         if (!Bind() || !context) return; // the service's level-floor fallback flies them
         FindPawns(now);
+        m_ignore.clear();
+        for (const auto& weak : m_pawns)
+            if (auto* pawn = weak.Get(); pawn && game::IsLiveInstance(pawn)) m_ignore.push_back(pawn);
+        for (std::uint8_t t = 0, i = 0; t < 32; ++t) if (t != 2) m_objectTypes[i++] = t;
+        int budget = 600;
         const auto trace = [&](const g::Vec& a, const g::Vec& b) { return Trace(context, a, b); };
         // Fly each new throw once; keep answers only for what is still asked.
         std::set<std::int64_t> ids;
         for (const auto& t : requests->throws)
         {
             ids.insert(t.id);
-            if (!m_paths.contains(t.id)) m_paths[t.id] = g::Simulate(t.origin, t.velocity, trace);
+            if (!m_paths.contains(t.id))
+            {
+                auto [it, inserted] = m_pending.try_emplace(t.id, t.origin, t.velocity);
+                if (it->second.Advance(trace, budget))
+                {
+                    m_paths[t.id] = std::move(it->second.keys);
+                    m_pending.erase(it);
+                }
+            }
         }
+        std::erase_if(m_pending, [&](const auto& kv) { return !ids.contains(kv.first); });
         std::erase_if(m_paths, [&](const auto& kv) { return !ids.contains(kv.first); });
         std::set<int> tags;
         for (const auto& l : requests->los)
         {
             tags.insert(l.tag);
-            if (!m_los.contains(l.tag)) m_los[l.tag] = !Trace(context, l.from, l.to).has_value();
+            if (!m_los.contains(l.tag) && budget > 0) { --budget; m_los[l.tag] = !Trace(context, l.from, l.to).has_value(); }
         }
         std::erase_if(m_los, [&](const auto& kv) { return !tags.contains(kv.first); });
         std::set<int> floorTags;
         for (const auto& f : requests->floors)
         {
             floorTags.insert(f.tag);
-            if (!m_floors.contains(f.tag)) m_floors[f.tag] = g::FloorHeight(trace, f.x, f.y, f.top, f.bottom);
+            if (!m_floors.contains(f.tag) && budget > 0) { --budget; m_floors[f.tag] = g::FloorHeight(trace, f.x, f.y, f.top, f.bottom); }
         }
         std::erase_if(m_floors, [&](const auto& kv) { return !floorTags.contains(kv.first); });
         if (!m_logged)
