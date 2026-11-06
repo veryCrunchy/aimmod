@@ -357,44 +357,17 @@ namespace aimmod
     {
         UObject* kismet = Default(STR("/Script/Engine.Default__KismetSystemLibrary"));
         if (!context || !kismet) return false;
-        struct RawBytes { std::uint8_t* data; std::int32_t num, max; };
         bool hit = false;
-        std::uint8_t* types = nullptr;
-        std::uint8_t* ignore = nullptr;
         const bool ran = Call(kismet, STR("/Script/Engine.KismetSystemLibrary:LineTraceSingleForObjects"), [&](const std::wstring& n, FProperty* p, std::uint8_t* v) {
             if (n == STR("WorldContextObject")) WriteObject(v, context);
             else if (n == STR("Start")) WriteFloats(v, p, {static_cast<float>(from[0]), static_cast<float>(from[1]), static_cast<float>(from[2])});
             else if (n == STR("End")) WriteFloats(v, p, {static_cast<float>(to[0]), static_cast<float>(to[1]), static_cast<float>(to[2])});
-            else if (n == STR("ObjectTypes"))
-            {
-                auto* data = static_cast<std::uint8_t*>(RC::Unreal::FMemory::Malloc(1));
-                if (!data) return;
-                data[0] = 0; // WorldStatic: the map
-                const RawBytes raw{data, 1, 1};
-                std::memcpy(v, &raw, sizeof raw);
-                types = v;
-            }
-            else if (n == STR("ActorsToIgnore")) WriteObjectArray(v, context), ignore = v;
+            else if (n == STR("ObjectTypes")) WriteByteArray(v, {0});
+            else if (n == STR("ActorsToIgnore")) WriteObjectArray(v, context);
             else if (n == STR("bIgnoreSelf")) WriteBoolParam(v, p, true);
         }, nullptr, [&](const std::wstring& n, FProperty*, const std::uint8_t* v) {
             if (n == STR("ReturnValue")) hit = *v != 0;
-            if (n == STR("ObjectTypes") || n == STR("ActorsToIgnore"))
-            {
-                RawBytes raw;
-                std::memcpy(&raw, v, sizeof raw);
-                if (raw.data) RC::Unreal::FMemory::Free(raw.data);
-                if (n == STR("ObjectTypes")) types = nullptr;
-                else ignore = nullptr;
-            }
         });
-        if (!ran)
-            for (std::uint8_t* left : {types, ignore})
-                if (left)
-                {
-                    RawBytes raw;
-                    std::memcpy(&raw, left, sizeof raw);
-                    if (raw.data) RC::Unreal::FMemory::Free(raw.data);
-                }
         return ran && hit;
     }
 
@@ -683,7 +656,7 @@ namespace aimmod
         }
         if (player) HideCrosshair(player, false);
         if (character && handler && Alive(handler)) HideWeapon(character, handler, false);
-        RestoreSpeed(character);
+        RestoreSpeed(m_speedBody.Get());
         m_blockedHandler = FWeakObjectPtr();
         m_weapon = FWeakObjectPtr();
         m_character = FWeakObjectPtr();

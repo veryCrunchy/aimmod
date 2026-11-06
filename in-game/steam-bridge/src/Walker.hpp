@@ -34,8 +34,8 @@ namespace bridge::ghost
     // Which straight walks between two points are walkable, for one map (shared by its walkers).
     struct LinkCache
     {
-        std::map<std::array<std::int64_t, 4>, bool> links; // rounded (ax, ay, bx, by) -> walkable
-        std::map<std::array<std::int64_t, 2>, std::optional<double>> floors; // rounded (x, y) -> floor z at a waypoint
+        std::map<std::array<std::int64_t, 6>, bool> links; // rounded (ax, ay, az, bx, by, bz) -> walkable
+        std::map<std::array<std::int64_t, 3>, std::optional<double>> floors; // rounded (x, y, z) -> floor z at a waypoint
         static std::int64_t Key(double v) { return static_cast<std::int64_t>(std::llround(v / 10.0)); }
     };
 
@@ -95,7 +95,7 @@ namespace bridge::ghost
         std::shared_ptr<LinkCache> links;
         // Straight walks from where it stands now (not at a waypoint): only for this spot.
         std::map<int, bool> fromHere;
-        double hereX = 1e30, hereY = 1e30;
+        double hereX = 1e30, hereY = 1e30, hereZ = 1e30;
         int plansPending = 0, plansFound = 0, plansFailed = 0;
         // The map's nav grid (shared) and the path along it: floor points, then the goal.
         static constexpr int NavTarget = -3;         // `target` while following navPath
@@ -185,7 +185,7 @@ namespace bridge::ghost
             route.clear();
             routeGoal.reset();
             fromHere.clear();
-            hereX = hereY = 1e30;
+            hereX = hereY = hereZ = 1e30;
             navPath.clear();
             navIndex = 0;
             navReached = false;
@@ -292,7 +292,7 @@ namespace bridge::ghost
         std::optional<double> NodeFloor(int i, const Floor& floor)
         {
             const auto& s = spawns[static_cast<std::size_t>(i)];
-            const std::array<std::int64_t, 2> key{LinkCache::Key(s[0]), LinkCache::Key(s[1])};
+            const std::array<std::int64_t, 3> key{LinkCache::Key(s[0]), LinkCache::Key(s[1]), LinkCache::Key(s[2])};
             auto& floors = Cache().floors;
             if (const auto it = floors.find(key); it != floors.end()) return it->second;
             const auto f = floor(s[0], s[1], s[2] + stepUp);
@@ -307,12 +307,12 @@ namespace bridge::ghost
         {
             const int n = static_cast<int>(spawns.size());
             const int start = n, goalNode = n + 1;
-            if (std::hypot(x - hereX, y - hereY) > 1) { fromHere.clear(); hereX = x; hereY = y; }
+            if (std::hypot(x - hereX, y - hereY) > 1 || std::fabs(z - hereZ) > 1) { fromHere.clear(); hereX = x; hereY = y; hereZ = z; }
             int budget = PlanBudget;
-            const auto pos = [&](int i) -> std::array<double, 2> {
-                if (i == start) return {x, y};
-                if (i == goalNode) return {g[0], g[1]};
-                return {spawns[static_cast<std::size_t>(i)][0], spawns[static_cast<std::size_t>(i)][1]};
+            const auto pos = [&](int i) -> std::array<double, 3> {
+                if (i == start) return {x, y, z};
+                if (i == goalNode) return g;
+                return spawns[static_cast<std::size_t>(i)];
             };
             const auto dist = [&](int a, int b) { const auto p = pos(a), q = pos(b); return std::hypot(p[0] - q[0], p[1] - q[1]); };
             // Feasibility of a -> b: true, false, or nullopt (out of budget this call).
@@ -328,7 +328,7 @@ namespace bridge::ghost
                     fromHere[b] = ok;
                     return ok;
                 }
-                const std::array<std::int64_t, 4> key{LinkCache::Key(p[0]), LinkCache::Key(p[1]), LinkCache::Key(q[0]), LinkCache::Key(q[1])};
+                const std::array<std::int64_t, 6> key{LinkCache::Key(p[0]), LinkCache::Key(p[1]), LinkCache::Key(p[2]), LinkCache::Key(q[0]), LinkCache::Key(q[1]), LinkCache::Key(q[2])};
                 auto& cache = Cache().links;
                 if (const auto it = cache.find(key); it != cache.end()) return it->second;
                 const auto feet = NodeFloor(a, floor);
@@ -1003,7 +1003,7 @@ namespace bridge::ghost
                             {
                                 const auto& p = spawns[static_cast<std::size_t>(at)];
                                 const auto& q = spawns[static_cast<std::size_t>(target)];
-                                links->links[{LinkCache::Key(p[0]), LinkCache::Key(p[1]), LinkCache::Key(q[0]), LinkCache::Key(q[1])}] = false;
+                                links->links[{LinkCache::Key(p[0]), LinkCache::Key(p[1]), LinkCache::Key(p[2]), LinkCache::Key(q[0]), LinkCache::Key(q[1]), LinkCache::Key(q[2])}] = false;
                             }
                             at = target == GoalTarget ? -1 : target; // treat as visited and try another way
                             if (at < 0) at = NodeAt(x, y);

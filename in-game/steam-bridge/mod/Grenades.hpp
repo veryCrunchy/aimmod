@@ -57,6 +57,10 @@ namespace aimmod
         std::map<std::int64_t, std::vector<bridge::grenades::Key>> m_paths;
         std::map<int, bool> m_los;
         std::map<int, std::optional<double>> m_floors;
+        std::optional<bridge::grenades::Requests> m_requests;
+        std::map<std::int64_t, bridge::grenades::Simulation> m_pending;
+        std::vector<RC::Unreal::UObject*> m_ignore;
+        std::array<std::uint8_t, 31> m_objectTypes{};
         int m_traces = 0;
     };
 } // namespace aimmod

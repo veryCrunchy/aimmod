@@ -9,21 +9,22 @@ and the older `ue4ss-mod/` bridge.
 
 ## Goals and hard limits
 
-- Read-only. The mod never calls a scoring, upload, input, possession or
-  challenge-control function and never writes game memory. It only calls
-  reflected getters (`IsInChallenge`, `GetChallengeTimeElapsed`,
-  `Get_*_ValueElse`, `GetLastScore`, camera/actor getters) and reads
-  reflected properties. The allow-list of callable functions lives in one
-  table (`mod/src/GameBindings.cpp`); nothing else is ever invoked.
-- Stable across game updates. Every class, function and property is resolved
-  by name at startup/world change and its signature (parameter names, types,
-  sizes) is verified before first use. A missing or changed item disables only
-  the features that need it; the log prints one compatibility summary.
-- Minimal per-frame cost. Hot paths compare cached pointers; there are no
-  string operations, allocations or file I/O on the game thread during a run
-  except the replay frame formatter, which appends to a reused buffer.
-- Permanent install. UE4SS (`dwmapi.dll` proxy) loads the mod on every
-  launch; the mod starts and supervises the native service.
+- Challenge telemetry is observational. Freeplay features also change weapons,
+  movement, input and presentation through reflected calls and properties.
+- Match play requires the `AimMod Match - ` scenario prefix, fresh service state
+  naming that exact scenario, freeplay, and no active challenge. The prefix is
+  a routing gate, not proof of trust: Workshop scenarios can use the same name.
+  Challenge seeding is forbidden regardless of the scenario name.
+- Runtime edits and overlay input must be released on exit, loading, loss of
+  service state or entry into a challenge. Freeplay overrides cancel an active
+  challenge with a visible explanation so the player can start a clean run.
+- Reflected bindings validate available signatures. Missing bindings disable
+  their dependent features. Engine traces are bounded per tick, and reflection
+  metadata is cached for repeated calls. Grenades share 600 traces per tick.
+  Navigation counts actual engine calls, including fallbacks, against
+  `AIMMOD_NAV_TRACE_BUDGET` (default 1500, bounded to 64 through 10000).
+- UE4SS loads the mod on launch; the mod supervises the native service. Overlay
+  input requires a usable view and a renewable service lease.
 
 ## Components
 
@@ -357,7 +358,7 @@ targetSize	<0.1..10>                        (start, freeplay only)
 targetSpeed	<0.1..10>                       (start, freeplay only)
 mapScale	<0.1..10>                          (start, freeplay only)
 weapon	<weapon profile name>                (start, freeplay only)
-seed	<0..4294967295>                          (start; freeplay, or challenge of "AimMod Match - " scenarios)
+seed	<0..4294967295>                          (start; freeplay only)
 width	<64..3840> / height	<64..2160>       (capture-thumbnail)
 out	<name>.png                              (capture-thumbnail; plain file name)
 view1..view4	<x>,<y>,<z>,<pitch>,<yaw>,<fov> (capture-thumbnail; 1-4, in order)
@@ -770,7 +771,7 @@ Findings (3.9.11 dumps and imports):
 
 Strategy (b), prototype: `start-scenario` with `seed` seeds the game
 thread's CRT RNG with `SeedFor(seed, 0)` when the scenario has started
-(and again at each challenge attempt start), and with `SeedFor(seed, n)`
+in freeplay, and with `SeedFor(seed, n)`
 in the pre-hook of the n-th target death/kill (`NotifyCharacterDeath`,
 `NotifyPlayerKillCredit`; one event per frame) - right before the game
 picks the respawn. Spawns drawn synchronously at a kill are then the same
@@ -780,8 +781,7 @@ diverge between players with different frame rates; a respawn delay lets
 per-tick draws run between the reseed and the spawn; `FRandomStream`
 users (bot brain) are not affected. Seeding never runs outside the seeded
 scenario (it stops on any scenario change or new request) and never in
-ranked play (freeplay, or challenge only for generated `AimMod Match - `
-scenarios; refused otherwise as `seed-not-allowed`).
+ranked play (freeplay only; every challenge is refused as `seed-not-allowed`).
 
 Verification: run the scenario twice with the same seed and different
 play, then `AimMod.InGame.exe --compare-spawns <rootA> <idA> <rootB> <idB>`

@@ -59,6 +59,35 @@ namespace aimmod
     void MatchPlay::Tick(double now, const std::string& scenario, bool inChallenge, bool loading, const PoseId& poseId,
                          const std::unordered_map<std::uint32_t, std::string>& poseNames)
     {
+        const auto marker = m_output.root() / L"runtime-edits.pending";
+        if (scenario != m_cleanupScenario || (loading && !m_wasLoading)) m_cleanupPending = true;
+        m_cleanupScenario = scenario;
+        m_wasLoading = loading;
+        std::error_code cleanupError;
+        if (inChallenge && (m_dirty || (m_cleanupPending && std::filesystem::exists(marker, cleanupError))))
+        {
+            m_cleanupPending = true;
+            if (reflect::Call(m_scene.Manager(), STR("/Script/GameSkillsTrainer.ScenarioManager:CancelChallenge")))
+                Warn("challenge cancelled: match weapon edits required cleanup; start again for a clean ranked run");
+        }
+        if (m_cleanupPending && !loading && !scenario.empty())
+        {
+            if (m_dirty || std::filesystem::exists(marker, cleanupError))
+            {
+                UObject* player = m_scene.Player();
+                UObject* character = player ? m_b.myCharacter.Object(player) : nullptr;
+                UObject* handler = character ? Describe(character).weaponHandler.Object(character) : nullptr;
+                if (!handler || !BindRound()) return;
+                m_feel.Release(player, character, "scenario load");
+                ReleaseRound("scenario load");
+                if (!m_loadWeapons.Call(handler, [](std::uint8_t*, const Param&) {})) return;
+                reflect::SetBool(handler, STR("BlockADS"), false);
+                std::filesystem::remove(marker, cleanupError);
+                m_dirty = false;
+                Log("match play: scenario weapon profiles restored; runtime spread, speed and scope released");
+            }
+            m_cleanupPending = false;
+        }
         TickShots(now, poseId, poseNames);
         TickPlayState(now, scenario, inChallenge, loading);
         TickRound(now, scenario, inChallenge, loading);
@@ -632,6 +661,11 @@ namespace aimmod
         m_closedReason.clear();
         if (!m_engaged)
         {
+            std::ofstream marker(m_output.root() / L"runtime-edits.pending", std::ios::trunc);
+            marker << "1\n";
+            marker.close();
+            if (!marker) return;
+            m_dirty = true;
             m_engaged = true;
             m_dead = Health(character).value_or(1) <= 0;
             // A hit reported before engaging is history, not an effect to replay.
@@ -898,7 +932,7 @@ namespace aimmod
                 if (m_selectable.ok() && m_selectable.Elements(handler, slots, 8))
                     for (const auto& [slot, value] : m_selectableBefore)
                         if (static_cast<std::size_t>(slot) < slots.size()) *const_cast<std::uint8_t*>(slots[static_cast<std::size_t>(slot)]) = value ? 1 : 0;
-                m_loadWeapons.Call(handler, [](std::uint8_t*, const Param&) {}); // the scenario's own loadout
+                if (!m_cleanupPending) m_loadWeapons.Call(handler, [](std::uint8_t*, const Param&) {}); // the scenario's own loadout
             }
         }
         m_gear.Release(player, why);
@@ -946,6 +980,11 @@ namespace aimmod
         const bool freezePhase = r->phase && r->phase->name == "freeze";
         if (!m_roundEngaged)
         {
+            std::ofstream marker(m_output.root() / L"runtime-edits.pending", std::ios::trunc);
+            marker << "1\n";
+            marker.close();
+            if (!marker) return;
+            m_dirty = true;
             m_roundEngaged = true;
             // A spawn already in the file is history, except at a round start.
             m_spawnId = r->spawn && !freezePhase ? r->spawn->id : "";

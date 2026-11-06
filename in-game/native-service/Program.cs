@@ -102,6 +102,12 @@ await using var workspace = new WorkspaceHost(hub, output, database, settings, c
     hubSharing, () => new { linked = hub.Linked, live = sharesWithHub ? hubLive?.StatusInfo ?? new { state = "starting" } : new { state = "preview" }, uploads = sharesWithHub ? hubUploads.StatusInfo : new { state = "preview" } },
     gameFolder: statsWin64 is null ? null : Path.GetFullPath(Path.Combine(statsWin64, "..", "..")));
 await workspace.Start(cancellation.Token);
+using var inputLease = new System.Threading.Timer(_ =>
+{
+    if (cancellation.IsCancellationRequested) return;
+    try { AtomicFile.WriteText(Path.Combine(output, "service-heartbeat.tsv"), "1\n"); }
+    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+}, null, TimeSpan.Zero, TimeSpan.FromMilliseconds(500));
 // Declared after the workspace so it is disposed first: the presence is
 // cleared and KovaaK's own presence handed back before the UI closes.
 await using var discordHost = discord = new DiscordPresenceHost(output, discordSettings, workspace.ReadLive, () => workspace.ReplayVisible, () => hub.LinkedHandle,
