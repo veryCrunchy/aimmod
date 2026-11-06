@@ -209,7 +209,7 @@ sealed partial class MultiplayerService
         string? InSite = null, string? Callout = null, IReadOnlyList<CsMarker>? Sites = null,
         bool HasBomb = false, string? BombCarrier = null, string? Refused = null, string DropKey = CsDropKey, int TAlive = 0, int CtAlive = 0,
         IReadOnlyList<CsHurt>? Hurt = null, string? HitMarker = null, string? Watching = null, string? WatchHint = null,
-        IReadOnlyList<CsHudGrenade>? Grenades = null, double Flash = 0, double Smoke = 0, string GrenadeKey = CsGrenadeKey, CsFlashFx? FlashFx = null, string? GrenadeHint = null);
+        IReadOnlyList<CsHudGrenade>? Grenades = null, double Flash = 0, double Smoke = 0, string GrenadeKey = CsGrenadeKey, CsFlashFx? FlashFx = null, string? GrenadeHint = null, string? SessionId = null, IReadOnlyDictionary<string, string>? Controls = null);
     // The flash on your screen for the page to play smoothly between polls: which flash (Id), how long
     // ago it popped (Age, ms), how long the white holds and clears (ms) and how white it gets (Peak 0..1).
     internal sealed record CsFlashFx(long Id, long Age, int Hold, int Fade, double Peak);
@@ -308,7 +308,8 @@ sealed partial class MultiplayerService
             HurtMarkers(m, hostNow), HitMarker(m, hostNow),
             !me.Alive && deadWatch is { } watched ? Name(watched) : null,
             !me.Alive && deadWatch is not null ? (DeadWatchCandidates(cs, m.Players, SelfId).Count > 1 ? "Click or Space: next player · Right click: previous" : "The only player left") : null,
-            HudGrenades(me), GrenadeVeil(cs, me, hostNow).Flash, GrenadeVeil(cs, me, hostNow).Smoke, CsGrenadeKey, FlashFx(me, hostNow), HudGrenadeHint(me));
+            HudGrenades(me), GrenadeVeil(cs, me, hostNow).Flash, GrenadeVeil(cs, me, hostNow).Smoke, CsGrenadeKey, FlashFx(me, hostNow), HudGrenadeHint(me), Current?.Match?.Id,
+            new Dictionary<string, string> { ["Buy"] = CsBuyKey, ["Use"] = CsUseKey, ["Drop"] = CsDropKey, ["Grenades"] = CsGrenadeKey, ["Chat"] = ChatAllKey + " / " + ChatTeamKey, ["Radio"] = string.Join(" / ", RadioKeys), ["Scoreboard"] = prefs.ScoreboardKey });
     }
 
     // The grenades you carry, in slot order, with the one key 4 has in hand.

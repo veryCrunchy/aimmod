@@ -36,7 +36,7 @@ sealed class Lifecycle : IAsyncDisposable
         Directory.CreateDirectory(updatesRoot);
         settings = new UpdateSettings(output, CachedRelease()?.Channel);
         updater = new Updater(updatesRoot, handler);
-        applier = new PackageApplier(updatesRoot, this.gameRunning);
+        applier = new PackageApplier(updatesRoot, this.gameRunning, win64);
     }
     // ---- persisted request/result files (InstallState) ----
     LifecycleRequests Requests => ReadJson<LifecycleRequests>(RequestsPath(updatesRoot)) ?? new();
@@ -276,7 +276,7 @@ sealed class Lifecycle : IAsyncDisposable
             if (args.Contains("--apply-pending")) return ApplyPending(args, output, running, log);
             var win64 = Arg(args, "--game-dir") is { } g ? ResolveGameDir(g) : InstallLayout.FindWin64FromService(self) ?? InstallLayout.FindWin64FromSteam();
             if (win64 is null) { log.Line("KovaaK's was not found. Pass --game-dir <FPSAimTrainer folder>."); return 1; }
-            var applier = new PackageApplier(updatesRoot, running);
+            var applier = new PackageApplier(updatesRoot, running, win64);
             if (args.Contains("--install-status"))
             {
                 var report = InstallHealth.Inspect(win64, InstallManifest.Read(win64), InstallState.CachedRelease(output));
@@ -355,7 +355,7 @@ sealed class Lifecycle : IAsyncDisposable
         // Give a quick restart of the game a moment, but never touch files while it runs.
         for (int i = 0; i < 24 && running(win64); i++) Thread.Sleep(5000);
         if (running(win64)) { log.Line("KovaaK's is running again; the update waits for the next time it closes."); return 2; }
-        var applier = new PackageApplier(updatesRoot, running);
+        var applier = new PackageApplier(updatesRoot, running, win64);
         if (applier.RecoverInterrupted()) log.Line("An interrupted install was undone.");
         var updater = new Updater(updatesRoot);
         var prefs = new UpdateSettings(output, InstallState.CachedRelease(output)?.Channel).Current;

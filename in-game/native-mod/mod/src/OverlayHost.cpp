@@ -173,9 +173,11 @@ namespace aimmod
         frame.focused = focused;
         frame.escapeRecent = now - m_escapeAt < 0.6;
         frame.notice = in.notice;
+        frame.serviceAlive = in.serviceAlive;
         frame.panelOpen = in.panelOpen;
         frame.replay = replayActive;
         frame.haveView = view != nullptr;
+        frame.haveWidget = m_widget.Get() != nullptr;
         UObject* menu = PauseMenu(player);
         frame.pauseMenuVisible = menu && m_isVisible.ok() && m_isVisible.Bool(menu).value_or(false);
         frame.gameCursor = !m_machine.holding() && CursorShown(player);
@@ -380,13 +382,13 @@ namespace aimmod
             }
             m_fresh = false;
         }
-        if (plan.enterMenuInput) EnterMenuInput(player);
+        if (plan.enterMenuInput) m_machine.Acquired(EnterMenuInput(player));
         if (plan.releaseMenuInput) ReleaseMenuInput(player);
         if (plan.forgetMenuInput) BlockFire(player, false);
-        if (plan.holdMenuInput) Reassert(player, now);
-        if (plan.captureText) CaptureText(now);
+        if (plan.holdMenuInput && m_machine.holding()) Reassert(player, now);
+        if (plan.captureText && m_machine.holding()) CaptureText(now);
         else if (m_capturing) StopText(plan.holdMenuInput ? "the chat input closed" : "input went back (the chat closed, alt-tab, or KovaaK's menu took over)");
-        if (plan.forwardPointer) ForwardPointer(now);
+        if (plan.forwardPointer && m_machine.holding()) ForwardPointer(now);
         else if (m_plan.forwardPointer)
         {
             m_pointerX = m_pointerY = -1;
@@ -422,7 +424,7 @@ namespace aimmod
     {
         UObject* library = Default(WidgetLibrary);
         UObject* widget = m_widget.Get();
-        if (!library) return false;
+        if (!library || !widget || !m_view.Get()) return false;
         return Call(library, STR("/Script/UMG.WidgetBlueprintLibrary:SetInputMode_UIOnlyEx"), [&](const std::wstring& n, FProperty*, std::uint8_t* v) {
             if (n == STR("PlayerController")) WriteObject(v, player);
             else if (n == STR("InWidgetToFocus")) WriteObject(v, widget);
@@ -462,16 +464,18 @@ namespace aimmod
         m_character = FWeakObjectPtr{};
     }
 
-    void OverlayHost::EnterMenuInput(UObject* player)
+    bool OverlayHost::EnterMenuInput(UObject* player)
     {
         const bool cursor = ShowCursor(player, true);
         const bool mode = UiOnly(player);
+        if (!cursor || !mode) { ReleaseMenuInput(player); return false; }
         BlockFire(player, true);
         m_resets = 0;
         m_nextInput = 0.0;
         Log(std::string("overlay: buy menu input: cursor ") + (cursor ? "on" : "FAILED") + " (bShowMouseCursor " + (CursorShown(player) ? "true" : "false") +
             "), UI-only " + (mode ? "set" : "FAILED") + " focused on " + Name(m_widget.Get()) + ", fire " + (m_blocking ? "blocked" : "not blocked (no character)") +
             ", controller " + Name(player));
+        return true;
     }
 
     void OverlayHost::ReleaseMenuInput(UObject* player)

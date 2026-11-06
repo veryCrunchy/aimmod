@@ -56,9 +56,8 @@ namespace aimmod
         bool overridesActive() const { return m_overrides.active; }
         // Shared match randomness: the game draws from the CRT rand() state of
         // its game thread (it imports rand/srand from the UCRT, like this
-        // module). Seeded when the seeded scenario starts or a challenge
-        // attempt in it starts, and before each target death/kill (respawn).
-        // A challenge outside "AimMod Match - " scenarios ends seeding.
+        // module). Seeded when freeplay starts and before each target death/kill
+        // (respawn). Every challenge ends seeding, regardless of its name.
         void OnAttemptStarted(const std::string& scenario);
         void OnSpawnEvent();
         // Called every engine frame on the game thread.

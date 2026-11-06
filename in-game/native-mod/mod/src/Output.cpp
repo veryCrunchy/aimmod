@@ -334,7 +334,9 @@ namespace aimmod
     Output::OverlayInputs Output::overlay() const
     {
         std::lock_guard lock(const_cast<std::mutex&>(m_mutex));
-        return m_overlay;
+        auto result = m_overlay;
+        if (!result.serviceAlive) result.notice.reset();
+        return result;
     }
 
     // Every writer pass: the notice file when its write time changes (it changes only
@@ -342,6 +344,12 @@ namespace aimmod
     // twice a second.
     void Output::ReadOverlayInputs(std::uint64_t now)
     {
+        WIN32_FILE_ATTRIBUTE_DATA leaseData{};
+        FILETIME current{};
+        GetSystemTimeAsFileTime(&current);
+        const auto ticks = [](FILETIME t) { return (static_cast<std::uint64_t>(t.dwHighDateTime) << 32) | t.dwLowDateTime; };
+        const bool serviceAlive = GetFileAttributesExW((m_root / L"service-heartbeat.tsv").c_str(), GetFileExInfoStandard, &leaseData) &&
+                           overlay::LeaseFresh(ticks(leaseData.ftLastWriteTime), ticks(current));
         WIN32_FILE_ATTRIBUTE_DATA data{};
         const auto path = m_root / L"multiplayer-notify.json";
         std::uint64_t stamp = 0;
@@ -391,12 +399,10 @@ namespace aimmod
             if (ReadSmall(m_root / L"lua-notice.tsv", text, 128)) lua = overlay::LuaLayerActive(text, static_cast<std::int64_t>(std::time(nullptr)));
         }
         std::lock_guard lock(m_mutex);
+        if (m_overlay.serviceAlive != serviceAlive) { m_overlay.serviceAlive = serviceAlive; changed = true; }
         if (noticeRead)
         {
-            const bool differs = notice.has_value() != m_overlay.notice.has_value() ||
-                                 (notice && (notice->content != m_overlay.notice->content || notice->full != m_overlay.notice->full ||
-                                             notice->interactive != m_overlay.notice->interactive || notice->cursor != m_overlay.notice->cursor ||
-                                             notice->swallowMenu != m_overlay.notice->swallowMenu || notice->boardHeld != m_overlay.notice->boardHeld));
+            const bool differs = notice != m_overlay.notice;
             if (differs)
             {
                 m_overlay.notice = notice;

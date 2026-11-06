@@ -109,6 +109,7 @@ namespace aimmod
         // ui-host.tsv switch. `version` changes with any of them.
         struct OverlayInputs
         {
+            bool serviceAlive{};
             std::optional<overlay::Notice> notice;
             std::string url;
             bool panelOpen{};

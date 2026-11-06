@@ -23,6 +23,8 @@ static class FeedCheck
 
     public static FeedStatus Read(ReadOnlySpan<byte> bytes, SemanticVersion installer, string channel)
     {
+        try { ReleaseTrust.Verify(bytes); }
+        catch (ReleaseFormatException ex) { return new(FeedState.Unreachable, Message: ex.Message); }
         string? schema = null, minimum = null, url = null;
         if (bytes.Length is > 0 and <= UpdateFeed.MaximumBytes)
         {

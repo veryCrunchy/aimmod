@@ -165,7 +165,12 @@ sealed class Updater(string stateRoot, HttpMessageHandler? handler = null)
     }
 
     // The raw feed (HTTPS only, at most UpdateFeed.MaximumBytes).
-    public Task<byte[]> FetchFeed(string feedUrl, CancellationToken token) => Fetch(feedUrl, UpdateFeed.MaximumBytes, token);
+    public async Task<byte[]> FetchFeed(string feedUrl, CancellationToken token)
+    {
+        var bytes = await Fetch(feedUrl, UpdateFeed.MaximumBytes, token);
+        ReleaseTrust.Remember(bytes, stateRoot);
+        return bytes;
+    }
 
     async Task Download(UpdateFeed feed, CancellationToken token)
     {

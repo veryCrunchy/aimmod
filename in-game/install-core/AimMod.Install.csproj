@@ -9,6 +9,7 @@
     <RootNamespace>AimMod.InGame</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
+    <EmbeddedResource Include="release-keys.json" />
     <InternalsVisibleTo Include="AimMod.InGame" />
     <InternalsVisibleTo Include="AimMod-Setup" />
     <InternalsVisibleTo Include="AimMod.Setup.Checks" />

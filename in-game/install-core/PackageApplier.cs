@@ -40,10 +40,14 @@ sealed class SimulatedCrashException : Exception;
 // transaction. Every file that will change is copied to a backup folder and
 // listed in a journal before anything is touched; any failure (including a
 // crash, recovered on the next run) restores exactly the previous state.
-sealed class PackageApplier(string stateRoot, Func<string, bool>? gameRunning = null)
+sealed class PackageApplier(string stateRoot, Func<string, bool>? gameRunning = null, string? installation = null)
 {
     readonly Func<string, bool> gameRunning = gameRunning ?? InstallLayout.GameRunning;
-    public string BackupRoot => Path.Combine(stateRoot, "backups");
+    string? boundInstallation = installation is null ? null : Path.GetFullPath(installation);
+    string StateRoot => boundInstallation is null
+        ? (RecoverySecurity.Elevated ? throw new InstallException("Elevated recovery requires a validated installation.") : stateRoot)
+        : RecoverySecurity.Root(stateRoot, boundInstallation);
+    public string BackupRoot => Path.Combine(StateRoot, "backups");
     // Test hook: called after each placed file, may throw to simulate failure.
     internal Action<string>? AfterFile;
 
@@ -62,11 +66,17 @@ sealed class PackageApplier(string stateRoot, Func<string, bool>? gameRunning = 
     static string Now() => DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ");
     static string Win(string releasePath) => ReleasePaths.ToWindows(releasePath);
     // A path in the game: Win64-relative, or an AimMod pak record (paks\~AimMod\...).
-    static string Game(string win64, string relative) => InstallLayout.Resolve(win64, relative);
+    static string Game(string win64, string relative)
+    {
+        var path = InstallLayout.Resolve(win64, relative);
+        RecoverySecurity.NoLinks(path);
+        return path;
+    }
     static string Under(string root, string relative)
     {
         var full = Path.GetFullPath(Path.Combine(root, relative));
         if (!full.StartsWith(Path.GetFullPath(root).TrimEnd('\\') + "\\", StringComparison.OrdinalIgnoreCase)) throw new InstallException("Path escapes the game folder.");
+        RecoverySecurity.NoLinks(full);
         return full;
     }
     void RequireGameClosed(string win64)
@@ -80,6 +90,8 @@ sealed class PackageApplier(string stateRoot, Func<string, bool>? gameRunning = 
     {
         win64 = Path.GetFullPath(win64);
         if (!InstallLayout.IsWin64(win64)) throw new InstallException("KovaaK's was not found in this folder.");
+        boundInstallation = win64;
+        RecoverySecurity.NoLinks(win64);
         RequireGameClosed(win64);
         RecoverInterrupted();
         var previous = InstallManifest.Read(win64);
@@ -138,6 +150,7 @@ sealed class PackageApplier(string stateRoot, Func<string, bool>? gameRunning = 
                 EnsureDirectory(win64, Path.GetDirectoryName(dest)!, createdDirs);
                 WriteJournal(backupFolder, journal with { CreatedDirectories = createdDirs.ToArray() });
                 var temporary = dest + ".aimmod-new";
+                RecoverySecurity.NoLinks(temporary);
                 File.Copy(source, temporary, true);
                 File.Move(temporary, dest, true);
                 AfterFile?.Invoke(relative);
@@ -200,12 +213,20 @@ sealed class PackageApplier(string stateRoot, Func<string, bool>? gameRunning = 
         AtomicFile.WriteBytes(Path.Combine(backupFolder, "journal.json"), JsonSerializer.SerializeToUtf8Bytes(journal, new JsonSerializerOptions { WriteIndented = true }), durable: true);
     static Journal? ReadJournal(string backupFolder)
     {
+        RecoverySecurity.NoLinks(backupFolder);
         var path = Path.Combine(backupFolder, "journal.json");
+        RecoverySecurity.NoLinks(path);
         if (!File.Exists(path)) return null;
         try { return JsonSerializer.Deserialize<Journal>(File.ReadAllBytes(path)); } catch (JsonException) { return null; }
     }
     void Restore(string backupFolder, Journal journal, string finalState)
     {
+        if (boundInstallation is null || !string.Equals(Path.GetFullPath(journal.Win64), boundInstallation, StringComparison.OrdinalIgnoreCase) || !InstallLayout.IsWin64(boundInstallation))
+            throw new InstallException("Recovery journal does not belong to the validated installation.");
+        RecoverySecurity.NoLinks(backupFolder);
+        // Validate the whole journal before the first mutation.
+        foreach (var entry in journal.Entries) { var dest = Game(boundInstallation, entry.Path); RecoverySecurity.NoLinks(dest + ".aimmod-new"); Under(Path.Combine(backupFolder, "files"), entry.Path); }
+        foreach (var dir in journal.CreatedDirectories) Game(boundInstallation, dir);
         foreach (var entry in journal.Entries.Reverse())
         {
             var dest = Game(journal.Win64, entry.Path);

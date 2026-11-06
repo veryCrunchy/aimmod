@@ -77,9 +77,9 @@ test('settings editor: title and Done come first, advanced settings fold away un
 });
 test('home: personal multiplayer settings fold to a summary, but key conflicts still show',()=>{
   const s=setup().open(view({prefs:{hotkey:'F6',sounds:true,spectatePrivacy:'ask'},keys:{clip:'F8',taken:[],conflicts:['F6 is also KovaaK’s reset key.']}}));
-  assert.ok(s.text().includes('Hotkey F6 · Sounds on · Spectating asks you first'));assert.ok(!s.text().includes('Ready when I join'));
+  assert.ok(s.text().includes('Lobby key F6 · Sounds on · Spectating asks you first'));assert.ok(!s.text().includes('Ready when I join'));
   assert.ok(s.text().includes('F6 is also KovaaK’s reset key.'),'a conflict is never folded away');
-  s.button('Change').onclick();assert.ok(s.text().includes('Ready when I join'));
+  assert.ok(s.button('Multiplayer settings'));s.api.enterPreferences(s.container);s.last().finish(200,view({prefs:{hotkey:'F6',sounds:true,spectatePrivacy:'ask'}}));assert.ok(s.text().includes('Ready when I join'));
   assert.ok(s.text().includes('Bomb and round sounds')&&s.text().includes('Gunfire and footsteps'),'other players’ gunfire has its own volume');
   s.button('Done').onclick();assert.ok(!s.text().includes('Ready when I join'));
 });

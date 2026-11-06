@@ -46,3 +46,9 @@ tick "Also remove my AimMod data" in the installer.
 
 Problems: the install log is %LOCALAPPDATA%\AimMod\KovaaksNative\updates\install.log
 and the UE4SS log is ue4ss\UE4SS.log in FPSAimTrainer\Binaries\Win64.
+
+In KovaaK's, press Esc and click AIMMOD, or press F7
+
+Windows SmartScreen may warn about an unfamiliar download. Check that you
+downloaded AimMod-Setup.exe from the official release before choosing
+More info and Run anyway. Release metadata signatures do not sign the EXE.

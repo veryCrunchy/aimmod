@@ -343,27 +343,14 @@ namespace aimmod
     {
         UObject* kismet = Default(STR("/Script/Engine.Default__KismetSystemLibrary"));
         if (!context || !kismet) return std::nullopt;
-        struct RawBytes { std::uint8_t* data; std::int32_t num, max; };
         bool hit = false, inside = false;
         double z = 0;
-        std::uint8_t* types = nullptr;
-        std::uint8_t* ignore = nullptr;
         const bool ran = Call(kismet, STR("/Script/Engine.KismetSystemLibrary:LineTraceSingleForObjects"), [&](const std::wstring& n, FProperty* p, std::uint8_t* v) {
             if (n == STR("WorldContextObject")) WriteObject(v, context);
             else if (n == STR("Start")) WriteFloats(v, p, {static_cast<float>(x), static_cast<float>(y), static_cast<float>(top)});
             else if (n == STR("End")) WriteFloats(v, p, {static_cast<float>(x), static_cast<float>(y), static_cast<float>(bottom)});
-            else if (n == STR("ObjectTypes"))
-            {
-                // WorldStatic and WorldDynamic.
-                auto* data = static_cast<std::uint8_t*>(RC::Unreal::FMemory::Malloc(2));
-                if (!data) return;
-                data[0] = 0;
-                data[1] = 1;
-                const RawBytes raw{data, 2, 2};
-                std::memcpy(v, &raw, sizeof raw);
-                types = v;
-            }
-            else if (n == STR("ActorsToIgnore")) WriteObjectArray(v, context), ignore = v;
+            else if (n == STR("ObjectTypes")) WriteByteArray(v, {0, 1});
+            else if (n == STR("ActorsToIgnore")) WriteObjectArray(v, context);
             else if (n == STR("bIgnoreSelf")) WriteBoolParam(v, p, true);
         }, nullptr, [&](const std::wstring& n, FProperty* p, const std::uint8_t* v) {
             if (n == STR("ReturnValue")) hit = *v != 0;
@@ -380,24 +367,7 @@ namespace aimmod
                         else if (member->GetName() == STR("bStartPenetrating"))
                             if (auto* b = RC::Unreal::CastField<RC::Unreal::FBoolProperty>(member)) inside = b->GetPropertyValue(const_cast<std::uint8_t*>(v) + member->GetOffset_Internal());
                     }
-            if (n == STR("ObjectTypes") || n == STR("ActorsToIgnore"))
-            {
-                RawBytes raw;
-                std::memcpy(&raw, v, sizeof raw);
-                if (raw.data) RC::Unreal::FMemory::Free(raw.data);
-                if (n == STR("ObjectTypes")) types = nullptr;
-                else ignore = nullptr;
-            }
         });
-        // The call did not run: free what was written.
-        if (!ran)
-            for (std::uint8_t* left : {types, ignore})
-                if (left)
-                {
-                    RawBytes raw;
-                    std::memcpy(&raw, left, sizeof raw);
-                    if (raw.data) RC::Unreal::FMemory::Free(raw.data);
-                }
         if (!ran || !hit || inside || !std::isfinite(z)) return std::nullopt;
         return z;
     }

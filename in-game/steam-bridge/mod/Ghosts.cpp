@@ -28,6 +28,7 @@
 #include <fstream>
 #include <cstdio>
 #include <cstring>
+#include <cstdlib>
 #include <exception>
 #include <fstream>
 #include <iterator>
@@ -596,8 +597,19 @@ namespace aimmod
         if (EnsureShapes(ghost, world)) PlaceShapes(ghost, s);
     }
 
+    namespace { struct TraceBudgetExhausted {}; }
+
     void GhostDemo::Tick()
     {
+        if (const double now = bridge::Bridge::Now(); now >= m_budgetLogAt)
+        {
+            m_budgetLogAt = now + 30;
+            m_log("avatars: measured engine traces last tick " + std::to_string(m_tickTraces) + "/" + std::to_string(m_traceLimit));
+        }
+        m_tickTraces = 0;
+        char limit[16]{};
+        if (GetEnvironmentVariableA("AIMMOD_NAV_TRACE_BUDGET", limit, sizeof(limit)))
+            m_traceLimit = std::clamp(std::atoi(limit), 64, 10000);
         try
         {
             if (!Bind()) return;
@@ -1062,6 +1074,7 @@ namespace aimmod
                 }
             }
         }
+        catch (const TraceBudgetExhausted&) {}
         catch (const std::exception& e)
         {
             m_failed = true;
@@ -1255,13 +1268,17 @@ namespace aimmod
         const auto seed = [&](const std::array<double, 3>& p) {
             char key[64];
             std::snprintf(key, sizeof(key), "%.0f,%.0f,%.0f", p[0], p[1], p[2]);
-            if (m_navSeeds.insert(key).second) m_nav->Seed(p[0], p[1], p[2], floor);
+            if (!m_navSeeds.contains(key) && m_traceLimit - m_tickTraces >= 52)
+            {
+                m_nav->Seed(p[0], p[1], p[2], floor);
+                m_navSeeds.insert(key);
+            }
         };
         for (const auto& w : walkers)
             for (const auto& s : w.spawns) seed(s);
         for (const auto& [_, o] : m_botOrders->bots)
             if (o.goal) seed(*o.goal);
-        if (!m_nav->Done()) m_nav->Grow(1500, floor, clear);
+        while (!m_nav->Done() && m_traceLimit - m_tickTraces >= 24) m_nav->Grow(1, floor, clear);
         // Coverage, once the grid is complete: from each walker's own spawn, which of its waypoints and
         // goals (the bomb sites, the other spawns) the grid connects; the ones it doesn't are named.
         if (m_nav->Done() && !m_navCoverageLogged)
@@ -1332,7 +1349,7 @@ namespace aimmod
                 m_areasChanged = true;
             }
             if (area.Done()) continue;
-            if (area.Step(*m_nav, 800, clear))
+            if (area.Step(*m_nav, std::max(0, (m_traceLimit - m_tickTraces) / 2), clear))
             {
                 m_areasChanged = true;
                 int bomb = 0, lurks = 0;
@@ -1514,6 +1531,9 @@ namespace aimmod
             if (t != 2) objectTypes.Add(t);
         // One trace with `fn`; nullopt without a hit or when it starts inside geometry.
         const auto run = [&](const game::Getter& fn) -> std::optional<std::array<double, 3>> {
+            if (m_tickTraces >= m_traceLimit) throw TraceBudgetExhausted{};
+            ++m_tickTraces;
+            ++m_traceCount;
             bool hit = false, startedInside = false;
             std::array<double, 3> point{};
             int vectors = 0;
@@ -1552,7 +1572,6 @@ namespace aimmod
         auto found = run(m_lineTrace);
         if (!found && m_traceForObjects && m_lineTraceChannel.ok()) found = run(m_lineTraceChannel);
         // The parameter copies of the lists are plain memory; `ignore` and `objectTypes` free their buffers.
-        ++m_traceCount;
         if (found) ++m_traceHits;
         return found;
     }

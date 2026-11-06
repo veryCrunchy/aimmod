@@ -302,7 +302,7 @@ public partial class MainWindow : Window
                 try { registration.Register(win64, outcome.Version ?? "", outcome.Bytes, Environment.ProcessPath, installerVersion); }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException) { engine.Log("could not add AimMod to Apps & features: " + ex.Message); }
             }
-            Status(outcome.Message + (kind == "uninstall" ? "" : " Start KovaaK's from Steam."), Tone.Success);
+            Status(outcome.Message + (kind == "uninstall" ? "" : " In KovaaK's, press Esc and click AIMMOD, or press F7"), Tone.Success);
         }
         catch (GameRunningException)
         {

@@ -28,7 +28,7 @@ function Compare-SemVer([string]$A, [string]$B) {
     for ($i = 0; $i -lt [Math]::Min($x.Pre.Count, $y.Pre.Count); $i++) {
         $p = $x.Pre[$i]; $q = $y.Pre[$i]
         $pn = $p -match '^\d+$'; $qn = $q -match '^\d+$'
-        if ($pn -and $qn) { if ([long]$p -ne [long]$q) { return [Math]::Sign([long]$p - [long]$q) } }
+        if ($pn -and $qn) { if ($p.Length -ne $q.Length) { return [Math]::Sign($p.Length - $q.Length) }; $c = [string]::CompareOrdinal($p, $q); if ($c -ne 0) { return [Math]::Sign($c) } }
         elseif ($pn -ne $qn) { return $(if ($pn) { -1 } else { 1 }) }
         else { $c = [string]::CompareOrdinal($p, $q); if ($c -ne 0) { return [Math]::Sign($c) } }
     }
