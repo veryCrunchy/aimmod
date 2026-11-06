@@ -236,28 +236,31 @@
     // The rejoin offer can be put away for this session (the service keeps it for 15 minutes).
     var rejoinKey=view.rejoin?safe(view.rejoin.hostName,'host'):'';
     if(view.rejoin&&rejoinHidden!==rejoinKey)page.appendChild(add(node('div','panel mp-rejoin'),add(node('div','mp-rejoin-text'),node('strong','','Rejoin '+safe(view.rejoin.hostName,'your host')+'’s lobby?'),node('span','','You left it '+(view.rejoin.minutes<1?'just now':view.rejoin.minutes+' min ago')+' when KovaaK’s closed.')),actions(button('Not now',function(){rejoinHidden=rejoinKey;render();},'quiet'),button('Rejoin',function(){act('rejoin');},'primary'))));
-    var hero=node('div','panel mp-hero');page.appendChild(hero);
-    var left=node('div','mp-hero-main');
-    add(left,node('h2','','Play KovaaK’s together'),node('p','mp-lead','Results stay in AimMod and never touch KovaaK’s leaderboards.'));
-    left.appendChild(modePicker(quickMode,function(id){quickMode=id;render();},false));
-    left.appendChild(modeHero(quickMode));
+    var hero=node('div','mp-play-home');page.appendChild(hero);
+    var left=node('div','panel mp-play-main');
+    add(left,add(node('div','mp-play-heading'),add(node('div',''),node('div','eyebrow','Multiplayer'),node('h2','','Your next match')),actions(button('Map library',openMaps,'compact quiet'),button('History',openHistory,'compact quiet'))));
+    var selection=node('div','mp-play-selection'),tiles=node('div','mp-play-tiles'),detail=node('div','mp-play-detail');
+    add(selection,tiles,detail);left.appendChild(selection);
+    tiles.appendChild(modePicker(quickMode,function(id){quickMode=id;render();},false));
+    detail.appendChild(modeHero(quickMode));
     var create=button('Create lobby',function(){act('create',{mode:quickMode});},'primary mp-big');
-    left.appendChild(actions(create));
+    detail.appendChild(actions(create));
+    if(mode(quickMode).group==='pvp'){var bots=button('Play vs bots',function(){var chosen=quickMode;bots.disabled=true;act('create',{mode:chosen},function(ok){if(ok&&view.lobby&&view.lobby.isHost&&view.lobby.settings.mode===chosen)act('add-bot',{skill:botSkill,fill:true},function(filled){var l=view.lobby;if(filled&&l&&l.isHost&&l.settings.mode===chosen&&l.settings.scenario&&l.blockers&&l.blockers.length===0)act('start');});else if(!ok)bots.disabled=false;});});bots.disabled=!botsAllowed({mode:quickMode});detail.appendChild(actions(bots));detail.appendChild(node('p','mp-note',bots.disabled?'Tracking duel needs another player.':'Start with bots. If a map is needed, choose it in your lobby.'));}
+    detail.appendChild(node('p','mp-note','Results stay in AimMod and never touch KovaaK’s leaderboards.'));
     if(!view.library.available)left.appendChild(node('p','mp-note','Couldn’t find your KovaaK’s scenarios. You can still join lobbies.'));
-    var right=node('div','mp-hero-side');
-    add(right,node('h3','','Join a friend'),view.transport.online?node('p','subtle','Or use Join on a friend below.'):null);
+    var right=node('div','mp-play-social');var join=node('div','panel mp-join-card');right.appendChild(join);
+    add(join,node('h3','','Join with a code'));
     var input=trackInput(node('input','mp-code'),'code');input.setAttribute('data-draft','code');input.setAttribute('maxlength','7');input.setAttribute('autocomplete','off');
     input.onkeydown=function(e){if((e||root.event).keyCode===13)joinCode();};
     var codeRow=node('div','mp-code-row');add(codeRow,field(input,'Room code','mp-code-field'),actions(button('Join',joinCode)));
-    right.appendChild(codeRow);
-    right.appendChild(steamState());
-    right.appendChild(add(node('div','mp-hero-link'),actions(button('Map library',openMaps,'compact'))));
+    join.appendChild(codeRow);
+    join.appendChild(steamState());
+    right.appendChild(friendsPanel(false));
     hero.appendChild(left);hero.appendChild(right);
     var row=node('div','mp-row');page.appendChild(row);
     var main=node('div','mp-col mp-main'),side=node('div','mp-col mp-side');row.appendChild(main);row.appendChild(side);
     if((view.watchers&&view.watchers.length)||(view.watchAsks&&view.watchAsks.length))side.appendChild(watchersPanel());
-    main.appendChild(friendsPanel(false));
-    side.appendChild(recentPanel());
+    main.appendChild(recentPanel());
     side.appendChild(prefsPanel());
     if(view.simulation)page.appendChild(devPanel(false));
   }
@@ -526,10 +529,12 @@
     items.slice(0,inLobby?8:12).forEach(function(f){
       var row=node('div','mp-friend');var info=node('div','mp-friend-info');
       add(info,node('strong','',safe(f.name,'Friend')),node('span','',safe(f.detail,'')));
+      if(!inLobby&&f.status!=='aimmod'&&f.status!=='aimmod-lobby')info.appendChild(node('span','',"Doesn't have AimMod"));
       add(row,avatar(f.name,true,f.avatar),info,friendStatus(f));
       var b=null;
       if(inLobby&&f.status!=='aimmod-lobby')b=button('Invite',function(){act('invite-friend',{friend:f.id},function(ok){if(ok)toast('Invite sent to '+safe(f.name,'your friend')+'.');});},'compact');
       else if(!inLobby&&f.joinable)b=button('Join',function(){act('join-friend',{friend:f.id});},'compact primary');
+      else if(!inLobby&&f.status==='aimmod')b=button('Invite',function(){act('create',{mode:quickMode},function(ok){if(ok&&view.lobby&&view.lobby.isHost)act('invite-friend',{friend:f.id});});},'compact');
       // Spectating would leave your own lobby, so the invite list only invites.
       if(!inLobby&&f.spectatable&&!(view.watch&&view.watch.peer===f.id)){var spec=button('Spectate',function(){act('watch',{friend:f.id},function(ok){if(ok)toast('Asking '+safe(f.name,'your friend')+' to let you watch…');});},'compact quiet');row.appendChild(actions(spec));}
       if(b&&inLobby&&f.status!=='aimmod'&&f.status!=='aimmod-lobby'){b.disabled=true;info.appendChild(node('span','',"Doesn't have AimMod"));row.appendChild(actions(button('Copy install link',function(){var input=node('input','');input.value='https://aimmod.app/app/kovaaks';row.appendChild(input);input.focus();input.select();var copied=false;try{copied=!!(root.document.execCommand&&root.document.execCommand('copy'));}catch(e){}if(copied){row.removeChild(input);toast('Install link copied.');}else toast('Select and copy the install link.');},'compact quiet')));}if(b)row.appendChild(actions(b));
@@ -732,8 +737,7 @@
     // No frame yet: AimModCore is starting the preview, or it is off (it logs why). The page can't
     // tell those apart, so it never claims a reason; it only says the look still saves.
     var waiting=Date.now()-(preview.openedAt||0)<6000;
-    var note=node('div','mp-look-wait');add(note,node('strong','',waiting?'Loading the preview…':'Preview unavailable'),
-      node('span','',waiting?'':'Your look still saves. The preview is drawn by AimModCore in KovaaK’s menus and never runs in challenges, benchmarks or the editor.'));
+    var note=node('div','mp-look-wait');note.setAttribute('role','status');add(note,node('strong','',waiting?'Loading the preview…':'Preview unavailable'),node('span','',waiting?'':'Your look still saves.'));
     preview.img=img;preview.note=note;previewShow();
     add(shot,img,note);stage.appendChild(shot);
     var turn=function(by){preview.yaw=((preview.yaw+by+180)%360+360)%360-180;preview.fastUntil=Date.now()+2000;previewSend();};
@@ -741,7 +745,7 @@
     var right=button('',function(){turn(45);},'compact quiet icon');right.appendChild(turnArt(1));right.setAttribute('aria-label','Turn right');
     var bar=node('div','mp-look-bar');
     add(bar,actions(left,right),node('span','mp-look-hint','Drag to turn'),segmented([{id:'body',label:'Full body'},{id:'close',label:'Close-up'}],preview.close?'close':'body',function(id){preview.close=id==='close';render();},false,'view'));
-    stage.appendChild(bar);
+    stage.appendChild(bar);stage.appendChild(actions(button('Retry preview',function(){preview.frame=0;preview.openedAt=Date.now();render();previewSend();},'compact quiet')));
     return stage;
   }
   function wornLine(){var d=cosmeticsData;var n=d&&d.items?d.items.filter(function(i){return i.equipped;}).length:0;return n?n+(n===1?' item':' items')+' on':'No items on';}
@@ -845,7 +849,7 @@
   // Map Library: AimMod map ports here and on the Steam Workshop --------------
   var mapsOpen=false,maps=null,mapsBusy=false,mapsFilter='all';
   function openMaps(){mapsOpen=true;historyOpen=false;tab='play';picker=null;drafts.maps='';loadMaps();render();}
-  function loadMaps(){if(mapsBusy)return;mapsBusy=true;xhr('GET','/multiplayer?part=maps',null,function(ok,data){mapsBusy=false;if(!ok||!data)return;var changed=JSON.stringify(data)!==JSON.stringify(maps);maps=data;if(changed&&(mapsOpen&&!focused||picker==='scenario'))render();});}
+  function loadMaps(){if(mapsBusy)return;mapsBusy=true;xhr('GET','/multiplayer?part=maps',null,function(ok,data){mapsBusy=false;if(!ok||!data)return;var changed=JSON.stringify(data)!==JSON.stringify(maps);maps=data;if(changed&&(mapsOpen&&!focused||picker==='scenario'||view&&view.lobby&&!focused))render();});}
   function shiftText(p){return p.shift==='walk'?'Shift walks':p.shift==='sprint'?'Shift sprints':'No Shift ability';}
   function portState(p){
     if(p.download)return p.download.state==='queued'?'Queued…':'Downloading '+(p.download.total>0?Math.floor(p.download.done*100/p.download.total)+'%':'…');
@@ -967,6 +971,7 @@
     return head;
   }
   function lobbyRoom(page,lobby){
+    if(!maps&&!mapsBusy)loadMaps();
     connectionBanners(page,lobby);
     var mine=member(lobby.self);
     if(lobby.autoStartAt){var auto=banner('info','Everyone’s ready. Starting in 3 s…');page.appendChild(auto);countNodes.push({node:auto.children[1],at:lobby.autoStartAt,format:function(ms){return 'Everyone’s ready. Starting in '+Math.max(1,seconds(ms))+' s…';}});}
@@ -982,15 +987,13 @@
     if(lobby.settings.mode==='cs'){main.appendChild(node('p','mp-note','If the host leaves, the match ends.'));main.appendChild(teamsPanel(lobby));}
     main.appendChild(chatPanel(lobby));
     if(view.simulation)main.appendChild(devPanel(true));
-    // Side column: who's watching, then the match, then extras. While the host is alone,
-    // inviting comes first.
+    // Keep the match briefing ahead of invitations and cosmetic controls.
     if((view.watchers&&view.watchers.length)||(view.watchAsks&&view.watchAsks.length))side.appendChild(watchersPanel());
     var invite=view.friends.items&&view.friends.items.length?friendsPanel(true):null;
-    var alone=lobby.members.length<2;
-    if(alone&&invite)side.appendChild(invite);
+
     side.appendChild(summaryCard(lobby));
     var sug=suggestionsPanel(lobby);if(sug)side.appendChild(sug);
-    if(!alone&&invite)side.appendChild(invite);
+    if(invite)side.appendChild(invite);
     side.appendChild(lookPanel(lobby));
   }
   function connectionBanners(page,lobby){
@@ -1122,8 +1125,9 @@
   function summaryCard(lobby){
     var s=lobby.settings;var p=node('div','panel mp-summary');var head=node('div','panel-head');var text=node('div','head-text');
     add(text,node('h2','','Match settings'));
-    head.appendChild(text);if(lobby.isHost)head.appendChild(actions(button('Edit',function(){editing=true;loadLibrary();render();},'compact')));
+    head.appendChild(text);if(lobby.isHost)head.appendChild(add(node('div','mp-host-tools'),node('span','mp-host-label','Host controls'),actions(button('Edit',function(){editing=true;loadLibrary();render();},'compact'))));
     p.appendChild(head);
+    if(s.scenario){var entry={name:s.scenario.name,scen:s.scenario,port:null};((maps&&maps.ports)||[]).forEach(function(m){if(m.scenario===entry.name)entry.port=m;});p.appendChild(mapThumb(entry,true));}
     var rows=node('div','mp-kv');p.appendChild(rows);
     function kv(k,v,note){var r=node('div','mp-kv-row');add(r,node('span','mp-k',k),node('span','mp-v',v));if(note)r.appendChild(node('span','mp-kv-note',note));rows.appendChild(r);return r;}
     kv('Mode',mode(s.mode).label);
@@ -1320,7 +1324,7 @@
     var mode=lobby&&lobby.settings&&lobby.settings.mode,own=null,list=(library&&library.scenarios)||[];
     for(var i=0;i<list.length;i++)if(list[i].name===name){own=list[i].modes&&list[i].modes[mode];break;}
     var e=lobby&&lobby.eligibility,r=e&&e[name],v=own||r;
-    if(!v)return {ok:true,reason:null,players:r&&r.players?safe(r.players,''):null};
+    if(!v)return {ok:mode!=='cs',reason:mode==='cs'?'CS map required':null,players:r&&r.players?safe(r.players,''):null};
     return {ok:v.ok!==false,reason:v.ok===false?safe(v.reason,'Doesn’t fit this mode'):null,players:r&&r.players?safe(r.players,''):null};
   }
   function mapEntries(){
@@ -1370,12 +1374,12 @@
       if(gl.length>1)bar.appendChild(segmented(gl,mapSel.game,function(id){mapSel.game=id;mapSel.focus=0;filters();fill();},false,'game'));
       var fit=node('button','mp-ms-fit'+(mapSel.fits?' on':''));fit.type='button';fit.setAttribute('role','switch');fit.setAttribute('aria-checked',String(mapSel.fits));
       add(fit,node('span','mp-ms-box'),node('span','','Fits '+modeName));fit.onclick=function(){mapSel.fits=!mapSel.fits;mapSel.focus=0;filters();fill();};
-      bar.appendChild(fit);
+      if(s.mode==='cs'){fit.disabled=true;fit.setAttribute('aria-checked','true');fit.className='mp-ms-fit on';}bar.appendChild(fit);
     }
     function matches(x,q){
       if(mapSel.source!=='all'&&!(mapSel.source==='ports'?!!x.port:mapSel.source==='workshop'?!!(x.port&&x.port.workshop):!x.port))return false;
       if(mapSel.game!=='all'&&!(x.port&&x.port.game===mapSel.game))return false;
-      if(mapSel.fits&&!mapFit(lobby,x.name).ok)return false;
+      if((s.mode==='cs'||mapSel.fits)&&!mapFit(lobby,x.name).ok)return false;
       if(!q)return true;
       // Searched by its own words: the AimMod port prefix would match every port for "aim".
       var hay=(String(x.name).replace(/^AimMod - /,'')+' '+mapTitle(x)+' '+(x.port?gameLabel(x.port.game)+' '+(x.port.variant||''):'')+' '+(x.scen?String(x.scen.map).replace(/^aimmod_/i,''):'')).toLowerCase();
@@ -1417,7 +1421,7 @@
       section(q?'Results':'All maps',all,q?60:48);
       if(mapSel.fits)hidden=all.filter(function(x){return !mapFit(lobby,x.name).ok;}).length;
       if(!visible.length)gridBox.appendChild(add(node('div','mp-ms-empty'),node('strong','','Nothing matches'),node('span','',q?'Try a shorter search or another filter.':'No maps in this filter yet.')));
-      if(hidden)gridBox.appendChild(add(node('div','mp-ms-hidden'),node('span','',hidden+(hidden===1?' map doesn’t':' maps don’t')+' fit '+modeName+'. '),actions(button('Show them',function(){mapSel.fits=false;filters();fill();},'compact quiet'))));
+      if(hidden)gridBox.appendChild(add(node('div','mp-ms-hidden'),node('span','',hidden+(hidden===1?' map doesn’t':' maps don’t')+' fit '+modeName+'. '),s.mode==='cs'?null:actions(button('Show them',function(){mapSel.fits=false;filters();fill();},'compact quiet'))));
       if(mapSel.key){for(var i=0;i<visible.length;i++)if(visible[i].name===mapSel.key){mapSel.focus=i;break;}}
       if(mapSel.focus>=visible.length)mapSel.focus=Math.max(0,visible.length-1);
       showDetails(visible[mapSel.focus]||null);
@@ -1647,7 +1651,7 @@
     if(match.rematchDeadline)countNodes.push({node:closes,at:match.rematchDeadline,format:function(ms){return votes+' of '+needed+' want a rematch · starts in '+seconds(ms)+' s with whoever confirmed.';}});
     page.appendChild(hero);
     var row=node('div','mp-row');page.appendChild(row);var main=node('div','mp-col mp-main'),side=node('div','mp-col mp-side');row.appendChild(main);row.appendChild(side);
-    var st=node('div','panel');var sh=node('div','panel-head');var shText=node('div','head-text');add(shText,node('h2','','Final standings'),node('p','','KovaaK’s leaderboards are never changed.'));sh.appendChild(shText);st.appendChild(sh);var sb=node('div','panel-body');sb.appendChild(standingsTable(match));st.appendChild(sb);main.appendChild(st);
+    var st=node('div','panel');var sh=node('div','panel-head');var shText=node('div','head-text');add(shText,node('h2','','Final standings'));sh.appendChild(shText);st.appendChild(sh);var sb=node('div','panel-body');sb.appendChild(standingsTable(match));st.appendChild(sb);main.appendChild(st);
     var rounds=node('div','panel');var rh=node('div','panel-head');add(rh,node('h2','','Rounds'));rounds.appendChild(rh);var list=node('div','mp-list');
     match.rounds.forEach(function(r){var best=r.results[0];var line=node('div','mp-round-line');
       add(line,node('span','mp-round-no','R'+r.round),avatar(r.winnerId?nameOf(r.winnerId):best?best.name:'?',true,pic(r.winnerId||best&&best.memberId)),node('span','mp-round-win',r.winnerId?nameOf(r.winnerId):practice&&best?safe(best.name)+' (best run)':'Draw'),node('span','mp-round-score',best&&best.score!==null?F.number(best.score,0):'—'));list.appendChild(line);});

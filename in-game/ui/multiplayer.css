@@ -458,3 +458,99 @@
 .mp-ms-dbody .actions{margin-top:12px}
 @media(max-width:1500px){.mp-ms-cell{width:33.333%}.mp-ms-details{width:300px}}
 @media(max-height:760px){.mp-ms-info{padding:6px 8px 7px}}
+
+/* Play workspace: mode selection, match briefing and social rail. */
+#multiplayer .mp-play-home{display:flex;align-items:flex-start;margin-bottom:16px}
+#multiplayer .mp-play-main{flex:1;min-width:0;margin:0 16px 0 0;padding:20px}
+#multiplayer .mp-play-heading{display:flex;align-items:center;margin-bottom:16px}
+#multiplayer .mp-play-heading>div:first-child{flex:1;min-width:0}
+#multiplayer .mp-play-heading h2{font-size:26px;line-height:32px;margin:3px 0 0}
+#multiplayer .mp-play-heading .actions{margin:0 0 0 12px}
+#multiplayer .mp-play-selection{display:flex;align-items:flex-start}
+#multiplayer .mp-play-tiles{width:56%;padding-right:18px;min-width:0}
+#multiplayer .mp-play-detail{width:44%;padding:16px;background:#101c17;border:1px solid #2c6b52;border-top:3px solid #27e4a1;border-radius:8px;min-width:0}
+#multiplayer .mp-play-detail>.actions{margin:0 0 8px}
+#multiplayer .mp-play-detail>.actions>.button{width:100%;margin:0}
+#multiplayer .mp-play-social{width:28%;max-width:360px;min-width:240px;flex-shrink:0}
+#multiplayer .mp-join-card{padding:16px;margin-bottom:12px}
+#multiplayer .mp-join-card h3{font-size:15px;margin-bottom:12px}
+#multiplayer .mp-play-social .mp-friends{margin-bottom:0}
+#multiplayer .mp-play-social .mp-list{max-height:340px;overflow-y:auto}
+#multiplayer .mp-play-social .mp-friend{flex-wrap:wrap;padding:10px 14px}
+#multiplayer .mp-play-social .mp-friend-info{padding:0 8px}
+#multiplayer .mp-play-social .mp-friend>.mp-chip{margin-left:4px;font-size:10px;padding:0 5px}
+#multiplayer .mp-play-social .mp-friend>.actions{margin:6px 4px 0 0}
+#multiplayer .mp-play-tiles .mp-mode-group{margin:0 0 8px}
+#multiplayer .mp-play-tiles .mp-mode-group span{display:none}
+#multiplayer .mp-play-tiles .mp-mode-pick{margin:0 -4px 8px}
+#multiplayer .mp-play-tiles .mp-mode{width:50%;padding:0 4px 8px;position:relative;flex-direction:row;align-items:center}
+#multiplayer .mp-play-tiles .mp-mode span.mp-mode-pic{width:44px;flex-shrink:0;border:1px solid #30433a;border-right:0;border-radius:6px 0 0 6px;min-height:0}
+#multiplayer .mp-play-tiles .mp-mode-art{height:50px;background:#162b23}
+#multiplayer .mp-play-tiles .mp-mode-icon{width:32px;height:32px}
+#multiplayer .mp-play-tiles .mp-mode strong{display:flex;align-items:center;flex:1;min-width:0;height:52px;padding:6px 8px;font-size:12px;line-height:16px;border:1px solid #30433a;border-left:0;border-radius:0 6px 6px 0}
+#multiplayer .mp-play-tiles .mp-mode span.mp-mode-text{display:none}
+#multiplayer .mp-play-tiles .mp-mode.on strong,#multiplayer .mp-play-tiles .mp-mode.on span.mp-mode-pic{border-color:#27e4a1}
+#multiplayer .mp-play-detail .mp-mode-hero{display:block;border:0;background:none;margin:0 0 18px;overflow:visible}
+#multiplayer .mp-play-detail .mp-mode-hero .mp-mode-pic{width:100%;border:0}
+#multiplayer .mp-play-detail .mp-mode-art{height:96px;background:#123027;border-radius:6px}
+#multiplayer .mp-play-detail .mp-mode-icon{width:72px;height:72px}
+#multiplayer .mp-play-detail .mp-mode-hero-text{padding:14px 0 0}
+#multiplayer .mp-play-detail .mp-mode-hero-text strong{font-size:22px;margin:4px 0 8px}
+#multiplayer .mp-play-detail .mp-mode-detail{margin-top:12px}
+#multiplayer .mp-play-detail .mp-note{font-size:11px;line-height:16px}
+#multiplayer .mp-host-label{padding:10px 20px 0;color:#f0b45a;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1px}
+#multiplayer .mp-summary>.mp-ms-thumb{padding-top:32%;margin:0 14px 10px;border-radius:6px}
+#multiplayer .mp-summary .mp-kv{display:flex;flex-wrap:wrap;padding:8px 14px}
+#multiplayer .mp-summary .mp-kv-row{width:50%;display:block;min-height:56px;padding:8px;border:3px solid #101916;background:#16211d}
+#multiplayer .mp-summary .mp-k{width:auto;font-size:11px;margin-bottom:4px}
+#multiplayer .mp-summary .mp-v{white-space:normal;line-height:18px}
+#multiplayer .mp-bots{flex-wrap:wrap;border-top:1px solid #3f5a4d;padding-top:14px}
+#multiplayer .mp-bots>.mp-seg,#multiplayer .mp-bots>.actions{margin:6px 0 0 8px}
+#multiplayer .mp-team-row{flex-wrap:wrap;padding:8px}
+#multiplayer .mp-team-row .actions{margin-top:6px}
+#multiplayer .mp-start{border-left:3px solid #27e4a1;background:#123027}
+#multiplayer .mp-history-item{border-bottom:1px solid #30433a}
+#multiplayer .mp-final{border-top:3px solid #27e4a1;padding:24px}
+#multiplayer .mp-look-stage{width:42%}
+#multiplayer .mp-look-rail{width:108px}
+#multiplayer .mp-look-view{height:430px}
+#multiplayer .mp-look-stage>.actions{justify-content:center;margin:10px 0 0}
+#multiplayer .mp-look-foot .mp-look-others{flex-wrap:wrap}
+#multiplayer .mp-look-others-label{margin-bottom:6px}
+@media(min-height:1200px){#multiplayer .mp-look-view{height:620px}}
+@media(max-width:1350px){
+ #multiplayer .mp-play-main{padding:14px;margin-right:12px}
+ #multiplayer .mp-play-tiles{width:56%;padding-right:12px}
+ #multiplayer .mp-play-detail{width:44%;padding:12px}
+ #multiplayer .mp-play-social{width:25%;min-width:220px}
+ #multiplayer .mp-play-tiles .mp-mode strong{font-size:11px;padding:4px}
+ #multiplayer .mp-play-tiles .mp-mode span.mp-mode-pic{width:32px}
+ #multiplayer .mp-play-tiles .mp-mode-icon{width:26px;height:26px}
+ #multiplayer .mp-play-social .mp-friend>.mp-chip{display:none}
+ #multiplayer .mp-ms-cell{width:50%}
+ #multiplayer .mp-ms-details{width:260px}
+ #multiplayer .mp-look-cell{width:50%}
+}
+@media(max-height:760px){
+ #multiplayer .mp-play-heading{margin-bottom:10px}
+ #multiplayer .mp-play-heading h2{font-size:22px;line-height:26px}
+ #multiplayer .mp-play-detail .mp-mode-art{height:56px}
+ #multiplayer .mp-play-detail .mp-mode-icon{width:44px;height:44px}
+ #multiplayer .mp-play-detail .mp-mode-hero-text strong{font-size:18px}
+ #multiplayer .mp-play-detail .mp-mode-hero{margin-bottom:10px}
+ #multiplayer .mp-play-social .mp-list{max-height:250px}
+ #multiplayer .mp-look-view{height:290px}
+ #multiplayer .mp-look-thumb{height:68px}
+}
+@media(max-width:1050px){
+ #multiplayer .mp-play-home{flex-wrap:wrap}
+ #multiplayer .mp-play-main{width:100%;flex:auto;margin:0 0 12px}
+ #multiplayer .mp-play-social{width:100%;max-width:none;display:flex;min-width:0}
+ #multiplayer .mp-join-card{width:40%;margin:0 12px 0 0}
+ #multiplayer .mp-play-social .mp-friends{flex:1;min-width:0}
+}
+
+#multiplayer .mp-host-tools{display:flex;align-items:center}
+#multiplayer .mp-host-tools .mp-host-label{padding:0 10px 0 0}
+
+#multiplayer .mp-play-social .mp-friend-info{flex:1 1 140px}
