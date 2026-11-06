@@ -280,7 +280,8 @@ jobs:
             if ($LASTEXITCODE) { throw 'Could not read current channel feed.' }
             $previous = Get-Content "current-feed/aimmod-ingame-$env:CHANNEL.json" -Raw | ConvertFrom-Json
             if ((Compare-SemVer $env:VERSION $previous.version) -le 0) { throw 'Publication must advance the current channel version.' }
-            if ($previous.releaseCounter) { $counter = [long]$previous.releaseCounter + 1 }
+            # Feeds published before signing have no counter: start from 1.
+            if ($previous.PSObject.Properties['releaseCounter']) { $counter = [long]$previous.releaseCounter + 1 }
           }
           ./in-game/install/New-AimModInGameRelease.ps1 -Step Finish -Version $env:VERSION -Channel $env:CHANNEL `
             -Output out/release -NotesFile notes.md -SetupExe out/release/AimMod-Setup.exe `
