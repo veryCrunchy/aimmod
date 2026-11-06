@@ -42,7 +42,7 @@ sealed class SimulatedCrashException : Exception;
 // crash, recovered on the next run) restores exactly the previous state.
 sealed class PackageApplier(string stateRoot, Func<string, bool>? gameRunning = null, string? installation = null)
 {
-    readonly Func<string, bool> gameRunning = gameRunning ?? InstallLayout.GameRunning;
+    readonly Func<string, bool> gameRunning = gameRunning ?? InstallLayout.InstallBusy;
     string? boundInstallation = installation is null ? null : Path.GetFullPath(installation);
     string StateRoot => boundInstallation is null
         ? (RecoverySecurity.Elevated ? throw new InstallException("Elevated recovery requires a validated installation.") : stateRoot)

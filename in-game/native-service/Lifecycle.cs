@@ -265,7 +265,7 @@ sealed class Lifecycle : IAsyncDisposable
         var output = Arg(args, "--output") is { } o ? Path.GetFullPath(o) : DefaultOutput;
         var updatesRoot = Path.Combine(output, "updates");
         Directory.CreateDirectory(updatesRoot);
-        var running = gameRunningOverride ?? InstallLayout.GameRunning;
+        var running = gameRunningOverride ?? InstallLayout.InstallBusy;
         using var log = new Log(Path.Combine(updatesRoot, "install.log"));
         using var mutex = new Mutex(false, MutexName);
         bool owned;
