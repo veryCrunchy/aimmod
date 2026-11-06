@@ -1,0 +1,27 @@
+/* Shared primitives. Keep existing component names available to every page. */
+.text-title{font-size:24px;line-height:32px;font-weight:600;color:#eef5f1}
+.text-heading{font-size:18px;line-height:26px;font-weight:600;color:#eef5f1}
+.text-body{font-size:14px;line-height:22px;color:#eef5f1}
+.text-caption{font-size:12px;line-height:18px;color:#a7bab0}
+.text-muted{color:#a7bab0}.text-accent{color:#27e4a1}.text-warning{color:#f0b45a}.text-danger{color:#ffb3b3}
+.surface-canvas{background:#0b1110}.surface-panel{background:#151f1c}.surface-raised{background:#1d2b26}
+.pad-sm{padding:8px}.pad-md{padding:16px}.pad-lg{padding:24px}
+.stack-sm>*+*{margin-top:8px}.stack-md>*+*{margin-top:16px}.stack-lg>*+*{margin-top:24px}
+.button.secondary{background:#1d2b26;color:#eef5f1;border:1px solid #40594d}
+.button.ghost{background:transparent;color:#b9d0c4;border:1px solid transparent}
+.button.danger{background:#432626;color:#ffd0d0;border:1px solid #885353}
+.button.small{height:30px;line-height:28px;padding:0 10px;font-size:12px}
+.button.large{height:42px;line-height:40px;padding:0 18px;font-size:14px}
+.button:disabled{opacity:.5;cursor:default}
+button:focus,input:focus,select:focus,textarea:focus,a:focus,[tabindex]:focus{outline:2px solid #8bf5ce;outline-offset:2px}
+.card{background:#151f1c;border:1px solid #30433a;border-radius:8px;padding:20px}
+.card-header{display:flex;align-items:center;margin-bottom:16px}.card-header>h2{flex:1;margin:0;font-size:18px}
+.chip,.badge{display:block;flex-shrink:0;padding:3px 8px;border:1px solid #40594d;border-radius:12px;background:#1d2b26;color:#c4d8cd;font-size:12px;line-height:18px}
+.chip.success,.badge.success{background:#173b2f;color:#8bf5ce;border-color:#35765e}
+.chip.warning,.badge.warning{background:#3a2f17;color:#f5d393;border-color:#80642e}
+.state{padding:32px 24px;text-align:center;color:#a7bab0;font-size:14px;line-height:22px}
+.state h3{margin:0 0 8px;color:#eef5f1;font-size:18px}.state p{margin:0 0 16px}
+.state.error{background:#30241b;color:#f5d393}.state.loading{color:#b9d0c4}
+.input{height:36px;padding:0 12px;border:1px solid #40594d;border-radius:6px;background:#101916;color:#eef5f1;font-size:14px}
+.tabs{display:flex;border-bottom:1px solid #30433a}.tabs>button{padding:12px 16px;color:#a7bab0;border-bottom:2px solid transparent}.tabs>button.active,.tabs>button[aria-selected="true"]{color:#27e4a1;border-bottom-color:#27e4a1}
+.tooltip-wrap{position:relative}.tooltip{display:none;position:absolute;top:100%;left:0;z-index:40;width:220px;padding:8px 12px;border:1px solid #40594d;border-radius:6px;background:#1d2b26;color:#eef5f1;font-size:12px;line-height:18px}.tooltip-wrap:hover .tooltip,.tooltip-wrap:focus .tooltip,.tooltip-wrap:focus-within .tooltip{display:block}

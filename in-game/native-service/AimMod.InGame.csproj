@@ -20,6 +20,7 @@
     <EmbeddedResource Include="../ui/coaching.js" LogicalName="AimMod.CoachingScript" />
     <EmbeddedResource Include="../ui/coaching.css" LogicalName="AimMod.CoachingStyle" />
     <EmbeddedResource Include="../ui/workspace-theme.css" LogicalName="AimMod.WorkspaceTheme" />
+    <EmbeddedResource Include="../ui/shared-components.css" LogicalName="AimMod.SharedComponents" />
     <EmbeddedResource Include="../ui/mechanics.js" LogicalName="AimMod.MechanicsScript" />
     <EmbeddedResource Include="../ui/benchmarks.js" LogicalName="AimMod.BenchmarksScript" />
     <EmbeddedResource Include="../ui/benchmarks.css" LogicalName="AimMod.BenchmarksStyle" />
