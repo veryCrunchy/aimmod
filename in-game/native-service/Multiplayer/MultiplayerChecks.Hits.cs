@@ -27,6 +27,19 @@ static partial class MultiplayerChecks
         double Pitch(double z) => Math.Atan2(z - 164, 1000) * 180 / Math.PI;
         var at = t0 + 2000;
 
+        var walled = Arena(); bool? traceAnswer = null;
+        walled.TraceShot = (_, _, _, _) => traceAnswer;
+        Check(walled.Claim("a", Shot(at), at + 10, 40) == "pending" && walled.View().Events.Count == 0, "Damage waits for map trace");
+        traceAnswer = false; walled.ProcessPending(at + 30);
+        Check(walled.TakeVerdicts().Single().Reason == "wall" && walled.View().Events.Count == 0, "Blocked trace refuses damage");
+        var clear = Arena(); clear.TraceShot = (_, _, _, _) => traceAnswer;
+        traceAnswer = null; clear.Claim("a", Shot(at), at + 10, 40);
+        traceAnswer = true; clear.ProcessPending(at + 30);
+        Check(clear.TakeVerdicts().Single().Reason is null && clear.View().Events.Count > 0, "Clear trace releases held damage");
+        var timeout = Arena(); timeout.TraceShot = (_, _, _, _) => null;
+        timeout.Claim("a", Shot(at), at + 10, 40); timeout.ProcessPending(at + 600);
+        Check(timeout.TakeVerdicts().Single().Reason == "trace-timeout", "Missing trace fails closed");
+
         // Rewind: b strafes at 250 cm/s; a's game draws it 350 ms late (a remote bot's relay delay).
         static double Strafe(long t) => (t - t0) * 0.25;
         var drawnBack = Strafe(at - 350);
@@ -37,7 +50,8 @@ static partial class MultiplayerChecks
         // a's own game reports where it drew b (tagged rows): 350 ms behind b's track.
         var drawn = new List<TrackSeen>();
         for (long t = at - 1500; t < at; t += 33) drawn.Add(new TrackSeen(t, 7, 1000, Strafe(t - 350), 100, 45, 115, "b"));
-        measured.Track("a", new TrackBatch("m", 1, [], drawn));
+        measured.Track("a", new TrackBatch("m", 1, [], drawn.Select(v => v with { T = v.T + 20000 }).ToArray()), at);
+        measured.Track("a", new TrackBatch("m", 1, [], drawn), at);
         Check(measured.Claim("a", Shot(at, yaw: Yaw(drawnBack), ty: drawnBack), at + 40, 40) is null && measured.LastDetail!.StartsWith("drawn hull, 35", StringComparison.Ordinal),
             "With the shooter's drawn rows the host measures its view delay and rewinds b that far (favour the shooter)");
         Check(measured.Claim("a", Shot(at + 300, yaw: Yaw(Strafe(at - 400)), ty: Strafe(at - 400)), at + 340, 40) == "target-mismatch",
@@ -64,10 +78,10 @@ static partial class MultiplayerChecks
         var zones = Arena();
         Check(zones.Claim("a", Shot(at, pitch: Pitch(175)), at + 10, 40) is null && zones.View().Events[^1] is { Head: true, Amount: 40 }, "Above the zone line: a headshot, double damage");
         Check(zones.Claim("a", Shot(at + 150, pitch: Pitch(162)), at + 160, 40) is null && zones.View().Events[^1] is { Head: false, Amount: 20 }, "Below it: a body hit");
-        Check(zones.Claim("a", Shot(at + 300, pitch: Pitch(167), head: true), at + 310, 40) is null && zones.View().Events[^1].Head, "AimModCore's head flag holds within 4 cm of the line");
+        Check(zones.Claim("a", Shot(at + 300, pitch: Pitch(167), head: true), at + 310, 40) is null && !zones.View().Events[^1].Head, "Reported head flag cannot expand the head zone");
         var gameHead = Arena();
-        Check(gameHead.Claim("a", Shot(at, pitch: Pitch(140), gameHit: true, damage: 40), at + 10, 40) is null && gameHead.View().Events[^1] is { Head: true, Amount: 40 },
-            "The game's own headshot (its damage shows the multiplier) counts in the upper body");
+        Check(gameHead.Claim("a", Shot(at, pitch: Pitch(140), gameHit: true, damage: 40), at + 10, 40) is null && gameHead.View().Events[^1] is { Head: false, Amount: 20 },
+            "Reported damage cannot turn an upper body hit into a headshot");
         Check(gameHead.Claim("a", Shot(at + 150, pitch: Pitch(140), gameHit: true, damage: 20), at + 160, 40) is null && !gameHead.View().Events[^1].Head, "and its body damage stays a body hit");
 
         // A game hit just beside the drawn capsule (the visible mesh is wider): accepted; a ray-only one isn't.
@@ -177,7 +191,7 @@ static partial class MultiplayerChecks
         var service = new MultiplayerService(new OfflineTransport(), new ContentLibrary(game), control, () => new LocalRun(false, null, null, null, null, 0, 0, 0, null), () => [], () => null, output, simulation: true, () => now, autoTick: false, seed: 31);
         service.Act("create", J(new { mode = "deathmatch", scenario = "Synthetic A" }));
         service.Act("sim", J(new { op = "add" }));
-        void Run(int ms, Action? each = null) { for (var t = 0; t < ms; t += 100) { now += 100; each?.Invoke(); service.Tick(); } }
+        void Run(int ms, Action? each = null) { for (var t = 0; t < ms; t += 100) { now += 100; each?.Invoke(); AnswerShotTraces(output, now); service.Tick(); } }
         Run(12_000);
         Check(service.Act("start", default).Ok, "A deathmatch against one simulated player starts");
         string? Phase() => System.Text.Json.JsonSerializer.SerializeToElement(service.View(), Protocol.Json).GetProperty("lobby").GetProperty("match") is { ValueKind: System.Text.Json.JsonValueKind.Object } m ? m.GetProperty("phase").GetString() : null;
@@ -207,8 +221,8 @@ static partial class MultiplayerChecks
         var stats = service.HostClaimStats;
         var me = stats.TryGetValue(service.SelfId, out var mine) ? mine : default;
         Check(service.ShotStats is { Shots: 30, GameHits: 30, Claims: 30, Lost: 0 } && me.Claims == 30 && me.Pending == 0, "All 30 shots reach the host as claims and every one is decided");
-        Check(me.Accepted >= 5 && me.Accepted + me.Reasons.Values.Sum() == 30 && me.Reasons.Keys.All(k => k is "victim-dead" or "spawn-protected"),
-            "The game hits on the drawn stand-in land; the rest are refused only while it is down or protected: " + string.Join(", ", me.Reasons.Select(kv => kv.Key + " " + kv.Value)));
+        Check(me.Accepted >= 5 && me.Accepted + me.Reasons.Values.Sum() == 30 && me.Reasons.Keys.All(k => k is "victim-dead" or "spawn-protected" or "target-mismatch"),
+            "The game hits on the drawn stand-in land; the rest are refused while it is down, protected, or its respawn invalidates the delayed trace: " + string.Join(", ", me.Reasons.Select(kv => kv.Key + " " + kv.Value)));
         Check(acked == 30 && shots.Count == 0, "The service acknowledged every shot, so AimModCore's log is empty again");
     }
 

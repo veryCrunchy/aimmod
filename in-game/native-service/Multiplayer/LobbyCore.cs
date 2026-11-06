@@ -40,6 +40,7 @@ sealed class LobbyCore
         // Combat modes: the host's health, frags and respawns for the whole match.
         public CombatMatch? Combat; public long CombatEvents = -1;
         // CS: the round machine, economy and bomb (its CombatMatch validates the hits).
+        public MatchSnapshot? EndedCs;
         public CsMatch? Cs; public string? CsKey;
     }
     bool Combat => match is not null && LobbyModes.Shooting(match.Settings.Mode);
@@ -670,7 +671,7 @@ sealed class LobbyCore
         if (match is { Phase: MatchPhases.Live or MatchPhases.Countdown, Combat: { } combat } cm && batch.MatchId == cm.Id && batch.Round == cm.Round)
         {
             if (!cm.Players.Contains(from)) return LobbyResult.Fail("not-playing", "Not playing this match.");
-            combat.Track(from, batch);
+            combat.Track(from, batch, clock());
             // Claims that waited for this player's camera samples are decided now.
             if (cm.Phase == MatchPhases.Live && combat.PendingClaims > 0)
             {
@@ -689,6 +690,7 @@ sealed class LobbyCore
     // A hit the shooter's game registered. The host validates it and applies the damage; a claim
     // whose shooter track hasn't arrived yet waits for it (Code "pending"). Every decision is in
     // TakeClaimVerdicts, for the shooter's confirmation.
+    public Func<string, HitClaim, double[], double[], bool?>? TraceShot { get; set; }
     public LobbyResult Claim(string from, HitClaim claim)
     {
         LobbyResult Refuse(string code, string message)
@@ -699,6 +701,7 @@ sealed class LobbyCore
         }
         if (match is not { Phase: MatchPhases.Live, Combat: { } combat } m || claim.MatchId != m.Id || claim.Round != m.Round) return Refuse("stale", "Not the current match.");
         if (m.Cs is { Phase: not ("live" or "planted") } csm) return Refuse("round-phase", "No shooting between rounds (" + csm.Phase + ").");
+        combat.TraceShot = TraceShot;
         var refused = combat.Claim(from, claim, clock(), Find(from)?.Ping);
         UpdateCombat(m, combat);
         if (m.Cs is null && combat.Leader is not null) CloseRound();
@@ -1025,6 +1028,7 @@ sealed class LobbyCore
     MatchSnapshot? MatchView()
     {
         if (match is not { } m) return null;
+        if (m.EndedCs is { } ended) return ended;
         var s = m.Settings;
         return new MatchSnapshot(m.Id, m.Phase, s.Mode, s.Scenario?.Name ?? "", s.EffectiveTimeLimit, m.Round, s.TotalRounds,
             s.Mode == LobbyModes.Duel ? s.FirstTo : null, m.StartsAt, m.EndsAt, m.NextAt, m.Players.ToArray(),
@@ -1034,8 +1038,9 @@ sealed class LobbyCore
     }
 
     // A client that becomes host rebuilds the authority from the last snapshot it mirrored.
-    public static LobbyCore Restore(LobbySnapshot snapshot, string newHostId, Func<long> clock)
+    public static LobbyCore Restore(LobbySnapshot snapshot, string newHostId, Func<long> clock, long hostOffset = 0)
     {
+        snapshot = SnapshotClock.Rebase(snapshot, hostOffset);
         var self = snapshot.Members.FirstOrDefault(m => m.Id == newHostId) ?? throw new InvalidOperationException("New host is not a member.");
         var core = new LobbyCore(self.Id, self.Name, snapshot.Settings, clock, snapshot.Id, snapshot.Code) { Revision = snapshot.Revision + 1 };
         core.members.Clear(); core.chat.Clear();
@@ -1044,7 +1049,7 @@ sealed class LobbyCore
                 // Everyone else must reconnect to the new host, so they start as reconnecting.
                 Connection = m.Id == newHostId || m.Bot is not null ? Connections.Connected : Connections.Reconnecting, Link = m.Id == newHostId ? "local" : m.Link, Bot = BotSkills.Parse(m.Bot),
                 JoinedAt = m.JoinedAt, Simulated = m.Simulated, LostAt = m.Id == newHostId || m.Bot is not null ? null : clock(), Avatar = AvatarProfiles.Find(m.Avatar)?.Id ?? AvatarProfiles.Default, Version = m.Version, Away = m.Away, Cosmetics = (m.Cosmetics ?? []).Take(CosmeticsCatalog.MaxEquipped).ToArray(), Team = m.Team is 1 or 2 ? m.Team : 0 });
-        core.chat.AddRange(snapshot.Chat); core.chatId = snapshot.Chat.Count > 0 ? snapshot.Chat.Max(c => c.Id) : 0; core.readyCheck = snapshot.ReadyCheck;
+        core.chat.AddRange(snapshot.Chat); core.chatId = snapshot.Chat.Count > 0 ? snapshot.Chat.Max(c => c.Id) : 0; core.readyCheck = snapshot.ReadyCheck; core.autoStartAt = snapshot.AutoStartAt;
         foreach (var s in snapshot.Suggestions ?? []) core.suggestions.Add((s.Scenario, s.By, s.Votes.ToHashSet()));
         if (snapshot.Match is { } ms)
         {
@@ -1066,6 +1071,15 @@ sealed class LobbyCore
             // A tracking round in progress restarts its scoring on the new host (the old host's samples are gone); the short coverage marks it disputed.
             if (snapshot.Settings.Mode == LobbyModes.Tracking && ms.StartsAt is { } startsAt && ms.Phase is MatchPhases.Countdown or MatchPhases.Live && ms.Players.Count >= 2)
                 match.Tracking = new TrackingRound(ms.Players[0], ms.Players[1], startsAt, startsAt + (long)(snapshot.Settings.EffectiveTimeLimit * 1000), snapshot.Settings.RequireFire);
+            if (snapshot.Settings.Mode == LobbyModes.Cs)
+            {
+                // Public snapshots omit private economy and combat history, so retain the published result.
+                match.Phase = MatchPhases.Final; match.Over = true;
+                match.EndedCs = ms with { Phase = MatchPhases.Final, NextAt = null, RematchDeadline = null,
+                    Cs = ms.Cs is { } cs ? cs with { Phase = "final", Grenades = [], Bomb = cs.Bomb with { Planter = null, Defuser = null, ExplodesAt = null, PlantDoneAt = null, DefuseDoneAt = null } } : null };
+                var score = ms.Cs?.Score ?? [0, 0];
+                core.System($"The host left. The match ended at {score[0]}–{score[1]}.");
+            }
             core.match = match;
             // Over is not in the snapshot: between rounds, decide again so the last results end the match.
             if (ms.Phase == MatchPhases.Round) match.Over = core.Decided(match);
