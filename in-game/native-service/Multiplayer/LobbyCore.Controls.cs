@@ -10,6 +10,7 @@ sealed partial class LobbyCore
     string? controlMatch;
     readonly Dictionary<string, long> activity = [];
     readonly Dictionary<string, TrackSample> humanPose = [];
+    readonly Dictionary<string, long> humanTrackAt = [];
     readonly Dictionary<string, TrackSample> handbackAt = [];
     readonly Dictionary<string, int> afkRounds = [], afkCountedRound = [];
 
@@ -26,6 +27,9 @@ sealed partial class LobbyCore
     {
         if (match is not { Phase: MatchPhases.Live } m) return LobbyResult.Fail("not-now", "No match is running.");
         var now = clock();
+        while (member.ControlTimes.Count > 0 && now - member.ControlTimes.Peek() >= 5000) member.ControlTimes.Dequeue();
+        if (member.ControlTimes.Count >= 5) return LobbyResult.Fail("slow", "Slow down a little.");
+        member.ControlTimes.Enqueue(now);
         if (command is "pause" or "unpause")
         {
             if (!IsHost(member.Id)) return LobbyResult.Fail("not-host", "Only the host can pause.");
@@ -93,12 +97,15 @@ sealed partial class LobbyCore
     {
         // A spectator camera follows the replacement. Only the player's input can reclaim it.
         if (match?.Cs?.Controlled(id) == true) return false;
-        if (batch.Samples.LastOrDefault() is not { } pose || !double.IsFinite(pose.X + pose.Y + pose.Z)) return false;
+        var now = clock();
+        if (batch.Samples.LastOrDefault(s => s.T >= now - 1000 && s.T <= now + 250) is not { } pose || !double.IsFinite(pose.X + pose.Y + pose.Z)) return false;
+        if (humanTrackAt.TryGetValue(id, out var last) && pose.T <= last) return false;
         if (handbackAt.TryGetValue(id, out var anchor))
         {
             if (Math.Abs(pose.X - anchor.X) + Math.Abs(pose.Y - anchor.Y) > 200) return false;
             handbackAt.Remove(id); humanPose[id] = pose;
         }
+        humanTrackAt[id] = pose.T;
         if (!humanPose.TryGetValue(id, out var before)) humanPose[id] = pose;
         else if (Math.Abs(pose.X - before.X) + Math.Abs(pose.Y - before.Y) + Math.Abs(pose.Z - before.Z) > 6)
         { HumanActivity(id); humanPose[id] = pose; }
@@ -109,7 +116,7 @@ sealed partial class LobbyCore
     {
         if (controlMatch != match?.Id)
         {
-            controlMatch = match?.Id; matchVote = null; nextVoteAt = 0; activity.Clear(); humanPose.Clear(); handbackAt.Clear(); afkRounds.Clear(); afkCountedRound.Clear();
+            controlMatch = match?.Id; matchVote = null; nextVoteAt = 0; activity.Clear(); humanPose.Clear(); humanTrackAt.Clear(); handbackAt.Clear(); afkRounds.Clear(); afkCountedRound.Clear();
         }
         if (match is not { Phase: MatchPhases.Live } m)
         {

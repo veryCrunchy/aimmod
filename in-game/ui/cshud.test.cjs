@@ -183,3 +183,9 @@ test('match flow states label the HUD and explain returning control',()=>{
     s.hud.render(s.root,Object.assign({},base,{buyOpen:false},state),()=>{});assert.ok(s.text(s.root).includes(label));
   }
 });
+test('buy categories form six independent cells while ownership blocks repeat buys',()=>{
+  const s=setup(),calls=[];s.hud.render(s.root,base,(a,id)=>calls.push([a,id]));
+  const categories=s.walk(s.root).find(n=>n.className==='cs-buy-cols');assert.equal(categories.children.length,6);
+  const owned=s.walk(s.root).find(n=>n.className==='cs-item owned');owned.onclick();assert.deepEqual(calls,[]);
+  assert.ok(categories.children.every(n=>n.className==='cs-buy-group'));
+});

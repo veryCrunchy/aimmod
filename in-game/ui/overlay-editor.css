@@ -113,3 +113,6 @@
 .ove-theme.button,.ove-template.button{justify-content:flex-start;text-align:left;font-weight:500}
 .ove-template.button{height:88px;line-height:1.4;align-items:flex-start;flex-direction:column}
 .ove-swatch.button{padding:0;height:26px;border:2px solid #101916}.ove-swatch.button.on{border-color:#eef5f1}
+.ove-data-list { max-height: 280px; overflow: auto; }
+.ove-data-list button { display: block; text-align: left; margin-bottom: 4px; width: 100%; }
+.ove-center { overflow: auto; }

@@ -195,7 +195,7 @@ test('a port shows its 16:9 Workshop thumbnail when it has one',()=>{
   s.api.resize();
   assert.ok(cardOf(s,'Dust2').getElementsByTagName('img')[0].src.endsWith('/multiplayer?part=thumb&key=aaaaaaaaaaaa'),'the thumbnail wins over the top-down preview');
 });
-test('the library verdict per mode greys maps that cannot host CS',()=>{
+test('CS gallery only offers maps certified for the mode',()=>{
   const l=Object.assign(lobby(),{settings:Object.assign({},lobby().settings,{mode:'cs'})});
   const s=setup();s.api.enter(s.container);s.requests[0].finish(200,view({lobby:l,picks:{favourites:[],recent:[]}}));
   s.button('Edit').onclick();
@@ -206,7 +206,9 @@ test('the library verdict per mode greys maps that cannot host CS',()=>{
   s.requests.find(r=>r.url==='/private/multiplayer?part=maps').finish(200,{available:true,canInstall:true,canLoad:true,ports:[]});
   s.api.resize();
   assert.ok(!cardNames(s).includes('Synthetic Scenario')&&s.text().includes('1 map doesn’t fit'),'hidden by Fits CS');
-  s.button('Show them').onclick();assert.ok(s.text().includes('No CS map data'),'with the library reason');
+  assert.ok(!s.button('Show them'),'CS cannot reveal incompatible maps');
+  assert.ok(s.all().find(e=>/mp-ms-fit/.test(e.className)).disabled);
+  assert.ok(cardNames(s).some(n=>n.includes('Dust2')));
 });
 test('maps that do not fit the mode are hidden by default, or greyed with the reason',()=>{
   const s=openSelect({eligibility:{'AimMod - Aim Map (CSS) - CS Movement':{ok:false,reason:'Needs spawns for 6'},'Synthetic Scenario':{ok:false,reason:'No bomb sites'},'AimMod - Dust2 (CSGO) - CS Movement':{ok:true,players:'2 to 10 players'}}});

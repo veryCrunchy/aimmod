@@ -45,6 +45,7 @@ sealed partial class CsMatch
         var delta = Math.Max(0, now - pauseAt); pauseAt = now;
         PhaseEndsAt += delta; LiveAt += delta; explodesAt += delta;
         plantDoneAt += delta; defuseDoneAt += delta; TimeoutUntil += delta;
+        if (plantedBy is not null) { plantedAt += delta; plantRoundDeadline += delta; }
         dropperBlockedUntil += delta;
         for (var i = 0; i < drops.Count; i++) drops[i] = drops[i] with { AvailableAt = drops[i].AvailableAt + delta };
         foreach (var id in warmupRespawns.Keys.ToArray()) warmupRespawns[id] += delta;

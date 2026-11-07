@@ -70,3 +70,18 @@
 .replay-import-text{flex:1;min-width:0;margin-right:14px}.replay-import-text strong{display:block;font-size:14px;font-weight:600;color:#eef5f1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.replay-import-text span{display:block;margin-top:2px;font-size:12px;color:#a7bab0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .replay-import-state{display:block;flex-shrink:0;font-size:12px;color:#7f968a}
 .replay-toolbar>.button+.button{margin-left:8px}
+
+/* Replay library: compact rows, with one consistent action group. */
+.replay-library .replay-cards{display:flex;flex-direction:column;margin:0}
+.replay-library .replay-card{width:100%;padding:0 0 6px}
+.replay-library .replay-card-inner{flex-direction:row;align-items:center;border-radius:4px}
+.replay-library .replay-select{width:18px;height:18px;margin:0 12px;flex-shrink:0}
+.replay-library .replay-main{flex:1;min-width:0;padding:12px 8px}
+.replay-library .replay-title{font-size:14px}
+.replay-library .replay-stats{margin-top:8px}
+.replay-library .replay-stat{min-width:100px;margin-right:16px}
+.replay-library .replay-actions{border:0;padding:8px;flex-shrink:0}
+.replay-library .replay-actions .spacer{display:none}
+.replay-bulk{display:flex;align-items:center;flex-wrap:wrap;margin:0 0 12px}
+.replay-bulk>*{margin-right:8px;margin-bottom:4px}
+@media(max-width:1400px){.replay-library .replay-card-inner{flex-wrap:wrap}.replay-library .replay-actions{width:100%;justify-content:flex-end}.replay-library .replay-stat{min-width:76px;margin-right:8px}}

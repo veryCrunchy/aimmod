@@ -158,6 +158,7 @@ sealed class WorkspaceHost : IAsyncDisposable
         app.MapGet(prefix + "/coaching.js", () => Results.Stream(typeof(WorkspaceHost).Assembly.GetManifestResourceStream("AimMod.CoachingScript")!, "application/javascript"));
         app.MapGet(prefix + "/coaching.css", () => Results.Stream(typeof(WorkspaceHost).Assembly.GetManifestResourceStream("AimMod.CoachingStyle")!, "text/css"));
         app.MapGet(prefix + "/workspace-theme.css", () => Results.Stream(typeof(WorkspaceHost).Assembly.GetManifestResourceStream("AimMod.WorkspaceTheme")!, "text/css"));
+        app.MapGet(prefix + "/shared-components.css", () => Results.Stream(typeof(WorkspaceHost).Assembly.GetManifestResourceStream("AimMod.SharedComponents")!, "text/css"));
         app.MapGet(prefix + "/mechanics.js", () => Results.Stream(typeof(WorkspaceHost).Assembly.GetManifestResourceStream("AimMod.MechanicsScript")!, "application/javascript"));
         app.MapGet(prefix + "/benchmarks.js", () => Results.Stream(typeof(WorkspaceHost).Assembly.GetManifestResourceStream("AimMod.BenchmarksScript")!, "application/javascript"));
         app.MapGet(prefix + "/benchmarks.css", () => Results.Stream(typeof(WorkspaceHost).Assembly.GetManifestResourceStream("AimMod.BenchmarksStyle")!, "text/css"));

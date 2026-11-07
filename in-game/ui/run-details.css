@@ -36,3 +36,8 @@
 @media(max-width:1250px){.run-kpis>.metric{flex-basis:28%}}
 @media(max-width:1000px){.run-cell{padding:6px 8px;font-size:12px}.run-moments>.run-moment{width:98%}}
 .run-links{margin-top:10px}.run-links>.button{margin-bottom:0}
+#run-details .run-header{padding:20px;background:#151f1c;border:1px solid #30433a;border-radius:8px;align-items:flex-start}
+#run-details .run-identity h2{white-space:normal;word-wrap:break-word;font-size:24px;line-height:32px}
+#run-details .run-score{padding-left:20px;border-left:1px solid #30433a}#run-details .run-kpis{flex-wrap:wrap}
+#run-details .run-panel{border-color:#30433a;margin-bottom:20px}#run-details .run-table{overflow-x:auto}#run-details .run-row{min-width:600px}
+@media(max-width:1000px){#run-details .run-header{display:block}#run-details .run-score{padding:12px 0 0;border:0;text-align:left}#run-details .run-kpis>.metric{min-width:150px}}

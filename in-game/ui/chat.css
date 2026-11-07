@@ -30,3 +30,8 @@
 .chat-radio-key{display:block;width:18px;margin-right:8px;color:#f0b45a;font-weight:700}
 .chat-radio-foot{margin-top:6px;font-size:11px;color:#9fb4aa}
 @media(min-height:1300px){#chat-hud{transform:scale(1.33);transform-origin:0 100%}#chat-hud.cs{bottom:300px}}
+
+.chat-line{padding:4px 8px;line-height:20px;border-radius:3px}
+.chat-radio{border-radius:4px}.chat-radio-item{height:32px;border-radius:3px}
+.chat-radio-item:focus{border-color:#8bf5ce}.chat-hint,.chat-radio-foot{font-size:12px}
+@media(max-height:760px){#chat-hud{width:440px}.chat-line{max-width:440px;font-size:13px;line-height:18px}.chat-radio-item{height:28px}}

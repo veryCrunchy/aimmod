@@ -44,11 +44,29 @@ sealed class NativeReplayPlayback : IAsyncDisposable
     internal bool KeyboardCommand(long session, string action, double? value = null) {
         lock (gate) return session != 0 && session == keyboardSession && visible && replay is not null && Command(action, value);
     }
+    internal static string KillTimeline(NativeReplay value)
+    {
+        var duration = value.Frames[^1].T;
+        var text = new StringBuilder("AIMMOD_KILLS_1\t").Append(value.Id).Append('\t').Append(duration.ToString("R", CultureInfo.InvariantCulture)).Append('\n');
+        double? previous = null;
+        var bins = new SortedSet<int>();
+        foreach (var frame in value.Frames) {
+            if (frame.Stats?.Kills is not double kills || !double.IsFinite(kills) || kills < 0) { previous = null; continue; }
+            if (previous is double before && kills > before && duration > 0)
+                bins.Add(Math.Clamp((int)Math.Round(frame.T / duration * 248), 0, 248));
+            previous = kills;
+        }
+        foreach (var bin in bins) text.Append(bin).Append('\n');
+        return text.ToString();
+    }
     public void Load(NativeReplay value, NativeReplay? compareWith = null)
     {
         if (value.Frames.Count < 2) throw new ArgumentException("Replay has no frames.");
         if (compareWith is not null && (compareWith.Frames.Count < 2 || compareWith.Scenario != value.Scenario)) throw new ArgumentException("Comparison replay must be of the same scenario.");
-        lock (gate) { keyboardSession++; keyboardRevision = revision + 1; replay = value; compare = compareWith; live = null; position = 0; speed = 1; playing = false; visible = true; anchor = Stopwatch.GetTimestamp(); revision++; }
+        lock (gate) {
+            try { AtomicFile.WriteText(Path.Combine(Path.GetDirectoryName(path)!, "replay-kills.tsv"), KillTimeline(value)); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+            keyboardSession++; keyboardRevision = revision + 1; replay = value; compare = compareWith; live = null; position = 0; speed = 1; playing = false; visible = true; anchor = Stopwatch.GetTimestamp(); revision++; }
     }
     /// <summary>Switches an active live view to another stream of the same world; false if not spectating it.</summary>
     public bool FollowStream(string scenario, string mapName, string? stream)

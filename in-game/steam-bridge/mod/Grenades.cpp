@@ -117,7 +117,7 @@ namespace aimmod
             if (m_pawns.size() < 64) m_pawns.emplace_back(pawn);
     }
 
-    std::optional<g::Hit> GrenadeSim::Trace(UObject* context, const g::Vec& a, const g::Vec& b)
+    std::optional<g::Hit> GrenadeSim::Trace(UObject* context, const g::Vec& a, const g::Vec& b, bool occlusion)
     {
         // No pawn stops a grenade or a line of sight: every player's and bot's body is left out, its
         // hitbox components too (they block line traces under their own object type).
@@ -128,7 +128,7 @@ namespace aimmod
         g::Hit result{};
         int vectors = 0;
         ++m_traces;
-        m_trace.Call(
+        const bool called = m_trace.Call(
             m_kismet,
             [&](std::uint8_t* value, const Param& p) {
                 if (p.worldContext) std::memcpy(value, &context, sizeof(context));
@@ -151,6 +151,7 @@ namespace aimmod
                     }
                 }
             });
+        if (occlusion && g::Occluded(called, hit, inside)) return g::Hit{a, {0, 0, 1}};
         if (!hit || inside) return std::nullopt;
         return result;
     }
@@ -203,7 +204,7 @@ namespace aimmod
         for (const auto& l : requests->los)
         {
             tags.insert(l.tag);
-            if (!m_los.contains(l.tag) && budget > 0) { --budget; m_los[l.tag] = !Trace(context, l.from, l.to).has_value(); }
+            if (!m_los.contains(l.tag) && budget > 0) { --budget; m_los[l.tag] = !Trace(context, l.from, l.to, true).has_value(); }
         }
         std::erase_if(m_los, [&](const auto& kv) { return !tags.contains(kv.first); });
         std::set<int> floorTags;

@@ -326,7 +326,7 @@ function M.attach(menu,enter,leave)
                 -- Window closes only after the scene has verified map and score isolation.
                 scene.frame(frame);active=true;currentId=frame.meta.id;currentMeta=frame.meta;publishProxies()
                 if onEnter then onEnter()end
-                hud=HUD.create(owner,send)
+                hud=HUD.create(owner,send,frame.meta.id)
                 effects=Effects.create(owner)
                 healthBars=HealthBars.create(owner,scene)
                 ack('ready','validated',frame.revision)

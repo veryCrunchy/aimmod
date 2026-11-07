@@ -15,7 +15,7 @@ namespace AimMod.InGame;
 sealed class OverlayScenes
 {
     public const int Limit = 256 * 1024, MaxScenes = 12, MaxWidgets = 32, MaxOptions = 24, MaxPeripherals = 12;
-    internal static readonly string[] Types = ["live-stats", "pb-pace", "session", "session-graph", "scenario", "rank", "settings", "peripherals", "crosshair", "mouse-path", "input", "recent", "standings", "bracket", "profile", "now-playing", "clock", "text", "image"];
+    internal static readonly string[] Types = ["live-stats", "pb-pace", "session", "session-graph", "scenario", "rank", "settings", "peripherals", "crosshair", "mouse-path", "input", "recent", "standings", "bracket", "profile", "now-playing", "clock", "text", "image", "stat", "sparkline", "line", "bar", "gauge", "progress", "table", "timer", "template", "html"];
     internal static readonly string[] Themes = ["mint", "minimal", "contrast", "midnight", "ember"];
     static readonly Dictionary<string, (string Accent, string Text, string Surface, double Alpha, int Radius, bool Borders)> ThemeDefaults = new()
     {
@@ -99,12 +99,13 @@ sealed class OverlayScenes
                 if (opts.Count >= MaxOptions || !OptionKey.IsMatch(key) || value is not JsonValue v) continue;
                 if (v.TryGetValue<bool>(out var b)) opts[key] = b;
                 else if (v.TryGetValue<double>(out var x) && double.IsFinite(x) && Math.Abs(x) < 1e7) opts[key] = Round3(x);
-                else if (v.TryGetValue<string>(out _)) opts[key] = Text(v, key == "url" ? 512 : 160);
+                else if (v.TryGetValue<string>(out _)) opts[key] = Text(v, key == "url" ? 512 : key == "template" ? 4096 : 160);
             }
         var layout = Str(o["layout"]); var background = Str(o["background"]) == "none" ? "none" : Color(o["background"]);
         return new JsonObject
         {
-            ["id"] = id, ["type"] = type,
+            ["id"] = id, ["type"] = type, ["locked"] = Bool(o["locked"], false),
+            ["family"] = Str(o["family"]) == "monospace" ? "monospace" : "sans-serif", ["weight"] = Num(o["weight"], 100, 900, 400), ["textColor"] = Color(o["textColor"]), ["padding"] = Num(o["padding"], -1, 80, -1), ["radius"] = Num(o["radius"], -1, 80, -1), ["shadow"] = Bool(o["shadow"], false),
             ["x"] = Math.Round(Num(o["x"], 0, 1900, 0)), ["y"] = Math.Round(Num(o["y"], 0, 1060, 0)),
             ["w"] = Math.Round(Num(o["w"], 60, 1920, 400)), ["h"] = Math.Round(Num(o["h"], 40, 1080, 120)),
             ["visible"] = Bool(o["visible"], true), ["opacity"] = Round3(Num(o["opacity"], 0.1, 1, 1)), ["font"] = Round3(Num(o["font"], 0.6, 2.5, 1)),
@@ -131,7 +132,7 @@ sealed class OverlayScenes
         var name = Text(o["name"], 48).Trim(); var widgets = new JsonArray(); var seen = new HashSet<string>(StringComparer.Ordinal);
         if (o["widgets"] is JsonArray list)
             foreach (var w in list) { if (widgets.Count >= MaxWidgets) break; if (CleanWidget(w) is { } c && seen.Add((string)c["id"]!)) widgets.Add(c); }
-        return new JsonObject { ["id"] = id, ["name"] = name.Length > 0 ? name : "Scene", ["theme"] = CleanTheme(o["theme"]), ["widgets"] = widgets };
+        return new JsonObject { ["id"] = id, ["name"] = name.Length > 0 ? name : "Scene", ["auto"] = Str(o["auto"]) is "menu" or "scenario" or "match" or "replay" ? Str(o["auto"]) : "", ["theme"] = CleanTheme(o["theme"]), ["widgets"] = widgets };
     }
     /// <summary>The canonical store, or null when the input is not a store with at least one scene.</summary>
     internal static JsonObject? Clean(JsonNode? raw)

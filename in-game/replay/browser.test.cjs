@@ -140,3 +140,33 @@ test('run analysis can open one replay once the library loads',()=>{
   assert.equal(t.native.length,0);assert.ok(t.all().some(n=>n.textContent==='That replay is no longer in your library.'));
   const u=setup();u.browser.openWhenLoaded('../private');u.browser.enter();u.requests[0].finish(200,[row]);assert.equal(u.native.length,0);
 });
+
+test('batch delete confirms, runs sequentially and preserves failed selections',()=>{
+  const s=setup();s.browser.enter();s.requests[0].finish(200,[row,{...row,id:'second'}]);
+  s.all().find(n=>n.textContent==='Select visible').onclick();
+  s.all().find(n=>n.textContent==='Delete selected').onclick();assert.equal(s.requests.length,1);
+  s.all().find(n=>n.textContent==='Confirm delete').onclick();assert.equal(s.requests.length,2);
+  s.requests[1].finish(200,{});assert.equal(s.requests.length,3);
+  s.requests[2].finish(503,{});
+  assert.ok(s.all().some(n=>n.textContent==='1 selected'));
+  assert.ok(s.all().some(n=>/Stopped after 1 of 2/.test(n.textContent)));
+  assert.equal(s.all().filter(n=>n.className==='replay-card').length,1);
+});
+test('batch export uses each selected id once and clears selection after success',()=>{
+  const s=setup();s.browser.enter();s.requests[0].finish(200,[row,{...row,id:'second'}]);
+  s.all().find(n=>n.textContent==='Select visible').onclick();s.all().find(n=>n.textContent==='Export selected').onclick();
+  assert.deepEqual(JSON.parse(s.requests[1].body),{action:'export',id:'synthetic'});
+  s.requests[1].finish(200,{});assert.deepEqual(JSON.parse(s.requests[2].body),{action:'export',id:'second'});
+  s.requests[2].finish(200,{});assert.ok(s.all().some(n=>n.textContent==='0 selected'));
+  assert.equal(s.all().filter(n=>n.className==='replay-card').length,2);
+});
+test('score sorting keeps missing scores last and preserves a genuine zero',()=>{
+  const s=setup();s.browser.enter();s.requests[0].finish(200,[row,{...row,id:'zero',scenario:'Zero',score:0},{...row,id:'best',scenario:'Best',score:100,isPersonalBest:true}]);
+  s.all().find(n=>n.textContent==='Sort: date').onclick();
+  assert.deepEqual(s.all().filter(n=>n.className==='replay-title').map(n=>n.textContent),['Best','Zero','Synthetic run']);
+  assert.ok(s.all().some(n=>n.textContent==='PB'));assert.ok(s.all().some(n=>n.textContent==='Unavailable'));
+});
+test('clearing an empty clips filter restores ordinary replays',()=>{
+  const s=setup();s.browser.enter();s.requests[0].finish(200,[row]);s.all().find(n=>n.textContent==='Clips').onclick();
+  s.all().find(n=>n.textContent==='Clear filters').onclick();assert.ok(s.all().some(n=>n.textContent===row.scenario));
+});

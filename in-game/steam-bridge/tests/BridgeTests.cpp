@@ -1584,6 +1584,7 @@ int main()
         Check(wall && inside && ordered && exact && keys.back().motion == Rest, "A grenade bounces off a wall, stays in the room and each key follows from the last");
         const auto lost = Simulate({0, 0, 100}, {100, 0, 0}, [](const Vec&, const Vec&) { return std::optional<Hit>{}; });
         Check(lost.back().motion == Rest && std::fabs(lost.back().t - MaxSeconds * 1000) < 20, "With nothing to hit, a path ends after 8 s");
+        Check(Occluded(false, false, false) && Occluded(true, false, true) && Occluded(true, true, false) && !Occluded(true, false, false), "Shot sight fails closed and blocks geometry including an embedded origin");
         const auto r = ParseSim("AIMMOD_GRENADESIM_1\t7\nthrow\t3\the\t1\t2\t3\t10\t0\t-5\nthrow\tx\the\t1\t2\t3\t4\t5\t6\nlos\t9\t0\t0\t0\t5\t5\t5\nnoise\n");
         Check(r && r->sequence == 7 && r->throws.size() == 1 && r->throws[0].id == 3 && r->throws[0].kind == "he" && r->throws[0].velocity[2] == -5 && r->los.size() == 1 && r->los[0].tag == 9 &&
                   r->los[0].to[1] == 5 && !ParseSim("AIMMOD_BOTS_1\t1\n"),

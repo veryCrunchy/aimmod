@@ -4,6 +4,7 @@ static partial class MultiplayerChecks
 {
     static void MatchControlChecks()
     {
+        ControlPacketChecks();
         var heldKeys = new HashSet<int> { 0x70 };
         var reader = new CsKeyReader { ReadKey = heldKeys.Contains };
         Check(reader.PressedCode(0x70) && !reader.PressedCode(0x70) && !reader.Pressed('P'), "F1 is a function key with one edge, not the letter P");
@@ -151,7 +152,10 @@ static partial class MultiplayerChecks
         var idle = Setup(); var m = idle.Core.Snapshot().Match!;
         void Track(string id, double x, bool automated = false) => idle.Core.Track(id, new TrackBatch(m.Id, m.Round, [new TrackSample(idle.Clock(), x, 0, 164, 0, 0)], []), automated);
         idle.Advance(CsRules.FreezeMs); idle.Core.Tick(); Track("host", 0);
-        idle.Advance(59_999); idle.Core.Tick();
+        idle.Advance(59_999);
+        idle.Core.Track("host", new TrackBatch(m.Id, m.Round, [new TrackSample(idle.Clock() + 30_000, 1000, 0, 164, 0, 0)], []));
+        Check(idle.Core.CombatPositions()["host"].At.X == 0, "A future human pose cannot move the slot or reset inactivity");
+        idle.Core.Tick();
         Check(!idle.Core.Snapshot().Match!.Cs!.Players[0].Afk, "AFK does not start before sixty live seconds");
         idle.Advance(1); idle.Core.Tick();
         Check(idle.Core.Snapshot().Match!.Cs!.Players[0].Afk, "Sixty live seconds without input starts bot takeover");
