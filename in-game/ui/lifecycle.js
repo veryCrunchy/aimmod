@@ -3,6 +3,7 @@
   // Install lifecycle in the workspace: header inbox, the
   // repair prompt, and the Updates section in Settings. All changes to game
   // files happen in the service after KovaaK's closes; this only asks for them.
+  var shown=true,recheck=null,renderSignature=null,loadEpoch=0;
   var state=null,timer=null,options={},settingsBox=null,pending=null,inboxOpen=false,inboxSignature=null,busy=false,message='';
   var doc=root.document;
   function node(tag,css,text){var el=doc.createElement(tag);el.className=css||'';if(text!==undefined)el.textContent=text;return el;}
@@ -55,7 +56,7 @@
     if(message&&message!=='Saved.'){if(line)line.appendChild(node('span','',message));else add(message);}
   }
   function renderInbox(){
-    var box=options.inbox;if(!box)return;var signature=JSON.stringify(state?[state.last,state.update.state,state.update.version,state.update.applyOnClose,state.game,state.dismissedNotices]:null);if(signature===inboxSignature)return;inboxSignature=signature;clear(box);
+    var box=options.inbox;if(!box)return;var signature=JSON.stringify(state?[state.last,state.update.state,state.update.version,state.update.applyOnClose,state.game,state.dismissedNotices,busy,message]:null);if(signature===inboxSignature)return;inboxSignature=signature;clear(box);
     box.appendChild(node('h2','inbox-title','Notifications'));
     var count=0;
     function item(key,text,details){
@@ -97,7 +98,7 @@
       ['stable','beta'].forEach(function(name){var b=button(name==='stable'?'Stable':'Beta',s.settings.channel===name,function(){if(s.settings.channel!==name)save({channel:name});});b.setAttribute('role','radio');b.setAttribute('aria-checked',String(s.settings.channel===name));channels.appendChild(b);});
       row('Update channel','Beta gets new features first and may be less stable.',channels);
       var actions=node('div','lifecycle-actions');
-      actions.appendChild(button(u.state==='checking'?'Checking…':'Check for updates',false,function(){message='';act('check',function(){root.setTimeout(load,4000);});}));
+      actions.appendChild(button(u.state==='checking'?'Checking…':'Check for updates',false,function(){message='';act('check',function(){if(shown)recheck=root.setTimeout(load,4000);});}));
       if(u.state==='ready'&&!u.applyOnClose)actions.appendChild(button('Install when I close KovaaK’s',true,function(){act('install');}));
       panel.appendChild(actions);
       if(u.state==='ready'&&u.notes){panel.appendChild(node('h3','lifecycle-heading','What’s new in '+u.version));panel.appendChild(node('p','lifecycle-notes',plain(u.notes)));}
@@ -108,10 +109,10 @@
     if(s.rollback.available)row('Previous version','AimMod '+s.rollback.version+' is kept. To go back, close KovaaK’s and run Repair-AimMod.cmd -Rollback.',null);
     if(s.game.steamBuildId)row('Game build',s.game.tested?'KovaaK’s '+s.game.testedVersion+' (Steam build '+s.game.steamBuildId+'), tested with this AimMod release.':(s.game.warning||'Steam build '+s.game.steamBuildId+'.'),null);
   }
-  function render(){renderBanner();renderInbox();renderSettings();}
+  function render(){var signature=JSON.stringify([state,busy,message]);if(signature===renderSignature)return;renderSignature=signature;renderBanner();renderInbox();renderSettings();}
   function load(){
-    if(pending)return;
-    pending=send('GET','/lifecycle',null,function(ok,data){pending=null;if(!ok)return;state=data;render();});
+    if(!shown||pending)return;
+    var ticket=++loadEpoch;pending=send('GET','/lifecycle',null,function(ok,data){if(ticket!==loadEpoch)return;pending=null;if(!ok)return;state=data;render();});
   }
   function style(){
     if(doc.getElementById('lifecycle-style'))return;var css=node('style','');css.id='lifecycle-style';
@@ -121,7 +122,7 @@
   }
   root.AimModLifecycle={
     start:function(opts){options=opts||{};if(options.trigger){options.trigger.onclick=function(){openInbox(!inboxOpen);};}if(options.inbox){options.inbox.onkeydown=function(e){if(e.key==='Escape'||e.keyCode===27){openInbox(false);if(options.trigger)options.trigger.focus();e.stopPropagation();}};}style();renderInbox();load();if(timer)root.clearInterval(timer);timer=root.setInterval(load,30000);},
-    visible:function(on){if(timer){root.clearInterval(timer);timer=null;}if(on){load();timer=root.setInterval(load,30000);}else {openInbox(false);if(pending){pending.abort();pending=null;}}},
+    visible:function(on){shown=!!on;if(recheck){root.clearTimeout(recheck);recheck=null;}if(timer){root.clearInterval(timer);timer=null;}if(on){load();timer=root.setInterval(load,30000);}else {loadEpoch++;openInbox(false);if(pending){pending.abort();pending=null;}}},
     renderSettings:function(container){settingsBox=container;message='';renderSettings();load();},
     leaveSettings:function(){settingsBox=null;},
     closeInbox:function(){openInbox(false);},
