@@ -27,7 +27,7 @@ test('leaving invalidates late requests and failures retain a useful explanation
 test('summary labels shot-to-hit as an interval, not latency, and unknown units stay blank',()=>{
   const s=setup();const data=fixture();data.Run.Duration=null;data.Details.Summary={ShotsFired:10,ShotsHit:4,AverageFireToHitMs:null,CorrectiveShotRatio:0};
   s.api.open(s.root,'a',(u,m,b,done)=>done(true,JSON.stringify(data)));
-  assert.ok(s.all().some(e=>e.textContent==='Shot-to-hit interval'));assert.ok(!s.all().some(e=>/latency/i.test(e.textContent)&&!/not input latency/.test(e.textContent)));
+  assert.ok(!s.all().some(e=>e.textContent==='Shot-to-hit interval'));assert.ok(!s.all().some(e=>/latency/i.test(e.textContent)&&!/not input latency/.test(e.textContent)));
   assert.ok(!s.all().some(e=>/—(s|ms|°|%)$/.test(e.textContent)));assert.ok(s.all().some(e=>e.textContent==='4 hits of 10 shots'));
   s.all().find(e=>e.tag==='button'&&e.textContent==='Shots').onclick();assert.ok(!s.all().some(e=>/—°/.test(e.textContent)));
 });

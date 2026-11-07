@@ -107,7 +107,7 @@
     function visible(){return rows.filter(function(row){return (!favoritesOnly||row.favorite)&&(!clipsOnly||/-clip[0-9]+$/.test(row.id||''))&&(!query||(row.scenario||'').toLowerCase().indexOf(query.toLowerCase())>=0);}).sort(function(a,b){if(sortBy==='score'){if(known(a.score)!==known(b.score))return known(a.score)?-1:1;if(known(a.score)&&a.score!==b.score)return b.score-a.score;}if(sortBy==='scenario'&&a.scenario!==b.scenario)return (a.scenario||'').localeCompare(b.scenario||'');return (b.recordedAt||'').localeCompare(a.recordedAt||'');});}
 
     // Search redraws only the cards, so the field keeps focus while typing.
-    search.oninput=function(){if(searchTimer)root.clearTimeout(searchTimer);searchTimer=root.setTimeout(function(){searchTimer=null;if(!busy&&query!==search.value){query=search.value;draw();}},150);};
+    search.oninput=function(){query=search.value;if(searchTimer)root.clearTimeout(searchTimer);searchTimer=root.setTimeout(function(){searchTimer=null;if(active&&!busy)draw();},150);};
     search.onchange=function(){if(busy)return;if(searchTimer){root.clearTimeout(searchTimer);searchTimer=null;}query=search.value;draw();};
     function draw(){
     while(panel.firstChild)panel.removeChild(panel.firstChild);
@@ -123,13 +123,13 @@
       var item = node('button', 'replay-main', ''); item.type = 'button';
       var info = node('div', 'replay-info');
       var titleRow = node('div', 'replay-title-row'); if (row.favorite) titleRow.appendChild(node('span', 'replay-fav', 'Favorite')); titleRow.appendChild(node('div', 'replay-title', row.scenario || 'Untitled scenario'));
-      if(row.isPersonalBest===true||row.isPb===true)titleRow.appendChild(node('span','replay-badge','PB'));else if(!isClip(row)&&known(row.score)&&row.score===best[row.scenario])titleRow.appendChild(node('span','replay-badge','Saved PB'));
+      if(row.score>0&&(row.isPersonalBest===true||row.isPb===true))titleRow.appendChild(node('span','replay-badge','PB'));else if(!isClip(row)&&row.score>0&&known(row.score)&&row.score===best[row.scenario])titleRow.appendChild(node('span','replay-badge','Saved PB'));
       var sub = node('div', 'replay-meta', date(row.recordedAt) || 'Date unknown');
       if (row.reason !== 'completed') sub.appendChild(node('span', 'replay-badge', 'Partial run'));
       if (isClip(row)) sub.appendChild(node('span', 'replay-badge', 'Clip'));
       info.appendChild(titleRow); info.appendChild(sub);
       // Score, length and accuracy appear when the library provides them.
-      var facts = [['Score', known(row.score) ? fmt(row.score) : 'Unavailable'], ['Accuracy', known(row.accuracy) ? fmt(row.accuracy) + '%' : 'Unavailable'], ['Length', known(row.duration) ? Math.round(row.duration) + 's' : 'Unavailable']].filter(function (f) { return f[1] !== null; });
+      var facts = [['Score', known(row.score)&&row.score>0 ? fmt(row.score) : 'No score'], ['Accuracy', known(row.accuracy) ? fmt(row.accuracy) + '%' : 'Unavailable'], ['Length', known(row.duration) ? Math.round(row.duration) + 's' : 'Unavailable']].filter(function (f) { return f[1] !== null; });
       if (facts.length) { var stats = node('div', 'replay-stats'); facts.forEach(function (f) { var cell = node('div', 'replay-stat'); cell.appendChild(node('span', '', f[0])); cell.appendChild(node('strong', '', f[1])); stats.appendChild(cell); }); info.appendChild(stats); }
       item.appendChild(info);
       item.appendChild(node('span', 'button primary', 'Play replay'));
@@ -219,7 +219,7 @@
       if (!container) return;
       busy=false; active = true; refresh();
     },
-    leave: function () { active = false; busy=false; cancel(); if(nativeOpen&&root.AimModNativeReplayBrowser){root.AimModNativeReplayBrowser.leave();nativeOpen=false;} },
+    leave: function () { if(searchTimer){root.clearTimeout(searchTimer);searchTimer=null;}active = false; busy=false; cancel(); if(nativeOpen&&root.AimModNativeReplayBrowser){root.AimModNativeReplayBrowser.leave();nativeOpen=false;} },
     refresh: refresh,
     // Opens one replay the next time the library loads (from Run analysis).
     openWhenLoaded: function (id) { openAfterLoad = typeof id === 'string' && /^[A-Za-z0-9_-]{1,100}$/.test(id) ? id : null; }

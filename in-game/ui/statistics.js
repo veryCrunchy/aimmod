@@ -100,9 +100,8 @@
     if (first >= 0) { c.beginPath(); var on = false; band.forEach(function (b, i) { if (!b) return; if (on) c.lineTo(x(points[i], i), y(b.mean)); else { c.moveTo(x(points[i], i), y(b.mean)); on = true; } }); c.strokeStyle = SERIES.average; c.lineWidth = 2.5; c.stroke(); }
     if (chartMetric === 'Score') { c.beginPath(); var t = false; points.forEach(function (p, index) { if (!F().known(p.TrendLine)) return; if (t) c.lineTo(x(p, index), y(p.TrendLine)); else { c.moveTo(x(p, index), y(p.TrendLine)); t = true; } }); if (c.setLineDash) c.setLineDash([6, 4]); c.strokeStyle = SERIES.trend; c.lineWidth = 1.5; c.stroke(); if (c.setLineDash) c.setLineDash([]); }
     if(chartMetric==='Score'){var pbPoints=points.filter(function(p){return F().known(p.PersonalBest)&&p.Score===p.PersonalBest;});if(pbPoints.length){var pb=pbPoints[pbPoints.length-1],pi=points.indexOf(pb);c.fillStyle='#f0b45a';c.beginPath();c.arc(x(pb,pi),y(pb.Score),5,0,Math.PI*2);c.fill();c.textAlign=x(pb,pi)>right-60?'right':'left';c.fillText('PB '+number(pb.Score),x(pb,pi),Math.max(top+12,y(pb.Score)-10));}}
-    var firstDate = points[0].Date, lastDate = points[points.length - 1].Date;
-    c.fillStyle = '#a7bab0'; c.textAlign = 'left'; c.fillText(firstDate ? F().date(firstDate) : 'Earlier runs', left, h - 8); c.textAlign = 'right'; c.fillText(lastDate ? F().date(lastDate) : 'Latest runs', right, h - 8);
-    if (firstDate && lastDate && points.length > 8) { var midIndex = Math.floor(points.length / 2), mid = points[midIndex]; if (mid.Date) { c.textAlign = 'center'; c.fillText(F().date(mid.Date), x(mid, midIndex), h - 8); } }
+    c.fillStyle = '#a7bab0'; c.textAlign = 'left'; c.fillText('Run '+(points[0].RunNumber||1), left, h - 8); c.textAlign = 'right'; c.fillText('Run '+(points[points.length-1].RunNumber||points.length), right, h - 8);
+    c.textAlign = 'center'; c.fillText('Run sequence (not elapsed time)', (left+right)/2, h - 8);
   }
   // Nearest-point tooltip; the chart stores hit positions while drawing.
   function hover(canvas, wrap) {
@@ -113,7 +112,9 @@
   function draw() {
     if (!root) return; root.textContent = ''; if (!report || !report.Periods) { empty(root, 'Statistics are unavailable. Refresh your history and try again.'); return; }
     var period = report.Periods.filter(function (p) { return p.Key === periodKey; })[0] || report.Periods[0];
+    var fallbackDays=null;if(period&&period.Days&&(!period.Selected||!period.Selected.Runs)){var available=report.Periods.filter(function(p){return !p.Days&&p.Selected&&p.Selected.Runs>0;})[0];if(available){fallbackDays=period.Days;period=available;}}
     if (!period) { var none = append(root, node('div', undefined, 'panel empty')); append(none, node('h3', 'No practice to show yet')); append(none, node('p', 'Complete a few runs, or import your past runs.')); if (global.AimModWorkspace && global.AimModWorkspace.openImport) append(append(none, node('div', undefined, 'actions center')), button('Import past runs', function () { global.AimModWorkspace.openImport(); })); return; }
+    if(fallbackDays)empty(root,'No runs for this scenario in the last '+fallbackDays+' days. Showing all recorded runs.');
     var selected = runFilter==='warmup'&&period.Warmup?period.Warmup:runFilter==='settled'&&period.Settled?period.Settled:period.Selected;
     var toolbar = append(root, node('div', undefined, 'toolbar stats-toolbar'));
     toolbar.setAttribute('aria-label','Statistics filters');
@@ -123,8 +124,9 @@
     var allPeriod=report.Periods.filter(function(p){return !p.Days;})[0]||period;
     append(scenarioField,F().dropdown('Scenario',(allPeriod.ScenarioTable||[]).map(function(s){return {value:s.Name,label:s.Name};}),selected&&selected.Name,function(value){if(selectScenario)selectScenario(value);}));
     if(!period.Days)append(heading,node('p','Showing all recorded activity. Choose a shorter period to compare recent practice.','stats-muted'));
-    if(period.Warmup&&period.Settled){var filters=append(toolbar,node('div',undefined,'segmented stats-filter'));filters.setAttribute('aria-label','Run type');[['all','All runs'],['warmup','Warm-up ('+period.Warmup.Runs+')'],['settled','Other runs ('+period.Settled.Runs+')']].forEach(function(f){var b=append(filters,button(f[1],function(){runFilter=f[0];draw();},runFilter===f[0]));b.setAttribute('aria-pressed',String(runFilter===f[0]));});}
-    var periods = append(toolbar, node('div', undefined, 'segmented'));periods.setAttribute('aria-label','Period');
+    var filterRow=append(toolbar,node('div',undefined,'stats-filter-row'));
+    if(period.Warmup&&period.Settled){var filters=append(filterRow,node('div',undefined,'segmented stats-filter'));filters.setAttribute('aria-label','Run type');[['all','All runs'],['warmup','Warm-up ('+period.Warmup.Runs+')'],['settled','Other runs ('+period.Settled.Runs+')']].forEach(function(f){var b=append(filters,button(f[1],function(){runFilter=f[0];draw();},runFilter===f[0]));b.setAttribute('aria-pressed',String(runFilter===f[0]));});}
+    var periods = append(filterRow, node('div', undefined, 'segmented'));periods.setAttribute('aria-label','Period');
     report.Periods.forEach(function (p) { var b = append(periods, button(p.Days ? p.Days + ' days' : 'All time', function () { periodKey = p.Key; draw(); }, p.Key === period.Key)); b.setAttribute('aria-pressed', String(p.Key === period.Key)); });
     if(runFilter!=='all'&&period.Warmup)empty(root,'Warm-up runs are early, lower scores that recover later in the same session.');
     if (!selected) { empty(root, 'Choose a scenario to see its score trend.'); return; }

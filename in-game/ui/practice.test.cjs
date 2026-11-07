@@ -18,3 +18,12 @@ test('drill controls use the resolved analysis replay and dispose with their own
  const s=setup();let done;s.api.run(s.host,'run','flicks',(u,m,b,cb)=>done=cb);s.api.dispose();done(true,JSON.stringify({status:'ready',analysis:fixture()}));assert.ok(!s.all().some(e=>e.textContent==='Flick phases'));
  s.api.run(s.host,'run','tracking',(u,m,b,cb)=>cb(true,JSON.stringify({status:'unavailable'})));assert.ok(s.all().some(e=>/No replay is available/.test(e.textContent)));
  });
+test('a superseded practice request cannot replace the latest result',()=>{
+ const s=setup(),callbacks=[];
+ s.api.run(s.host,'synthetic','flicks',(u,m,b,done)=>callbacks.push(done));
+ s.all().find(e=>e.textContent==='Check again').onclick();
+ callbacks[1](true,JSON.stringify({status:'unavailable'}));
+ callbacks[0](true,JSON.stringify({status:'ready',analysis:fixture()}));
+ assert.ok(s.all().some(e=>e.textContent.indexOf('No replay is available')===0));
+ assert.ok(!s.all().some(e=>e.textContent==='Flick phases'));
+});

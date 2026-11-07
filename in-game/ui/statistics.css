@@ -29,3 +29,26 @@
 #history .toolbar{flex-wrap:wrap}#history .toolbar>*{margin-bottom:8px}
 #mechanics .stats-measure-grid>.metric{background:#151f1c;border-color:#30433a;padding:18px}#mechanics .mechanics-run{min-height:54px;border-radius:6px}
 @media(max-width:1250px){#trends .stats-filter{margin-bottom:8px}#trends .stats-subtabs .button{padding:10px}#overview .metrics{flex-wrap:wrap}#overview .metrics>.metric{min-width:180px}#history .history-date{width:25%}#history .history-score{width:16%}}
+/* Keep filter groups on separate, predictable rows in the embedded view. */
+#trends .stats-toolbar{display:block;background:#121a17;border-color:#1f2b27}
+#trends .stats-toolbar .segmented{margin:8px 0 0;flex-wrap:nowrap}
+#trends .stats-filter-label{width:100%;max-width:700px}
+#trends .stats-heading{width:100%}
+#mechanics .stats-measure-grid{display:block}
+#mechanics .stats-measure-grid>.metric{width:100%!important;margin:0 0 8px;min-height:0;padding:12px 16px;display:flex;align-items:center;background:#121a17;border-color:#1f2b27}
+#mechanics .stats-measure-grid .metric-label{width:32%;margin:0}
+#mechanics .stats-measure-grid .metric-value{width:28%;font-size:20px;line-height:28px}
+#mechanics .stats-measure-grid .metric-note{width:40%;margin:0;font-size:12px}
+#mechanics .mechanics-run{display:flex;align-items:center;width:100%;padding:12px 16px;text-align:left}
+#mechanics .mechanics-run>span{width:35%}
+#mechanics .mechanics-run>strong{width:30%}
+#replays .replay-toolbar{display:flex;align-items:center;flex-wrap:nowrap;margin:16px 0}
+#replays .replay-card{background:#121a17;border:1px solid #1f2b27}
+#replays .replay-actions .button.primary{background:#18231f;color:#eef5f1;border-color:#30433a}
+#trends .stats-filter-row{display:flex;align-items:center}
+#trends .stats-filter-row .segmented{width:auto;margin-right:16px}
+#replays .replay-toolbar h2{flex:none;width:200px;margin-right:auto}
+#replays .replay-main .button.primary{background:#18231f;color:#eef5f1;border:1px solid #30433a}
+#trends>.metrics{margin-left:0;margin-right:0}
+#trends>.metrics>.metric:first-child{margin-left:0}
+#trends>.metrics>.metric:last-child{margin-right:0}
