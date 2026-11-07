@@ -16,9 +16,9 @@ leaderboards (see "Fairness and privacy" at the end).
 
 | Stream | Rate / precision | Where |
 |---|---|---|
-| Engine frame times | every engine frame while recording (several hundred Hz at typical frame rates), 50 us units | `native-mod/mod/src/ReplaySampler.cpp:106-155` (Tick), `ReplayFormat2.cs:143-145` |
+| Engine frame times | every engine frame while recording (several hundred Hz at typical frame rates), 50 us units | `native-mod/mod/src/ReplaySampler.cpp:106-155` (Tick), `ReplayFormat2.cs:147-149` |
 | Look input (`AxisTurn`, `AxisLookUp`) | per engine frame, as consumed by the game; stored as integer mouse counts when the 0.07 quantum is detected, else raw floats | `native-mod/mod/src/Observer.cpp:301-307` (MetaInputRecordingComponent hooks), `ReplayFormat2.cs:152-158` |
-| Yaw/pitch per unit (sensitivity) | least-squares fit over the run, stored in the file | `native-mod/DESIGN.md:173-177`, `ReplayFormat2.cs:155` |
+| Yaw/pitch per unit (sensitivity) | least-squares fit over the run, stored in the file | `native-mod/DESIGN.md:173-177`, `ReplayFormat2.cs:159` |
 | View rotation | keyframes at start, every button edge, kill or hit, at most every 0.5 s, or when drift exceeds 0.02 deg; reconstructed at every engine frame on decode (max 0.002 deg error measured) | `ReplayFormat2.cs:160-167`, `:211-237`, `DESIGN.md:179-183`, `:241-249` |
 | Camera position and FOV | 60 Hz samples, piecewise-linear keyframes within 0.05 cm | `ReplaySampler.cpp:158-169`, `ReplayFormat2.cs:182` |
 | Targets: position, capsule radius and half height, health, profile name, rotation | 60 Hz, keyframes within 0.5 cm / 0.5 deg, segment starts on (re)appearance | `ReplaySampler.cpp:174-215`, `ReplayFormat2.cs:184-195` |
