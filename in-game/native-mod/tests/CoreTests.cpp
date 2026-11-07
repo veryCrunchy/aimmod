@@ -451,6 +451,7 @@ static void LifecycleChecks()
         r.s.indicatorScore = 10533;
         r.Play(0, 59.95);
         r.s.running = false;
+        r.s.indicatorScore = 0;
         r.s.lastScore = 0;
         for (int i = 0; i < 120; ++i) r.Poll();
         CHECK(r.Last(K::Completed) && r.Last(K::Completed)->score == 10533 && r.Last(K::Completed)->scoreSource == "indicator",
