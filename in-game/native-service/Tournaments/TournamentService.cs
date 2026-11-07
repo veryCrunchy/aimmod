@@ -72,12 +72,19 @@ sealed class TournamentService : IDisposable
     public bool Simulating { get { lock (gate) return sim is not null; } }
     public SimulatedTournamentHub? Simulation { get { lock (gate) return sim; } }
 
+    int timerBusy;
     async Task TickSafe()
     {
-        lock (gate) { if (ticking) return; ticking = true; }
-        try { await Tick(CancellationToken.None); }
-        catch (Exception ex) { Console.Error.WriteLine("Tournament tick failed: " + ex.GetType().Name); }
-        finally { lock (gate) ticking = false; }
+        // Never queue timer callbacks behind a slow or blocked tick.
+        if (Interlocked.Exchange(ref timerBusy, 1) == 1) return;
+        try
+        {
+            lock (gate) { if (ticking) return; ticking = true; }
+            try { await Tick(CancellationToken.None); }
+            catch (Exception ex) { Console.Error.WriteLine("Tournament tick failed: " + ex.GetType().Name); }
+            finally { lock (gate) ticking = false; }
+        }
+        finally { Volatile.Write(ref timerBusy, 0); }
     }
 
     MyMatch? Active() => feed.Matches.FirstOrDefault(m => m.Match.State is "live" or "veto" or "awaiting_confirmation" or "disputed")
@@ -330,9 +337,10 @@ sealed class TournamentService : IDisposable
                     break;
                 case "simulate":
                     if (!developer()) return LobbyResult.Fail("dev-off", "Turn on developer mode in Settings first.");
+                    var simScenarios = scenarios(); var simName = selfName() ?? "You";
                     lock (gate)
                     {
-                        sim = new SimulatedTournamentHub(scenarios(), selfName() ?? "You", clock, checkIn: Text("op") == "check-in");
+                        sim = new SimulatedTournamentHub(simScenarios, simName, clock, checkIn: Text("op") == "check-in");
                         openId = SimulatedTournamentHub.Id; reported.Clear(); uploaded.Clear(); dismissed.Clear(); nextFeed = 0; nextDetail = 0;
                     }
                     break;
@@ -354,10 +362,11 @@ sealed class TournamentService : IDisposable
 
     public object View()
     {
+        // Read the lobby before taking this service's lock: the multiplayer service holds its own lock while it asks for tournament notices.
+        var lobbyState = lobby.TournamentLobby();
         lock (gate)
         {
             var source = Source;
-            var lobbyState = lobby.TournamentLobby();
             var active = Active();
             return new
             {
@@ -389,10 +398,10 @@ sealed class TournamentService : IDisposable
     // bracket and the live match. Read-only and without any account data.
     public object ObsView()
     {
+        var state = lobby.TournamentLobby();
         lock (gate)
         {
             var active = Active();
-            var state = lobby.TournamentLobby();
             return new
             {
                 v = 1,

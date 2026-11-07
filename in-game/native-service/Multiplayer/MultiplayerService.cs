@@ -58,6 +58,7 @@ sealed partial class MultiplayerService : IDisposable
     bool autoDownload, simulatedMissing;
     long manifestAskedAt;
     string? trackedRound, lastContentKey; HashSet<string> knownRuns = new(StringComparer.Ordinal); double lastFrameSeconds = -1; long lastFrameAt; ScoreFrame? lastFrame;
+    int timerBusy;
     public MultiplayerSimulation? Simulation { get; private set; }
     public string SelfId => transport.LocalPeer;
 
@@ -86,7 +87,13 @@ sealed partial class MultiplayerService : IDisposable
         // The bot chat contract (MultiplayerService.Chat.cs): the bot AI posts its callouts through it.
         BotSay = SayAsBot;
         // A failure in one tick must never take the whole service down: log it and keep going.
-        if (autoTick) timer = new Timer(_ => { try { Tick(); } catch (Exception ex) { Console.Error.WriteLine("Multiplayer tick failed: " + ex.GetType().Name + ": " + ex.Message); } }, null, 100, 100);
+        if (autoTick) timer = new Timer(_ =>
+        {
+            // Skip a beat instead of stacking thread-pool threads behind a slow tick.
+            if (Interlocked.Exchange(ref timerBusy, 1) == 1) return;
+            try { Tick(); } catch (Exception ex) { Console.Error.WriteLine("Multiplayer tick failed: " + ex.GetType().Name + ": " + ex.Message); }
+            finally { Volatile.Write(ref timerBusy, 0); }
+        }, null, 100, 100);
     }
 
     // The simulation is a developer tool: on in Debug builds, and in Release only with
