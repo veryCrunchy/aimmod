@@ -18,6 +18,7 @@
     <EmbeddedResource Include="../ui/run-details.js" LogicalName="AimMod.RunDetailsScript" />
     <EmbeddedResource Include="../ui/run-details.css" LogicalName="AimMod.RunDetailsStyle" />
     <EmbeddedResource Include="../ui/settings.js" LogicalName="AimMod.SettingsScript" />
+    <EmbeddedResource Include="../ui/practice-drills.js" LogicalName="AimMod.PracticeDrillsScript" />
     <EmbeddedResource Include="../ui/coaching.js" LogicalName="AimMod.CoachingScript" />
     <EmbeddedResource Include="../ui/coaching.css" LogicalName="AimMod.CoachingStyle" />
     <EmbeddedResource Include="../ui/workspace-theme.css" LogicalName="AimMod.WorkspaceTheme" />

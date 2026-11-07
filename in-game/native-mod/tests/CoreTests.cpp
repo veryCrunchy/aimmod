@@ -282,6 +282,10 @@ static void CommandChecks()
     CHECK(code("AIMMOD_CORE_COMMAND_1\nseq\t9\naction\treset-overrides\nextra\t1\n") == "invalid-command", "unknown fields rejected");
     CHECK(code("AIMMOD_CORE_COMMAND_1\nseq\t9\naction\treset-overrides\n") == "accepted", "reset accepted");
     CHECK(code("AIMMOD_CORE_COMMAND_1\nseq\t9\naction\trefresh-scenarios\n") == "accepted", "refresh accepted");
+    CHECK(code("AIMMOD_CORE_COMMAND_1\nseq\t11\naction\tstart-scenario\nscenario\tAimMod Drill - static - 12345678\nmode\tchallenge\n") == "drills-freeplay-only", "drills cannot start challenges");
+    CHECK(code("AIMMOD_CORE_COMMAND_1\nseq\t11\naction\tstart-scenario\nscenario\tAimMod Drill - static - 12345678\nmode\tfreeplay\nseed\t1\n") == "drills-freeplay-only", "drills cannot use seeds");
+    CHECK(code("AIMMOD_CORE_COMMAND_1\nseq\t11\naction\tstart-scenario\nscenario\tAimMod Drill - static - 12345678\nmode\tfreeplay\n") == "accepted", "unseeded freeplay drill accepted");
+    CHECK(code("AIMMOD_CORE_COMMAND_1\nseq\t11\naction\tstart-scenario\nscenario\tAIMMOD DRILL - static - 12345678\nmode\tchallenge\n") == "drills-freeplay-only", "drill guard ignores name casing");
     auto seeded = parse("AIMMOD_CORE_COMMAND_1\nseq\t11\naction\tstart-scenario\nscenario\tX\nmode\tfreeplay\nseed\t4294967295\n");
     CHECK(std::holds_alternative<GameCommand>(seeded) && std::get<GameCommand>(seeded).seed == 4294967295u, "freeplay seed parsed");
     CHECK(code("AIMMOD_CORE_COMMAND_1\nseq\t11\naction\tstart-scenario\nscenario\tX\nmode\tchallenge\nseed\t1\n") == "seed-not-allowed", "no seeds in ranked challenges");

@@ -44,7 +44,7 @@ sealed class GameCommands(string output)
 
     /// <summary>Scenarios whose map AimModCore may load itself (ensure-map): the ones AimMod generates.</summary>
     public static bool MapFixAllowed(string? scenario) => SafeName(scenario) && scenario!.IndexOfAny(['\\', '/', ':', '*', '?', '"', '<', '>', '|']) < 0
-        && (scenario.StartsWith("AimMod Match - ", StringComparison.Ordinal) || scenario.StartsWith("AimMod Probe ", StringComparison.Ordinal) || scenario.StartsWith("AimMod - ", StringComparison.Ordinal));
+        && (scenario.StartsWith("AimMod Drill - ", StringComparison.Ordinal) || scenario.StartsWith("AimMod Match - ", StringComparison.Ordinal) || scenario.StartsWith("AimMod Probe ", StringComparison.Ordinal) || scenario.StartsWith("AimMod - ", StringComparison.Ordinal));
 
     /// <summary>Writes the request; returns its sequence, or null with a reason.</summary>
     public (long? Sequence, string? Error) Send(GameCommandRequest request)
@@ -61,6 +61,7 @@ sealed class GameCommands(string output)
                 return (null, "invalid-thumbnail");
         }
         if (named && !SafeName(request.Scenario)) return (null, "invalid-scenario");
+        if (PracticeDrills.IsDrill(request.Scenario) && (request.Mode == "challenge" || request.Seed is not null)) return (null, "drills-freeplay-only");
         if (request.Weapon is not null && !SafeName(request.Weapon)) return (null, "invalid-override");
         if (request.Mode is not (null or "freeplay" or "challenge")) return (null, "invalid-mode");
         // end-run: freeplay AimMod match scenarios only; then = stop (default) or reset.
@@ -74,7 +75,7 @@ sealed class GameCommands(string output)
         // Never in ranked play (AimModCore enforces the same rules): a challenge runs exactly as published.
         if (request.Mode == "challenge" && (request.TimeScale is not null || request.TargetSize is not null || request.TargetSpeed is not null || request.MapScale is not null || request.Weapon is not null))
             return (null, "overrides-freeplay-only");
-        if (request.Seed is not null && request.Mode == "challenge" && request.Scenario?.StartsWith("AimMod Match - ", StringComparison.Ordinal) != true) return (null, "seed-not-allowed");
+        if (request.Seed is not null && request.Mode == "challenge") return (null, "seed-not-allowed");
         var text = new StringBuilder("AIMMOD_CORE_COMMAND_1\n");
         long sequence;
         lock (gate) { sequence = Math.Max(last + 1, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()); last = sequence; }
