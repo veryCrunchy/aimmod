@@ -554,3 +554,33 @@
 #multiplayer .mp-host-tools .mp-host-label{padding:0 10px 0 0}
 
 #multiplayer .mp-play-social .mp-friend-info{flex:1 1 140px}
+
+/* Calm surfaces and compact match briefing. */
+#multiplayer .panel,#settings .settings-card,#account .panel,#account .card{background:#121a17;border-color:#1f2b27;border-radius:8px}
+#multiplayer .mp-play-detail{background:#18231f;border:1px solid #1f2b27;padding:24px}
+#multiplayer .mp-play-detail .mp-mode-art{height:64px;background:#18231f}
+#multiplayer .mp-play-detail .mp-mode-icon{width:48px;height:48px}
+#multiplayer .mp-play-heading h2{font-size:20px;line-height:28px}
+#multiplayer .mp-play-detail .mp-mode-hero-text strong{font-size:20px;color:#eef5f1}
+#multiplayer .mp-start{background:#18231f;border-left:1px solid #1f2b27}
+#multiplayer .mp-dev{background:#121a17;border:1px solid #1f2b27}
+#multiplayer .mp-play-social .mp-friend{flex-wrap:nowrap}
+#multiplayer .mp-play-social .mp-friend-info{width:150px;flex:1}
+#multiplayer .mp-play-social .mp-friend-info strong,#multiplayer .mp-play-social .mp-friend-info span{width:150px}
+#settings .mp-prefs{border:0;margin:0;background:#121a17}
+#settings .mp-prefs .panel-head{padding:8px 0 16px}
+#settings .mp-prefs-body{padding:0}
+#settings .settings-card h2{font-size:16px;font-weight:700}
+#settings .saved-note{color:#93a69c;font-size:12px;margin:12px 0}
+#account .account-card{max-width:960px;padding:24px}
+#account .account-card h2{font-size:28px}
+#account .account-details strong{font-size:20px;color:#eef5f1}
+#settings .settings-columns{margin:0}
+#settings .settings-col{padding:0;width:49%}
+#settings .settings-col+.settings-col{margin-left:2%}
+#settings .mp-prefs .saved-note{margin-top:0}
+#multiplayer .mp-row{margin:0}
+#multiplayer .mp-col{padding:0}
+#multiplayer .mp-main{width:61%;margin-right:2%}
+#multiplayer .mp-side{width:37%}
+#multiplayer .mp-play-tiles .mp-mode-pick{margin-left:0;margin-right:0}

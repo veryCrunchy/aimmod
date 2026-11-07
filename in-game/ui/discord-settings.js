@@ -31,7 +31,7 @@
     while(panel.firstChild)panel.removeChild(panel.firstChild);
     panel.appendChild(node('h2','','Discord'));
     panel.appendChild(node('p','subtle','Replaces KovaaK’s own Discord status.'));
-    if(message)panel.appendChild(node('p',message==='Saved.'?'saved-note':'notice warn',message));
+    var saveState=node('p',message&&message!=='Saved.'?'notice warn':'saved-note',message||'Changes save automatically.');saveState.setAttribute('role','status');panel.appendChild(saveState);
     if(!value){var retryRow=node('div','actions'),retry=node('button','button primary','Try again');retry.type='button';retry.onclick=function(){load(panel);};retryRow.appendChild(retry);panel.appendChild(retryRow);return;}
     if(status&&states[status])panel.appendChild(node('p','subtle',states[status]));
     // Same switch as the rest of Settings. The detail options only apply while
@@ -41,7 +41,7 @@
       var row=node('div','settings-row'+(inactive?' disabled':'')),info=node('div','settings-info');info.appendChild(node('h3','',title));info.appendChild(node('p','subtle',description));row.appendChild(info);
       var on=value[key];row.appendChild(node('span','switch-state',on?'On':'Off'));
       var control=node('button','switch'+(on?' on':''),on?'On':'Off');control.type='button';control.setAttribute('role','switch');control.setAttribute('aria-checked',String(on));control.setAttribute('aria-label',title);control.appendChild(node('span','knob'));control.disabled=inactive;
-      control.onclick=function(){if(request||inactive)return;var patch={};patch[key]=!value[key];var controls=panel.querySelectorAll('button');for(var i=0;i<controls.length;i++)controls[i].disabled=true;send(patch,function(ok,data){if(ok)accept(data);draw(panel,ok?'Saved.':'Couldn’t save. Try again.');});};
+      control.onclick=function(){if(request||inactive)return;var patch={};patch[key]=!value[key];var controls=panel.querySelectorAll('button');for(var i=0;i<controls.length;i++)controls[i].disabled=true;saveState.textContent='Saving…';send(patch,function(ok,data){if(ok)accept(data);draw(panel,ok?'Saved.':'Couldn’t save. Try again.');});};
       row.appendChild(control);panel.appendChild(row);
     }
     toggle('discordPresenceEnabled','Show AimMod on Discord','Your scenario, run timer and session progress.');

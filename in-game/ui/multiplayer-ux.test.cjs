@@ -81,7 +81,7 @@ test('home: personal multiplayer settings fold to a summary, but key conflicts s
   assert.ok(s.text().includes('F6 is also KovaaK’s reset key.'),'a conflict is never folded away');
   assert.ok(s.button('Multiplayer settings'));s.api.enterPreferences(s.container);s.last().finish(200,view({prefs:{hotkey:'F6',sounds:true,spectatePrivacy:'ask'}}));assert.ok(s.text().includes('Ready when I join'));
   assert.ok(s.text().includes('Bomb and round sounds')&&s.text().includes('Gunfire and footsteps'),'other players’ gunfire has its own volume');
-  s.button('Done').onclick();assert.ok(!s.text().includes('Ready when I join'));
+  assert.ok(!s.button('Done'));assert.ok(s.text().includes('Changes save automatically.'),'settings keep save behavior visible');
 });
 test('wording: no bridge or hash jargon, and small files read in KB',()=>{
   const off=setup().open(view({transport:{kind:'none',online:false},friends:{source:'unavailable',items:[]}}));

@@ -35,3 +35,6 @@
 .chat-radio{border-radius:4px}.chat-radio-item{height:32px;border-radius:3px}
 .chat-radio-item:focus{border-color:#8bf5ce}.chat-hint,.chat-radio-foot{font-size:12px}
 @media(max-height:760px){#chat-hud{width:440px}.chat-line{max-width:440px;font-size:13px;line-height:18px}.chat-radio-item{height:28px}}
+.chat-draft{width:440px;flex:1}
+.chat-caret{flex-shrink:0}
+@media(max-height:760px){.chat-draft{width:320px}}

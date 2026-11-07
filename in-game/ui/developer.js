@@ -23,7 +23,7 @@
     x.onerror=x.ontimeout=function(){finish(false,null);};x.send(body?JSON.stringify(body):null);
   }
   function toast(text){if(!toastNode)return;toastNode.textContent=text;toastNode.style.display='block';clearTimeout(toastTimer);toastTimer=setTimeout(function(){if(toastNode)toastNode.style.display='none';},3000);}
-  function act(body,done){request(body,function(ok,data,ticket){if(ok){state=data;nav();if(container&&ticket===generation)render();if(done)done(true);}else{toast(data&&data.error?data.error:'That didn’t work.');if(done)done(false);}});}
+  function act(body,done){if(actionBusy){if(done)done(false);return;}actionBusy=true;revision++;request(body,function(ok,data,ticket){if(ticket!==generation)return;actionBusy=false;if(ok){state=data;nav();if(container&&ticket===generation)render();if(done)done(true);}else{toast(data&&data.error?data.error:'That didn’t work.');if(done)done(false);}});}
 
   // The nav entry exists only while developer mode is on.
   function nav(){var b=root.document.getElementById('nav-developer');if(b)b.style.display=state&&state.enabled?'':'none';}
@@ -52,7 +52,7 @@
   }
   function section(title,note){var p=node('div','panel dev-card');var head=node('div','panel-head');var t=node('div','head-text');add(t,node('h2','',title),note?node('p','',note):null);head.appendChild(t);p.appendChild(head);var body=node('div','dev-body');p.appendChild(body);return {panel:p,body:body};}
   // A click runs once until it's answered: no repeats from impatient double clicks.
-  var busy={};
+  var busy={},actionBusy=false,revision=0;
   function once(key,run){if(busy[key])return;busy[key]=true;run(function(){busy[key]=false;});}
   function spawnAvatar(mode){
     once('avatar-on',function(done){
@@ -63,7 +63,7 @@
     });
   }
   function refreshSoon(){setTimeout(function(){if(container)poll();},300);}
-  function openMultiplayer(){var b=root.document.getElementById('nav-multiplayer');if(b&&b.click)b.click();}
+  function openMultiplayer(){if(root.AimModWorkspace)root.AimModWorkspace.open('multiplayer');}
 
   function render(){
     if(!container)return;while(container.firstChild)container.removeChild(container.firstChild);
@@ -73,7 +73,7 @@
     var st=state.status||{};var lobby=st.lobby;
     var row=node('div','dev-row');page.appendChild(row);var left=node('div','dev-col dev-main'),right=node('div','dev-col dev-side');row.appendChild(left);row.appendChild(right);
     var perf=section('Frame timings','Five-second window: mean and peak milliseconds. Nested timings overlap.');right.appendChild(perf.panel);
-    perf.body.appendChild(node('pre','',state.performance||'Waiting for frame timings.'));
+    perf.body.appendChild(timings(state.performance));
     // Simulated lobby
     var sim=section('Simulated lobby','Simulated players ready up, chat, post scores and vote by themselves.');left.appendChild(sim.panel);
     var counts=[];for(var i=1;i<=7;i++)counts.push({id:i,label:String(i)});
@@ -163,15 +163,24 @@
     [['Service log',logs.service],['Game log (AimMod lines)',logs.game]].forEach(function(g){var lg=section(g[0],'Newest first. Ids and user names are hidden.');right.appendChild(lg.panel);var box=node('div','dev-log');(g[1]||[]).slice().reverse().forEach(function(t){box.appendChild(node('div','dev-log-line',t));});if(!(g[1]||[]).length)box.appendChild(node('div','dev-log-line','Nothing yet.'));lg.body.appendChild(box);});
     toastNode=node('div','dev-toast');toastNode.setAttribute('role','status');container.appendChild(toastNode);
   }
-  function visible(d){var c={};for(var k in d)if(k!=='camera')c[k]=d[k];return JSON.stringify(c);}
-  function poll(){clearTimeout(timer);if(!container)return;
-    request(null,function(ok,data,ticket){if(ticket!==generation||!container)return;if(ok){var changed=visible(data)!==visible(state||{});state=data;nav();if(changed&&!typing)render();}timer=setTimeout(poll,2000);});
+  function timings(text){
+    var box=node('div','dev-timings');
+    var rows=String(text||'').split(/\r?\n/),count=0;
+    box.appendChild(add(node('div','dev-timing-row head'),node('span','','Component'),node('span','','Mean (ms)'),node('span','','Peak (ms)')));
+    rows.forEach(function(line){var p=line.trim().split(/\s+/);if(p.length!==3||p[0]==='AIMMOD_PERF_1'||!isFinite(+p[1])||!isFinite(+p[2])||(+p[1]===0&&+p[2]===0))return;
+      count++;box.appendChild(add(node('div','dev-timing-row'),node('span','',p[0]),node('span','',F.fixed(+p[1],3)),node('span','',F.fixed(+p[2],3))));});
+    if(!count)box.appendChild(node('p','subtle','Waiting for active frame timings.'));
+    return box;
+  }
+  function visible(d){var c={};for(var k in d)if(k!=='camera'&&k!=='performance')c[k]=d[k];return JSON.stringify(c);}
+  function poll(){clearTimeout(timer);if(!container)return;if(actionBusy){timer=setTimeout(poll,2000);return;}var readRevision=revision;
+    request(null,function(ok,data,ticket){if(ticket!==generation||!container)return;if(readRevision!==revision){timer=setTimeout(poll,2000);return;}if(ok){var changed=visible(data)!==visible(state||{});state=data;nav();if(changed&&!typing)render();else if(container.querySelector){var old=container.querySelector('.dev-timings');if(old&&old.parentNode)old.parentNode.replaceChild(timings(data.performance),old);}}timer=setTimeout(poll,2000);});
     other('GET','/game-command',null,function(ok,data){if(ok&&data){var changed=JSON.stringify(data)!==JSON.stringify(game);game=data;if(changed&&!typing&&container)render();}});
     if(discord===null)other('GET','/discord-settings',null,function(ok,data){discord=ok&&data&&data.settings?data:false;});
   }
   // Other local endpoints (game commands, replays, Discord), same capability prefix.
-  function other(method,url,body,done){var x=new root.XMLHttpRequest();x.open(method,base()+url,true);x.timeout=8000;if(method==='POST'){x.setRequestHeader('X-AimMod-UI','1');x.setRequestHeader('Content-Type','application/json');}
-    x.onreadystatechange=function(){if(x.readyState!==4)return;var data=null;try{data=JSON.parse(x.responseText);}catch(e){data=null;}done(x.status>=200&&x.status<300,data,x.status);};x.onerror=x.ontimeout=function(){done(false,null,0);};x.send(body?JSON.stringify(body):null);}
+  function other(method,url,body,done){var ticket=generation,finished=false;function complete(ok,data,status){if(finished||ticket!==generation)return;finished=true;done(ok,data,status);}var x=new root.XMLHttpRequest();x.open(method,base()+url,true);x.timeout=8000;if(method==='POST'){x.setRequestHeader('X-AimMod-UI','1');x.setRequestHeader('Content-Type','application/json');}
+    x.onreadystatechange=function(){if(x.readyState!==4)return;var data=null;try{data=JSON.parse(x.responseText);}catch(e){data=null;}complete(x.status>=200&&x.status<300,data,x.status);};x.onerror=x.ontimeout=function(){complete(false,null,0);};x.send(body?JSON.stringify(body):null);}
   function input(key,hint,css){var i=node('input','dev-input');i.value=drafts[key]||'';i.setAttribute('autocomplete','off');
     i.oninput=function(){drafts[key]=i.value;if(i.syncHint)i.syncHint();};i.onfocus=function(){typing=true;};i.onblur=function(){typing=false;};
     return F&&F.field?F.field(i,hint,css||'dev-field'):i;}
@@ -179,6 +188,6 @@
   function gameCommand(body,label){other('POST','/game-command',body,function(ok,data,status){toast(ok?label+' sent.':status===409?'AimModCore can’t do that in this game build.':'Refused: '+(data&&data.error?data.error:'check the scenario name')+'.');});}
   function nativeReplay(body,label){other('POST','/native-replay',body,function(ok,data,status){toast(ok?label:status===409?'Open the pause menu (not during a run) first.':status===422?'Those runs are from different scenarios.':'Not available yet. Try again in a moment.');});}
   function enter(element){leave();container=element;generation++;if(!container)return;render();poll();}
-  function leave(){generation++;clearTimeout(timer);timer=null;if(container)while(container.firstChild)container.removeChild(container.firstChild);container=null;toastNode=null;}
+  function leave(){generation++;revision++;actionBusy=false;typing=false;clearTimeout(toastTimer);clearTimeout(timer);timer=null;if(container)while(container.firstChild)container.removeChild(container.firstChild);container=null;toastNode=null;}
   root.AimModDeveloper={enter:enter,leave:leave,renderSettings:renderSettings,refreshNav:refreshNav,_state:function(){return state;}};
 })(window);

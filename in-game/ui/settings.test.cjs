@@ -26,3 +26,10 @@ test('Gameface: retry and navigation buttons are wrapped so they size to their l
   const walk=e=>[e,...e.children.flatMap(walk)];const retry=s.buttons().find(b=>b.textContent==='Try again');
   assert.ok(walk(s.container).some(e=>e.className==='actions'&&e.children.includes(retry)));
 });
+
+
+test('capture save preserves unrelated settings cards and blocks duplicate submission',()=>{
+ const s=setup();s.api.enter(s.container);s.requests[0].finish(200,{replayRecordingEnabled:true,hubHistoryEnabled:false});
+ const cards=s.container.children.slice();const control=s.buttons()[0];control.onclick();control.onclick();assert.equal(s.requests.length,2);
+ s.requests[1].finish(200,{replayRecordingEnabled:false,hubHistoryEnabled:false});assert.deepEqual(s.container.children,cards);
+});

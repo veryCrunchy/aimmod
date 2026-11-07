@@ -189,9 +189,9 @@ test('match flow states label the HUD and explain returning control',()=>{
 });
 test('buy categories form six independent cells while ownership blocks repeat buys',()=>{
   const s=setup(),calls=[];s.hud.render(s.root,base,(a,id)=>calls.push([a,id]));
-  const categories=s.walk(s.root).find(n=>n.className==='cs-buy-cols');assert.equal(categories.children.length,6);
+  const categories=s.walk(s.root).find(n=>n.className==='cs-buy-cols');assert.equal(categories.children.length,2);const groups=categories.children.flatMap(row=>row.children);assert.equal(groups.length,6);
   const owned=s.walk(s.root).find(n=>n.className==='cs-item owned');owned.onclick();assert.deepEqual(calls,[]);
-  assert.ok(categories.children.every(n=>n.className==='cs-buy-group'));
+  assert.ok(groups.every(n=>n.className==='cs-buy-group'));
 });
 test('warmup and return-control hints share one edge container',()=>{
   const s=setup();s.hud.render(s.root,Object.assign({},base,{phase:'warmup',afk:true,buyOpen:false}),()=>{});
