@@ -14,12 +14,15 @@ sealed class WorkspaceHost : IAsyncDisposable
     readonly GameCommands gameCommands;
     readonly CancellationTokenSource startLoop = new();
     ReplayCatalog? replayCatalog;
+    readonly PracticePipeline practice;
     readonly ReplayKeyboard keyboard;
     readonly RendererAcknowledgement renderer;
     readonly OverlaySettings overlaySettings;
     readonly OpponentData opponents;
     readonly ObsOverlayHost obs;
     readonly OverlayService overlays;
+    public OverlayAnalysisSource OverlayAnalysis => overlays.Analysis;
+    readonly ObsSceneSwitching obsSwitching;
     readonly OverlayHistory overlayHistory = new();
     Tournaments.TournamentService? tournaments;
     public Tournaments.TournamentService? TournamentsService => tournaments;
@@ -102,6 +105,11 @@ sealed class WorkspaceHost : IAsyncDisposable
         new CoachingFeedback(output).MapEndpoints(app, prefix);
         multiplayer = Multiplayer.MultiplayerHosting.Create(hub, output, args, () => liveFeed.Read(outputFolder, Volatile.Read(ref overlayRuns)), () => Volatile.Read(ref overlayRuns));
         multiplayer.MapEndpoints(app, prefix);
+        overlays.MultiplayerSource = multiplayer.OverlayView;
+        overlays.AvatarSource = multiplayer.OverlayAvatar;
+        overlays.ReplaySource = playback.OverlayView;
+        obsSwitching = new ObsSceneSwitching(output, () => new ObsSwitchState(multiplayer.OverlayView().Match is { Phase: not "final" }, ReadLive().Active, playback.Visible));
+        obsSwitching.Map(app, prefix);
         // A pending replay's scenario loads by itself, through the lobby's load path (ScenarioLoader).
         var lobby = multiplayer;
         autoLoad = new ReplayAutoLoad(startGate, new Multiplayer.CoreGameControl(output), () => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), lobby.Library, lobby.SourceOf);
@@ -151,6 +159,10 @@ sealed class WorkspaceHost : IAsyncDisposable
         var html = reader.ReadToEnd();
         var replays = new ReplayCatalog(output);
         replayCatalog = replays;
+        practice = new PracticePipeline(output, replays, () => { var snapshot = ReadLive(); return snapshot.Active || !snapshot.Available; });
+        app.MapGet(prefix + "/run-details/{id}/practice", (string id) => Results.Json(practice.Read(id), PracticePipeline.Json));
+        app.MapGet(prefix + "/practice", () => Results.Json(practice.Summary(), PracticePipeline.Json));
+        app.MapGet(prefix + "/practice.js", () => Results.Stream(typeof(WorkspaceHost).Assembly.GetManifestResourceStream("AimMod.PracticeScript")!, "application/javascript"));
         var library = new ReplayLibrary(replays, output);
         var inbox = new ReplayInbox(output, replays);
         app.MapGet(prefix + "/ui", () => Results.Content(html, "text/html", Encoding.UTF8));
@@ -347,6 +359,7 @@ sealed class WorkspaceHost : IAsyncDisposable
     public async Task Start(CancellationToken token)
     {
         await app.StartAsync(token);
+        obsSwitching.Start();
         playback.Start();
         keyboard.Start();
         _ = Task.Run(async () => {
@@ -382,6 +395,8 @@ sealed class WorkspaceHost : IAsyncDisposable
         // Stop accepting requests first, then publish a closed replay frame and
         // retract this process's overlay URL so the game never loads a dead port.
         startLoop.Cancel();
+        await obsSwitching.DisposeAsync();
+        practice.Dispose();
         tournaments?.Dispose();
         multiplayer.Dispose();
         await keyboard.DisposeAsync();

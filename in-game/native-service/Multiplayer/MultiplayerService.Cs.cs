@@ -71,8 +71,8 @@ sealed partial class MultiplayerService
     {
         if (match.Cs is not { } cs || cs.Players.FirstOrDefault(p => p.Member == SelfId) is not { } me) yield break;
         var hostNow = clock() + HostOffset();
-        var buyWindow = cs.Phase == "freeze" || (cs.Phase == "live" && cs.LiveAt is { } live && hostNow < live + CsRules.BuyMs);
-        yield return "phase\t" + cs.Phase + "\t" + (cs.Phase == "freeze" ? 1 : 0) + "\t" + (buyWindow ? 1 : 0) + "\t" + (cs.PhaseEndsAt - HostOffset());
+        var buyWindow = cs.Phase is "warmup" or "freeze" || (cs.Phase == "live" && cs.LiveAt is { } live && hostNow < live + CsRules.BuyMs);
+        yield return "phase\t" + (cs.Phase == "warmup" ? "live" : cs.Phase) + "\t" + (cs.Paused || me.Afk || me.Spectating || cs.Phase == "freeze" ? 1 : 0) + "\t" + (buyWindow ? 1 : 0) + "\t" + (cs.PhaseEndsAt - HostOffset());
         yield return CsLoadoutLine(me, cs.Bomb.Carrier == SelfId);
         // The weapon feel: the match's spread salt, the dynamic crosshair, the zoom and its sensitivity.
         var settings = Current?.Settings;
@@ -122,7 +122,7 @@ sealed partial class MultiplayerService
         var key = match.Id + "#" + cs.Round;
         if (key != csRoundKey) { csRoundKey = key; buyOpen = false; }
         var hostNow = clock() + HostOffset();
-        var buyWindow = cs.Phase == "freeze" || (cs.Phase == "live" && cs.LiveAt is { } live && hostNow < live + CsRules.BuyMs);
+        var buyWindow = cs.Phase is "warmup" or "freeze" || (cs.Phase == "live" && cs.LiveAt is { } live && hostNow < live + CsRules.BuyMs);
         if (!buyWindow || me.InBuyZone == false || !me.Alive) buyOpen = false;
         // While the chat input or the radio menu is open the keys are theirs (MultiplayerService.Chat.cs).
         var foreground = csKeys.Foreground() && !ChatCapturing;
@@ -142,7 +142,7 @@ sealed partial class MultiplayerService
         }
         // Planting: E, or fire with the bomb in your hands (CS); defusing: E.
         var holdingBomb = poseTracker?.Weapon == CsRules.BombSlot && cs.Bomb.Carrier == SelfId;
-        var held = (csKeys.Down('E') || (holdingBomb && !buyOpen && csKeys.Down((char)0x01))) && me.Alive && cs.Phase is "live" or "planted";
+        var held = (csKeys.Down('E') || (holdingBomb && !buyOpen && csKeys.Down((char)0x01))) && me.Alive && !cs.Paused && !me.Afk && cs.Phase is "warmup" or "freeze" or "live" or "planted";
         if (held != useHeld) { useHeld = held; CsCommand("use", new { held }); }
         if (csKeys.Pressed('G') && me.Alive && !buyOpen) CsCommand("drop", new { });
         CsHold(match, cs, me);
@@ -209,7 +209,7 @@ sealed partial class MultiplayerService
         string? InSite = null, string? Callout = null, IReadOnlyList<CsMarker>? Sites = null,
         bool HasBomb = false, string? BombCarrier = null, string? Refused = null, string DropKey = CsDropKey, int TAlive = 0, int CtAlive = 0,
         IReadOnlyList<CsHurt>? Hurt = null, string? HitMarker = null, string? Watching = null, string? WatchHint = null,
-        IReadOnlyList<CsHudGrenade>? Grenades = null, double Flash = 0, double Smoke = 0, string GrenadeKey = CsGrenadeKey, CsFlashFx? FlashFx = null, string? GrenadeHint = null, string? SessionId = null, IReadOnlyDictionary<string, string>? Controls = null);
+        IReadOnlyList<CsHudGrenade>? Grenades = null, double Flash = 0, double Smoke = 0, string GrenadeKey = CsGrenadeKey, CsFlashFx? FlashFx = null, string? GrenadeHint = null, string? SessionId = null, IReadOnlyDictionary<string, string>? Controls = null, bool Paused = false, bool Timeout = false, bool Afk = false);
     // The flash on your screen for the page to play smoothly between polls: which flash (Id), how long
     // ago it popped (Age, ms), how long the white holds and clears (ms) and how white it gets (Peak 0..1).
     internal sealed record CsFlashFx(long Id, long Age, int Hold, int Fade, double Peak);
@@ -230,8 +230,8 @@ sealed partial class MultiplayerService
         string Name(string? id) => id == SelfId ? "You" : LobbyRules.CleanName(lobby.Members.FirstOrDefault(x => x.Id == id)?.Name ?? m.Standings.FirstOrDefault(x => x.MemberId == id)?.Name, "Player");
         var b = cs.Bomb;
         var tTeam = cs.Team1Side == CsRules.T ? 1 : 2;
-        var buyWindow = cs.Phase == "freeze" || (cs.Phase == "live" && cs.LiveAt is { } live && hostNow < live + CsRules.BuyMs);
-        int? buyLeft = cs.Phase == "freeze" ? Secs(cs.PhaseEndsAt) + (int)(CsRules.BuyMs / 1000) : cs.LiveAt is { } l2 && buyWindow ? Secs(l2 + CsRules.BuyMs) : null;
+        var buyWindow = cs.Phase is "warmup" or "freeze" || (cs.Phase == "live" && cs.LiveAt is { } live && hostNow < live + CsRules.BuyMs);
+        int? buyLeft = cs.Phase == "warmup" ? Secs(cs.PhaseEndsAt) : cs.Phase == "freeze" ? Secs(cs.PhaseEndsAt) + (int)(CsRules.BuyMs / 1000) : cs.LiveAt is { } l2 && buyWindow ? Secs(l2 + CsRules.BuyMs) : null;
         // The buy menu: every item with why it can't be bought now; the number keys follow the old list.
         CsBuyItem[]? menu = null;
         if (buyOpen)
@@ -266,6 +266,7 @@ sealed partial class MultiplayerService
                 list.Add(new(keys.TryGetValue(g.Id, out var gk) ? gk : null, g.Id, g.Label + (g.Max > 1 ? " (" + carried.Count(k => k == g.Id) + "/" + g.Max + ")" : ""), "grenade", g.Price, full, g.Price <= me.Money,
                     full ? "Already yours" : why, null));
             }
+            if (cs.Phase == "warmup") list = list.Select(x => x with { Price = 0 }).ToList();
             menu = list.Select(x => x.Key == 0 ? x with { Key = null } : x).OrderBy(x => Array.IndexOf(BuyCategories, x.Category)).ToArray();
         }
         // Money from the last round's result (win reward or loss bonus), shown until the next round goes live.
@@ -309,7 +310,7 @@ sealed partial class MultiplayerService
             !me.Alive && deadWatch is { } watched ? Name(watched) : null,
             !me.Alive && deadWatch is not null ? (DeadWatchCandidates(cs, m.Players, SelfId).Count > 1 ? "Click or Space: next player · Right click: previous" : "The only player left") : null,
             HudGrenades(me), GrenadeVeil(cs, me, hostNow).Flash, GrenadeVeil(cs, me, hostNow).Smoke, CsGrenadeKey, FlashFx(me, hostNow), HudGrenadeHint(me), Current?.Match?.Id,
-            new Dictionary<string, string> { ["Buy"] = CsBuyKey, ["Use"] = CsUseKey, ["Drop"] = CsDropKey, ["Grenades"] = CsGrenadeKey, ["Chat"] = ChatAllKey + " / " + ChatTeamKey, ["Radio"] = string.Join(" / ", RadioKeys), ["Scoreboard"] = prefs.ScoreboardKey });
+            new Dictionary<string, string> { ["Buy"] = CsBuyKey, ["Use"] = CsUseKey, ["Drop"] = CsDropKey, ["Grenades"] = CsGrenadeKey, ["Chat"] = ChatAllKey + " / " + ChatTeamKey, ["Radio"] = string.Join(" / ", RadioKeys), ["Scoreboard"] = prefs.ScoreboardKey, ["Vote"] = "F1 yes / F2 no" }, cs.Paused, cs.TimeoutUntil > hostNow, me.Afk);
     }
 
     // The grenades you carry, in slot order, with the one key 4 has in hand.
@@ -365,7 +366,7 @@ sealed partial class MultiplayerService
     {
         if (Current is not { Match: { Cs: { } cs } m } || cs.Players.FirstOrDefault(p => p.Member == SelfId) is not { } me) return LobbyResult.Fail("no-match", "No CS round is running.");
         var hostNow = clock() + HostOffset();
-        var buyWindow = cs.Phase == "freeze" || (cs.Phase == "live" && cs.LiveAt is { } live && hostNow < live + CsRules.BuyMs);
+        var buyWindow = cs.Phase is "warmup" or "freeze" || (cs.Phase == "live" && cs.LiveAt is { } live && hostNow < live + CsRules.BuyMs);
         // Same round key as the B key, so the next input pass doesn't treat this as a new round and close it.
         csRoundKey = m.Id + "#" + cs.Round;
         if (action == "cs-buy-menu") { buyOpen = !buyOpen && buyWindow && me.Alive && me.InBuyZone != false; return LobbyResult.Success; }
@@ -377,6 +378,7 @@ sealed partial class MultiplayerService
     public static IReadOnlyList<string> CsKeyClashes(IReadOnlySet<string> gameKeys)
     {
         var list = new List<string>();
+        foreach (var key in new[] { "F1", "F2" }) if (gameKeys.Contains(key)) list.Add("KovaaK’s also uses " + key + " (vote). Use /yes or /no in chat.");
         if (gameKeys.Contains(CsBuyKey)) list.Add("KovaaK’s also uses " + CsBuyKey + " (buy).");
         if (gameKeys.Contains(CsUseKey)) list.Add("KovaaK’s also uses " + CsUseKey + " (use, plant, defuse).");
         if (gameKeys.Contains(CsDropKey)) list.Add("KovaaK’s also uses " + CsDropKey + " (drop the bomb).");
@@ -390,7 +392,7 @@ sealed class CsKeyReader
     [DllImport("user32.dll")] static extern nint GetForegroundWindow();
     [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(nint window, out uint processId);
     [DllImport("user32.dll")] static extern short GetAsyncKeyState(int key);
-    readonly HashSet<char> wasDown = [];
+    readonly HashSet<int> wasDown = [];
     // Checks set this: the desktop's real window and keys never reach them (the game may be running).
     internal static bool Detached;
     public bool Foreground()
@@ -405,7 +407,9 @@ sealed class CsKeyReader
         }
         catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception or ArgumentException or OverflowException) { return false; }
     }
-    public bool Down(char key) => !Detached && OperatingSystem.IsWindows() && (GetAsyncKeyState(char.ToUpperInvariant(key)) & 0x8000) != 0;
+    internal Func<int, bool>? ReadKey;
+    public bool Down(char key) => DownCode(char.ToUpperInvariant(key));
+    public bool DownCode(int key) => ReadKey?.Invoke(key) ?? (!Detached && OperatingSystem.IsWindows() && (GetAsyncKeyState(key) & 0x8000) != 0);
     // Down now, and whether it went down since the last read (a click shorter than a service tick).
     public (bool Down, bool Tapped) State(char key)
     {
@@ -413,9 +417,10 @@ sealed class CsKeyReader
         var s = GetAsyncKeyState(char.ToUpperInvariant(key));
         return ((s & 0x8000) != 0, (s & 1) != 0);
     }
-    public bool Pressed(char key)
+    public bool Pressed(char key) => PressedCode(char.ToUpperInvariant(key));
+    public bool PressedCode(int key)
     {
-        var down = Down(key);
+        var down = DownCode(key);
         var edge = down && !wasDown.Contains(key);
         if (down) wasDown.Add(key); else wasDown.Remove(key);
         return edge;

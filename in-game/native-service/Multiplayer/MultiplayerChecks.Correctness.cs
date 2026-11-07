@@ -59,14 +59,16 @@ static partial class MultiplayerChecks
         var snapshot = core.Snapshot();
         var chat = Enumerable.Range(1, 60).Select(i => new ChatLine(i, "peer", "Player", new string('\u4e00', 500), clock(), false)).ToArray();
         var cs = GrenadeMatch(1000, ("host", 1, 0, 0, 0), ("peer", 2, 0, 0, 180));
-        var scoreView = cs.View() with { Score = [7, 5] };
+        var scoreView = cs.View() with { Score = [7, 5], Paused = true, TimeoutUntil = 30000, Ready = ["host"], Players = cs.View().Players.Select(p => p with { Afk = true }).ToArray() };
         var standings = new[] { new Standing("peer", "Player", 1, 7, 7, 7, 7, 12) };
-        var match = new MatchSnapshot("m", MatchPhases.Live, LobbyModes.Cs, "", 60, 1, null, null, 1000, 61000, null, ["host", "peer"], [], [], standings, null, [], Cs: scoreView);
+        var match = new MatchSnapshot("m", MatchPhases.Live, LobbyModes.Cs, "", 60, 1, null, null, 1000, 61000, null, ["host", "peer"], [], [], standings, null, [], Cs: scoreView,
+            Vote: new MatchVote("surrender", "Surrender", 1, null, ["host", "peer"], 1000).View());
         core.Join("peer", "Player");
         var migration = core.Snapshot() with { Settings = snapshot.Settings with { Mode = LobbyModes.Cs }, Match = match };
         var restored = LobbyCore.Restore(migration, "peer", clock).Snapshot();
         Check(restored.Match is { Phase: MatchPhases.Final } && restored.Match.Standings.SequenceEqual(standings) && restored.Match.Cs!.Score.SequenceEqual([7, 5]), "CS migration preserves published standings and ends the match");
         Check(restored.Chat.Any(l => l.Text == "The host left. The match ended at 7–5."), "CS migration explains the final score");
+        Check(restored.Match!.Vote is null && restored.Match.Cs is { Paused: false, TimeoutUntil: null, Ready.Count: 0, Drops.Count: 0 } && restored.Match.Cs.Players.All(p => !p.Afk), "CS migration ends votes, pause, readiness and slot takeover with the match");
         var large = migration with { Match = null, Suggestions = Enumerable.Range(0, 100).Select(i => new Suggestion(new string('界', 100), "peer", ["peer"])).ToArray() };
         using (var sender = new MultiplayerService(transport, new ContentLibrary(null), new NoGameControl(), () => new LocalRun(false, null, null, null, null, 0, 0, 0, null), () => [], () => null, null, false, clock, autoTick: false))
         {

@@ -98,6 +98,19 @@ sealed class OverlayMotion(string output, Func<long>? clock = null)
         }
     }
 
+    public OverlayMouse CatalogView(object? analysis)
+    {
+        lock (gate)
+        {
+            Path(); var points = Window(Now()); double? speed = null;
+            if (points.Length >= 2) { var a = points[^2]; var b = points[^1]; var dt = b[0] - a[0];
+                var yaw = (b[1] - a[1] + 540) % 360 - 180; var pitch = b[2] - a[2];
+                if (dt > 0) speed = Math.Sqrt(yaw * yaw + pitch * pitch) * 1000 / dt;
+            }
+            return new(speed, points.TakeLast(120).Select(p => new OverlayMousePoint(p[0], p[1], p[2])).ToArray(), analysis);
+        }
+    }
+
     object Path()
     {
         var now = Now();

@@ -30,8 +30,18 @@ static class PacketJson
             _ => throw new JsonException("Unknown message")
         };
         ValidateFields(message.Body, schema);
-        if (message.T == "command" && message.Body.TryGetProperty("args", out var args))
-            ValidateFields(args, "text:s scope:s kind:s strength:n o:a r:a member:s");
+        if (message.T == "command")
+        {
+            if (!message.Body.TryGetProperty("action", out var action) || !message.Body.TryGetProperty("args", out var args)) throw new JsonException("Missing command fields");
+            ValidateFields(args, "text:s scope:s kind:s strength:n o:a r:a member:s command:s settings:o");
+            if (action.GetString() == "match-control")
+            {
+                if (!args.TryGetProperty("command", out var command) || command.GetString() is not ("surrender" or "timeout" or "pause" or "unpause" or "kickvote" or "yes" or "no" or "ready" or "return"))
+                    throw new JsonException("Invalid match control");
+                if (command.GetString() == "kickvote" && (!args.TryGetProperty("member", out var member) || string.IsNullOrWhiteSpace(member.GetString()))) throw new JsonException("Missing vote target");
+            }
+            if (action.GetString() == "settings" && args.TryGetProperty("settings", out var settings)) ValidateFields(settings, "csWarmup:b duelAfkSeconds:n");
+        }
     }
     static void ValidateFields(JsonElement body, string schema)
     {

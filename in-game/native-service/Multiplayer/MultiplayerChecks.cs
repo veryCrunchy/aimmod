@@ -33,6 +33,7 @@ static partial class MultiplayerChecks
         CsMode();
         CsWeapons();
         WeaponDropChecks();
+        MatchControlChecks();
         CsFeelChecks();
         CsGrenadeChecks();
         LoadGate();
@@ -702,7 +703,7 @@ static partial class MultiplayerChecks
 
         // Lobby: 3v3, 4v4 or 5v5 only, up to 10 players, halves of 6-15 rounds.
         var start = new LobbySettings(Scenario: content.Scenario("Synthetic A"));
-        var cs = LobbyRules.Apply(start, J(new { mode = "cs", maxPlayers = 7, halfRounds = 30 }), 2, content).Settings!;
+        var cs = LobbyRules.Apply(start, J(new { mode = "cs", csWarmup = false, maxPlayers = 7, halfRounds = 30 }), 2, content).Settings!;
         Check(cs.MaxPlayers == 8 && cs.HalfRounds == 15 && cs.Overtime && cs.TotalRounds == 30 && LobbyRules.Apply(cs, J(new { maxPlayers = 12 }), 2, content).Settings!.MaxPlayers == 10, "CS: even team sizes up to 5v5, halves capped at 15 rounds");
         Check(LobbyRules.Apply(start, J(new { mode = "deathmatch", maxPlayers = 10 }), 2, content).Settings!.MaxPlayers == 8, "Other modes stay at 8 players");
         Check(MatchScenario.Name(cs).Contains(" - CS competitive - ", StringComparison.Ordinal) && MatchScenario.Needed(cs), "CS plays its own arena");
@@ -789,7 +790,7 @@ static partial class MultiplayerChecks
 
         // On the host: 6 players start, freeze refuses hits, buys go through lobby commands.
         var (core, clock, advance) = Lobby();
-        core.Apply("host", "settings", Patch(new { mode = "cs", maxPlayers = 6, countdown = 3 }), content);
+        core.Apply("host", "settings", Patch(new { mode = "cs", csWarmup = false, maxPlayers = 6, countdown = 3 }), content);
         foreach (var id in new[] { "p2", "p3", "p4", "p5" }) core.Join(id, id);
         ReadyAll(core);
         Check(core.Apply("host", "start", default, content).Code == "blocked" && LobbyRules.StartBlockers(core.Snapshot()).Any(b => b.Code == "cs-teams"), "CS with five players is blocked: it needs 6, 8 or 10");

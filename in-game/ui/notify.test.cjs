@@ -178,3 +178,10 @@ test('the pointer relayed through the service hovers, replays new clicks once, a
   fp('AIMMOD_POINTER_1\toff\t0\t0\t0\t0\t0\nclick\t7\t110\t205\t150\t220\n');
   assert.equal(n.posts.filter(p=>p.action==='retry-load').length,1,'off: ignored');
 });
+
+test('team vote shows thresholds, keys and a recorded ballot',()=>{
+  const n=setup();const vote={label:'Surrender',yes:2,no:0,required:3,left:18,canVote:true};
+  n.render({version:1,active:false,vote});assert.match(n.box.text(),/Surrender/);assert.match(n.box.text(),/3 needed/);assert.match(n.box.text(),/F1 Yes/);assert.match(n.box.text(),/F2 No/);
+  n.render({version:1,active:false,vote:Object.assign({},vote,{canVote:false,yes:3})});assert.match(n.box.text(),/Vote recorded/);
+  n.render({version:1,active:false});assert.doesNotMatch(n.box.text(),/Surrender/);
+});

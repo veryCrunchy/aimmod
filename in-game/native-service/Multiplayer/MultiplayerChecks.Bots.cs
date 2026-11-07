@@ -175,7 +175,11 @@ static partial class MultiplayerChecks
             new Dictionary<string, BotSight> { ["tbot"] = new(t, tx, ty, 100, 0, new HashSet<int>()), ["ctbot"] = new(t, cx, cy, 100, 0, new HashSet<int>()) }, cs.View(), map, []);
         // Freeze time: they stand at their round's spawn and buy (pistol round: armour only).
         var freeze = brain.Step(World(0, -3000, 0, 3000));
-        Check(freeze.Orders.All(o => o.Mode == "hold" && o.PlaceToken == "cs1" && o.PlaceAt is { Length: 4 }), "In freeze time bots stand at their round's spawn");
+        Check(freeze.Orders.All(o => o.Mode == "hold" && o.PlaceToken == "cs1.1" && o.PlaceAt is { Length: 4 }), "In freeze time bots stand at their round's spawn");
+        cs.SetPaused(true, t);
+        var paused = brain.Step(World(0, -3000, 0, 3000));
+        Check(paused.Orders.All(o => o.Mode == "hold") && paused.Actions.Count == 0 && paused.Shots.Count == 0, "Paused bots hold position and preserve their buy attempts");
+        cs.SetPaused(false, t);
         t += 3000;
         var buys = brain.Step(World(0, -3000, 0, 3000)).Actions.Where(a => a.Action == "buy").Select(a => (a.Bot, Item: (string)a.Args["item"])).ToList();
         Check(buys.Contains(("tbot", "kevlar")) && buys.Contains(("ctbot", "kevlar")) && buys.All(b => b.Item == "kevlar"), "On the pistol round bots buy armour");

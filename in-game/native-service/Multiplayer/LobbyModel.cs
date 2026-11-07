@@ -91,7 +91,9 @@ sealed record LobbySettings(
     // place of KovaaK's own (on by default).
     bool DynamicCrosshair = true,
     // CS: dead players' chat reaches everyone (off: only other dead players and spectators see it, as in CS).
-    bool DeadTalk = false)
+    bool DeadTalk = false,
+    bool CsWarmup = true,
+    int DuelAfkSeconds = 90)
 {
     // Team damage: on by default in CS competitive (CS2 rules), off elsewhere unless the host turns it on.
     [JsonIgnore] public bool EffectiveFriendlyFire => FriendlyFire ?? Mode == LobbyModes.Cs;
@@ -106,7 +108,7 @@ sealed record LobbySettings(
     [JsonIgnore] public int? TotalRounds => Mode switch { LobbyModes.Race or LobbyModes.Rounds or LobbyModes.Tracking => Rounds, LobbyModes.Deathmatch or LobbyModes.Vampiric or LobbyModes.Instagib or LobbyModes.TeamDeathmatch => 1, LobbyModes.Cs => HalfRounds * 2, _ => null };
     // Values that change what people play. Changing any of them clears ready states.
     [JsonIgnore] public string PlayKey => string.Join('|', Mode, Scenario?.Hash, MapOverride?.Hash, Rounds, FirstTo, TimeLimit,
-        WeaponProfile, MovementProfile, CharacterProfile, TargetSpeed, TargetSize, FragLimit, Lifesteal, RequireFire, HalfRounds, Overtime, Tournament?.MatchId, Tournament?.Game, Tournament?.Seed, AdsZoom, AdsSensitivity);
+        WeaponProfile, MovementProfile, CharacterProfile, TargetSpeed, TargetSize, FragLimit, Lifesteal, RequireFire, HalfRounds, Overtime, Tournament?.MatchId, Tournament?.Game, Tournament?.Seed, AdsZoom, AdsSensitivity, CsWarmup, DuelAfkSeconds);
 }
 
 static class AdsZooms
@@ -146,7 +148,7 @@ sealed record MatchSnapshot(string Id, string Phase, string Mode, string Scenari
     int? FirstTo, long? StartsAt, long? EndsAt, long? NextAt, IReadOnlyList<string> Players, IReadOnlyList<ScoreLine> Live,
     IReadOnlyList<RoundResult> Rounds, IReadOnlyList<Standing> Standings, string? WinnerId, IReadOnlyList<string> Rematch, long? RematchDeadline = null, IReadOnlyList<string>? Loaded = null,
     string? Attacker = null, IReadOnlyList<TrackView>? Tracking = null, CombatView? Combat = null, CsView? Cs = null,
-    IReadOnlyDictionary<string, string>? LoadIssues = null, bool LoadFailed = false, int LoadAttempt = 0);
+    IReadOnlyDictionary<string, string>? LoadIssues = null, bool LoadFailed = false, int LoadAttempt = 0, MatchVoteView? Vote = null);
 // Live tracking-duel state for the HUD: each player's time on target so far (host score).
 sealed record TrackView(string Member, double Percent, double Seconds, double Coverage, double LagMs, bool Disputed, string? Reason)
 {
@@ -185,7 +187,7 @@ static class LobbyRules
 {
     public const int MaxName = 32, MaxChat = 200, MaxContentName = 128;
     static readonly HashSet<string> Keys = ["mode", "scenario", "mapOverride", "maxPlayers", "spectators", "rounds", "firstTo",
-        "timeLimit", "weapon", "movement", "character", "targetSpeed", "targetSize", "privacy", "countdown", "lateJoin", "autoStart", "voting", "fragLimit", "lifesteal", "requireFire", "halfRounds", "overtime", "adsZoom", "adsSensitivity", "friendlyFire", "dynamicCrosshair", "deadTalk"];
+        "timeLimit", "weapon", "movement", "character", "targetSpeed", "targetSize", "privacy", "countdown", "lateJoin", "autoStart", "voting", "fragLimit", "lifesteal", "requireFire", "halfRounds", "overtime", "adsZoom", "adsSensitivity", "friendlyFire", "dynamicCrosshair", "deadTalk", "csWarmup", "duelAfkSeconds"];
 
     // A member id AimModCore accepts in play-state.tsv: [A-Za-z0-9_-]{1,64}.
     public static bool IsStreamSafe(string? id) => id is { Length: > 0 and <= 64 } && id.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_');
@@ -275,6 +277,8 @@ static class LobbyRules
                     if (value.ValueKind == JsonValueKind.Null) { next = next with { FragLimit = null }; break; }
                     if (Number() is not { } frags) return (null, Bad("Frag limit must be a number.")); next = next with { FragLimit = (int)Clamp(frags, 1, 100, 1) }; break;
                 case "halfRounds": if (Number() is not { } half) return (null, Bad("Rounds per half must be a number.")); next = next with { HalfRounds = (int)Clamp(half, 6, 15, 1) }; break;
+                case "csWarmup": if (Flag() is not { } warmup) return (null, Bad("Warmup must be on or off.")); next = next with { CsWarmup = warmup }; break;
+                case "duelAfkSeconds": if ((value.ValueKind != JsonValueKind.Number || !value.TryGetInt32(out var afk)) || afk is < 0 or > 600 || afk is > 0 and < 30) return (null, Bad("AFK grace must be 0 or 30 to 600 seconds.")); next = next with { DuelAfkSeconds = afk }; break;
                 case "overtime": if (Flag() is not { } ot) return (null, Bad("Overtime must be on or off.")); next = next with { Overtime = ot }; break;
                 case "adsZoom": if (Text() is not { } zoom || !AdsZooms.Values.Contains(zoom)) return (null, Bad("ADS zoom is off, CS-style or all weapons.")); next = next with { AdsZoom = zoom }; break;
                 case "adsSensitivity": if (Number() is not { } adsSens) return (null, Bad("Zoom sensitivity must be a number.")); next = next with { AdsSensitivity = Clamp(adsSens, 0.2, 2, 0.05) }; break;
@@ -350,6 +354,7 @@ static class LobbyRules
     // Snapshots from a remote host are trusted for display only after the same bounds hold.
     public static bool Plausible(LobbySettings s) =>
         LobbyModes.All.Contains(s.Mode) && LobbyPrivacy.All.Contains(s.Privacy)
+        && (s.DuelAfkSeconds == 0 || s.DuelAfkSeconds is >= 30 and <= 600)
         && s.MaxPlayers is >= LobbySettings.MinPlayers and <= LobbySettings.MaxPlayerLimit && s.MaxPlayers <= LobbyModes.MaxPlayers(s.Mode) && s.HalfRounds is >= 6 and <= 15
         && AdsZooms.Values.Contains(s.AdsZoom) && s.AdsSensitivity is >= 0.2 and <= 2
         && s.Rounds is >= 1 and <= 10 && s.FirstTo is >= 1 and <= 7

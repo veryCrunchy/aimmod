@@ -217,9 +217,10 @@ sealed class BotBrain(int seed = 0)
             var slot = 0;
             if (w.Cs is { } cs && csSelf is not null)
             {
+                if (cs.Paused) { orders.Add(Order("hold", null, null, sightList, role: "paused")); continue; }
                 slot = csSelf.Primary is not null ? CsRules.PrimarySlot : CsRules.PistolSlot;
                 if (st.Held != slot) { st.Held = slot; actions.Add(new BotAction(member, "hold", new() { ["slot"] = slot })); }
-                if (cs.Phase == "freeze" || (cs.Phase == "live" && cs.LiveAt is { } live && w.Now < live + 3000))
+                if (cs.Phase is "warmup" or "freeze" || (cs.Phase == "live" && cs.LiveAt is { } live && w.Now < live + 3000))
                 {
                     if (st.BoughtRound != cs.Round) { st.BoughtRound = cs.Round; st.BuyAt = w.Now + random.Next(800, 2500); st.BuyTries = 0; }
                     if (w.Now >= st.BuyAt && st.BuyTries < 6)
@@ -233,7 +234,7 @@ sealed class BotBrain(int seed = 0)
                     orders.Add(Order("hold", null, null, sightList, role: "freeze"));
                     continue;
                 }
-                if (cs.Phase is not ("live" or "planted"))
+                if (cs.Phase is not ("warmup" or "live" or "planted"))
                 {
                     if (st.Using) { st.Using = false; actions.Add(new BotAction(member, "use", new() { ["held"] = false })); }
                     orders.Add(Order("hold", null, null, []));
@@ -1050,6 +1051,9 @@ sealed class BotBrain(int seed = 0)
     // A CS bot's job now: its plan's job, and the bomb's calls (plant, fetch, post-plant, retake, defuse).
     Job? CsJob(BotWorld w, CsView cs, CsPlayerView me, string member, double[] eye, string skill)
     {
+        if (cs.Phase == "warmup") return null;
+        if (BotStrategy.SaveAwp(cs, me, w.Now) && SpawnPoint(w, me.Side) is { } saveSpot)
+            return new Job(saveSpot, false, "saving AWP", Stop: 0.7, Hurry: true);
         var sites = cs.Sites ?? [];
         if (sites.Count == 0) return null;
         var bomb = cs.Bomb;
@@ -1185,7 +1189,7 @@ sealed class BotBrain(int seed = 0)
     // Where the bot stands at a round start (CS) or after a respawn (the host's spawn for it).
     static (string?, double[]?) Place(BotWorld w, string member)
     {
-        if (w.Cs is { Spawns: { } spawns } cs && spawns.TryGetValue(member, out var s) && s.Length >= 3) return ("cs" + cs.Round, [s[0], s[1], s[2], s.Length > 3 ? s[3] : 0]);
+        if (w.Cs is { Spawns: { } spawns } cs && spawns.TryGetValue(member, out var s) && s.Length >= 3) return ("cs" + cs.Round + (cs.Players.FirstOrDefault(p => p.Member == member)?.SpawnSerial is > 0 and var serial ? "." + serial : ""), [s[0], s[1], s[2], s.Length > 3 ? s[3] : 0]);
         var e = w.Events.LastOrDefault(x => x.Kind == "respawn" && x.Member == member && x.Spawn is { Length: >= 3 });
         return e is null ? (null, null) : ("r" + e.Id, [e.Spawn![0], e.Spawn[1], e.Spawn[2], e.Spawn.Length > 3 ? e.Spawn[3] : 0]);
     }
