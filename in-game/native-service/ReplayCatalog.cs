@@ -45,7 +45,7 @@ sealed class ReplayCatalog
     }
     static double? SummaryNumber(JsonElement value, string key) =>
         value.TryGetProperty(key, out var field) && field.ValueKind == JsonValueKind.Number && field.TryGetDouble(out var number) && double.IsFinite(number) ? number : null;
-    public IReadOnlyList<ReplaySummary> List()
+    public IReadOnlyList<ReplaySummary> List(Action? checkpoint = null)
     {
         var result = new List<ReplaySummary>();
         foreach (var file in new DirectoryInfo(directory).EnumerateFiles("*.amreplay")
@@ -53,6 +53,7 @@ sealed class ReplayCatalog
         {
             try
             {
+                checkpoint?.Invoke();
                 var id = Path.GetFileNameWithoutExtension(file.Name);
                 var path = Resolve(id);
                 if (path is null) continue;

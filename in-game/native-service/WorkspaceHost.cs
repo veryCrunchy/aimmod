@@ -14,6 +14,7 @@ sealed class WorkspaceHost : IAsyncDisposable
     readonly GameCommands gameCommands;
     readonly CancellationTokenSource startLoop = new();
     ReplayCatalog? replayCatalog;
+    readonly PracticePipeline practice;
     readonly ReplayKeyboard keyboard;
     readonly RendererAcknowledgement renderer;
     readonly OverlaySettings overlaySettings;
@@ -158,6 +159,10 @@ sealed class WorkspaceHost : IAsyncDisposable
         var html = reader.ReadToEnd();
         var replays = new ReplayCatalog(output);
         replayCatalog = replays;
+        practice = new PracticePipeline(output, replays, () => { var snapshot = ReadLive(); return snapshot.Active || !snapshot.Available; });
+        app.MapGet(prefix + "/run-details/{id}/practice", (string id) => Results.Json(practice.Read(id), PracticePipeline.Json));
+        app.MapGet(prefix + "/practice", () => Results.Json(practice.Summary(), PracticePipeline.Json));
+        app.MapGet(prefix + "/practice.js", () => Results.Stream(typeof(WorkspaceHost).Assembly.GetManifestResourceStream("AimMod.PracticeScript")!, "application/javascript"));
         var library = new ReplayLibrary(replays, output);
         var inbox = new ReplayInbox(output, replays);
         app.MapGet(prefix + "/ui", () => Results.Content(html, "text/html", Encoding.UTF8));
@@ -391,6 +396,7 @@ sealed class WorkspaceHost : IAsyncDisposable
         // retract this process's overlay URL so the game never loads a dead port.
         startLoop.Cancel();
         await obsSwitching.DisposeAsync();
+        practice.Dispose();
         tournaments?.Dispose();
         multiplayer.Dispose();
         await keyboard.DisposeAsync();

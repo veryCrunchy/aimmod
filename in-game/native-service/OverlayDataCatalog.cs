@@ -36,6 +36,11 @@ static class OverlayDataCatalog
     // Register nullable fields here so their paths and types survive menu and offline states.
     static readonly (string Prefix, string Type, string Unit, string Names)[] Schema =
     [
+        ("mouse.flick", "number", "ms", "reactionMs,ballisticMs,correctionMs,verificationMs"),
+        ("mouse.flick", "number", "", "corrections,throughput,primaryEndRatio"),
+        ("mouse.tracking", "number", "deg", "horizontalError,verticalError,yawBias,pitchBias"),
+        ("mouse.tracking", "number", "ms", "lag,reversalDelay"),
+        ("mouse.tracking", "number", "", "behindShare,sparc"),
         ("live", "number", "", "score,shots,hits,kills,damage,personalBest,opponentScore,projectedScore,projectedDelta,scorePerMinute,killsPerSecond"),
         ("live", "number", "s", "seconds,opponentDuration,remainingSeconds,durationSeconds,lastTimeToKillSeconds"),
         ("live", "number", "%", "accuracy"),

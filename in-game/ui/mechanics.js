@@ -14,7 +14,7 @@
   var panel=node('div',undefined,'panel mechanics-runs');panel.appendChild(node('h2','Explore a recorded run'));
   if(runs.length){panel.appendChild(node('p','Open a run to see its timeline, shots and target responses.','subtle'));runs.slice(0,8).forEach(function(r){var b=node('button',undefined,'mechanics-run');b.type='button';b.appendChild(node('span',F().dateTime(r.Timestamp)));b.appendChild(node('strong',F().known(r.Smoothness)?'Control '+F().number(r.Smoothness,1):'Control —'));b.appendChild(node('span',(F().known(r.Score)?F().number(r.Score)+' score · ':'')+'Open run'));b.setAttribute('aria-label','Open run from '+F().dateTime(r.Timestamp));b.onclick=function(){onRun(r);};panel.appendChild(b);});}
   else {panel.appendChild(node('p',summaries.some(function(s){return s.Samples>0;})?'Browse history to inspect a single run.':'Choose another period or browse history for a run with movement measurements.','subtle'));var row=node('div',undefined,'actions');var history=node('button','Browse scenario history','button');history.type='button';history.onclick=onHistory;row.appendChild(history);panel.appendChild(row);}
-  container.appendChild(panel);
+  container.appendChild(panel);if(root.AimModPractice){var practice=node('div',undefined,'panel');container.appendChild(practice);root.AimModPractice.summary(practice,'map');}
  }
  root.AimModMechanics={render:render};
 })(window);
