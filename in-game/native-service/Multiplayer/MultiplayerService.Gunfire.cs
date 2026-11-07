@@ -26,7 +26,7 @@ sealed partial class MultiplayerService
     {
         if (match.Combat?.Players.FirstOrDefault(p => p.Member == member) is not { Alive: true }) return null;
         if (match.Cs is not { } cs) return match.Mode == LobbyModes.Instagib ? ("railgun", CombatRules.Railgun.TimeBetweenShots) : ("rifle", CombatRules.Weapon(match.Mode).TimeBetweenShots);
-        if (cs.Phase is not ("live" or "planted" or "end") || cs.Players.FirstOrDefault(p => p.Member == member) is not { Alive: true } p) return null;
+        if (cs.Phase is not ("warmup" or "live" or "planted" or "end") || cs.Players.FirstOrDefault(p => p.Member == member) is not { Alive: true } p) return null;
         if (slot is CsRules.BombSlot or CsRules.GrenadeSlot) return null;
         var weapon = slot == CsRules.StabSlot ? CsRules.Knife : CsRules.InSlot(slot, p.Primary, p.Secondary, cs.Bomb.Carrier == member) ?? CsRules.Find(p.Secondary);
         return weapon is null ? null : (weapon.Id, slot == CsRules.StabSlot ? CsRules.Stab.TimeBetweenShots : weapon.Combat.TimeBetweenShots);
@@ -37,7 +37,8 @@ sealed partial class MultiplayerService
     {
         if (core is null || !match.Players.Contains(member) || ShotWeapon(match, member, slot) is not { } w) return;
         shotLog.Reset(ShotKey(match));
-        shotLog.Record(member, t, w.Weapon, w.Interval, from, hidden, clock());
+        if (match.Cs?.Paused == true) return;
+        if (shotLog.Record(member, t, w.Weapon, w.Interval, from, hidden, clock()) is not null) core.RecordHumanShot(member);
     }
 
     // Host: everyone's new shots to every other machine, as soon as they are known.

@@ -177,6 +177,12 @@ test('the dynamic crosshair opens with the cone and is drawn only when wanted',(
   assert.equal(s.hud.sights(canvas,'not json'),null);assert.equal(canvas.style.display,'none');
 });
 
+test('match flow states label the HUD and explain returning control',()=>{
+  const s=setup();
+  for(const [state,label] of [[{phase:'warmup'},'Warmup'],[{paused:true},'Host pause'],[{timeout:true},'Tactical timeout'],[{afk:true},'Move or fire to return']]){
+    s.hud.render(s.root,Object.assign({},base,{buyOpen:false},state),()=>{});assert.ok(s.text(s.root).includes(label));
+  }
+});
 test('buy categories form six independent cells while ownership blocks repeat buys',()=>{
   const s=setup(),calls=[];s.hud.render(s.root,base,(a,id)=>calls.push([a,id]));
   const categories=s.walk(s.root).find(n=>n.className==='cs-buy-cols');assert.equal(categories.children.length,6);

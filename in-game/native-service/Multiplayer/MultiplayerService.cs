@@ -361,7 +361,7 @@ sealed partial class MultiplayerService : IDisposable
         character = new { preset = s.CharacterProfile.Preset, custom = s.CharacterProfile.Custom },
         targetSpeed = s.TargetSpeed, targetSize = s.TargetSize, privacy = s.Privacy, countdown = s.Countdown, lateJoin = s.LateJoin, autoStart = s.AutoStart, voting = s.Voting,
         fragLimit = s.FragLimit, lifesteal = s.Lifesteal, requireFire = s.RequireFire, halfRounds = s.HalfRounds, overtime = s.Overtime, adsZoom = s.AdsZoom, adsSensitivity = s.AdsSensitivity,
-        dynamicCrosshair = s.DynamicCrosshair,
+        dynamicCrosshair = s.DynamicCrosshair, csWarmup = s.CsWarmup, duelAfkSeconds = s.DuelAfkSeconds,
     };
     PresetStore LoadPresets()
     {
@@ -1048,6 +1048,7 @@ sealed partial class MultiplayerService : IDisposable
             var duel = DuelHud();
             var combat = CombatHud();
             var cs = CsHud();
+            var vote = VoteHud();
             var (board, boardFull) = NoticeBoards();
             var play = PlayRequest(clock());
             var chat = ChatHud();
@@ -1068,7 +1069,7 @@ sealed partial class MultiplayerService : IDisposable
                 swallowMenu = CsSwallowMenu(clock()) ? true : (bool?)null,
                 actions = notice?.Actions, interactive = notice?.Actions is { Count: > 0 } || menu || typing,
                 // cursor: the CS buy menu or a radio menu is open, so AimModNativeUI shows the cursor in game (and hands input back after).
-                cursor = menu, typing = typing ? true : (bool?)null, play, volume = prefs.Sounds ? prefs.Volume : 0, duel, combat, cs, board, boardFull,
+                cursor = menu, typing = typing ? true : (bool?)null, play, volume = prefs.Sounds ? prefs.Volume : 0, duel, combat, cs, vote, board, boardFull,
                 chat = chat is null ? null : page ? chat : (object)new { open = chat.Open, session = chat.Session, lines = chat.Lines.Count, radio = chat.Radio is not null },
             }, Protocol.Json);
         }
@@ -1367,6 +1368,7 @@ sealed partial class MultiplayerService : IDisposable
             StepScoreBots();
             StepGrenades();
             StepChat();
+            StepMatchControls();
             TrackLocalRun();
             PushShots();
             Remember();
@@ -2011,7 +2013,7 @@ sealed partial class MultiplayerService : IDisposable
             var lastSpawn = view.Events.LastOrDefault(e => e.Member == SelfId && e.Kind is "respawn");
             var extra = PhaseLines(match).ToList();
             if (match.Cs is { } csv && csv.Spawns?.GetValueOrDefault(SelfId) is { Length: 4 } rs)
-                lastSpawn = new CombatEvent(1_000_000 + csv.Round, "respawn", 0, SelfId, null, 0, false, 100, null, rs); // one teleport per CS round
+                lastSpawn = new CombatEvent(1_000_000 + (csv.Players.FirstOrDefault(p => p.Member == SelfId)?.SpawnSerial ?? csv.Round), "respawn", 0, SelfId, null, 0, false, 100, null, rs); // round starts, warmup respawns and control handbacks
             // The match scenario's exact name: AimModCore applies play state only there.
             var scenario = plan is { } pl && pl.Key == PlanKey(match) ? pl.Scenario : Current is { } cur ? MatchScenario.Name(cur.Settings) : match.Scenario;
             var hostNow = clock() + HostOffset();
@@ -2091,7 +2093,7 @@ sealed partial class MultiplayerService : IDisposable
     void WriteAvatarState(MatchSnapshot match, CombatView view, CombatPlayerView self)
     {
         if (outputFolder is null) return;
-        var rows = view.Players.Where(p => p.Member != SelfId).Select(p =>
+        var rows = view.Players.Where(p => p.Member != SelfId || match.Cs?.Players.Any(x => x.Member == p.Member && x.Afk) == true).Select(p =>
         {
             var died = view.Events.LastOrDefault(e => e.Member == p.Member && e.Kind == "death");
             var friend = self.Team != 0 && p.Team == self.Team;
@@ -2099,7 +2101,8 @@ sealed partial class MultiplayerService : IDisposable
                 + "\t" + (p.Alive ? 0 : died?.T ?? 0) + "\t" + (p.Alive ? 0 : p.RespawnAt ?? 0)
                 + (match.Cs is { } cs ? "\t" + AvatarWeapon(cs, p.Member) : "");
         });
-        var body = "match\t" + Uri.EscapeDataString(match.Id) + "\n" + string.Join("\n", rows) + "\n";
+        var hidden = match.Cs?.Players.Where(p => p.Afk && p.Member != SelfId).Select(p => "peer\t" + p.Member + "\t0\tenemy\t0\t0\t0\t-") ?? [];
+        var body = "match\t" + Uri.EscapeDataString(match.Id) + "\n" + string.Join("\n", rows.Concat(hidden)) + "\n";
         var now = clock();
         if (!AvatarStateDue(body, lastAvatarState, avatarWrittenAt, now)) return;
         lastAvatarState = body; avatarWrittenAt = now;
@@ -2131,6 +2134,7 @@ sealed partial class MultiplayerService : IDisposable
         if (Current is not { Match: { } match } || !match.Players.Contains(SelfId)) { trackedRound = null; return; }
         var restarted = DetectRestart(match);
         ReadLockPresses();
+        if (match.Mode == LobbyModes.Duel) StreamTracking(match);
         if (match.Mode == LobbyModes.Tracking) { StreamTracking(match); WriteRoundState(match, null, PhaseLines(match)); return; }
         if (LobbyModes.Shooting(match.Mode)) { StreamCombat(match); if (match.Cs is not null) CsInput(match); return; }
         // Score modes: frozen before go-live in a generated scenario (AimModCore ignores it elsewhere).

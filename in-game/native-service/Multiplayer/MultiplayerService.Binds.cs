@@ -38,6 +38,7 @@ sealed partial class MultiplayerService
         if (uses.Count == 0) return [];
         var own = new List<(string, string)>();
         if (s.Mode == LobbyModes.Cs) { own.Add(("Plant / defuse", CsUseKey)); own.Add(("Buy", CsBuyKey)); }
+        if (MatchChat.Teams(s.Mode)) { own.Add(("Vote yes", "F1")); own.Add(("Vote no", "F2")); }
         own.Add(("Scoreboard", prefs.ScoreboardKey));
         // In-match chat (MultiplayerService.Chat.cs): team chat and the radio menus only where there are teams.
         own.Add(("All chat", ChatAllKey));

@@ -492,6 +492,23 @@ sealed class CsGrenadeField
     readonly List<Effect> effects = [];
     readonly List<Blast> blasts = [];
     readonly List<Item> items = [];
+    public void ShiftTime(long delta)
+    {
+        if (delta <= 0) return;
+        foreach (var g in thrown) { g.At += delta; g.GoesOff += delta; }
+        foreach (var e in effects)
+        {
+            e.Starts += delta; e.Ends += delta; e.NextTick += delta;
+            if (e.Fire is { } fire)
+            {
+                foreach (var f in fire.Flames) f.Starts += delta;
+                foreach (var p in fire.Probes) p.Asked += delta;
+            }
+        }
+        foreach (var b in blasts) { b.T += delta; b.Deadline += delta; }
+        foreach (var i in items) i.Since += delta;
+        Changed();
+    }
     readonly Dictionary<int, double?> floors = new();
     long nextId; int nextTag;
     public int Revision { get; private set; }

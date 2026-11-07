@@ -1219,9 +1219,11 @@
     var oneOnOne=s.mode==='duel'||s.mode==='tracking-duel'||s.mode==='vampiric';
     if(s.mode==='cs')pl.appendChild(settingRow('Team size','',segmented([{id:'6',label:'3v3'},{id:'8',label:'4v4'},{id:'10',label:'5v5'}],String(s.maxPlayers),function(id){setting('maxPlayers',Number(id));},false,'team size')));
     else pl.appendChild(settingRow('Max players',oneOnOne?'Always one against one in this mode.':'Including you.',stepper(s.maxPlayers,2,8,1,function(v){return F.number(v,0);},function(v){setting('maxPlayers',v);},oneOnOne,'max players')));
+    if(oneOnOne)pl.appendChild(settingRow('AFK grace','Seconds without movement or shots before forfeiting. Zero turns this off.',stepper(s.duelAfkSeconds==null?90:s.duelAfkSeconds,0,600,30,function(v){return v?v+' s':'Off';},function(v){setting('duelAfkSeconds',v);},false,'AFK grace')));
     if(s.mode==='duel')pl.appendChild(settingRow('First to','',stepper(s.firstTo,1,7,1,function(v){return F.number(v,0)+(v===1?' win':' wins');},function(v){setting('firstTo',v);},false,'first to')));
     else if(s.mode==='cs'){
       pl.appendChild(settingRow('Rounds per half','Sides switch after this many (CS2: 12).',stepper(s.halfRounds||12,6,15,1,function(v){return F.number(v,0);},function(v){setting('halfRounds',v);},false,'rounds per half')));
+      pl.appendChild(settingRow('Warmup','60 seconds, or until everyone types /ready. Free buys and respawns.',toggleSwitch(s.csWarmup!==false,'Warmup',function(){setting('csWarmup',s.csWarmup===false);})));
       pl.appendChild(settingRow('Overtime','A tie goes to overtime halves of 3 rounds with $12,500.',toggleSwitch(s.overtime!==false,'Overtime',function(){setting('overtime',s.overtime===false);})));
       pl.appendChild(settingRow('ADS zoom','Right mouse zoom. CS-style: only the AWP scopes, as in CS2.',segmented([{id:'off',label:'Off'},{id:'cs',label:'CS-style'},{id:'all',label:'All weapons'}],s.adsZoom||'cs',function(id){setting('adsZoom',id);},false,'ADS zoom')));
       if((s.adsZoom||'cs')!=='off')pl.appendChild(settingRow('Zoom sensitivity','Sensitivity while zoomed, against hip fire (1.0 keeps it).',stepper(typeof s.adsSensitivity==='number'?s.adsSensitivity:1,0.2,2,0.05,function(v){return F.number(v,2)+'x';},function(v){setting('adsSensitivity',v);},false,'zoom sensitivity')));
@@ -1597,6 +1599,20 @@
     if(lobby.isHost)head.appendChild(actions(button('End match',function(){act('end');},'compact quiet danger')));p.appendChild(head);
     var body=node('div','mp-live-body');body.appendChild(hud(lobby,match));p.appendChild(body);main.appendChild(p);
     var playing=match.players.indexOf(lobby.self)>=0;
+    if(match.cs||match.mode==='team-deathmatch'){
+      var controls=node('div','panel mp-card');controls.appendChild(node('h2','','Match controls'));
+      function control(label,command,target){return button(label,function(){act('match-control',{command:command,member:target});},'compact quiet');}
+      if(playing){
+        if(match.cs&&match.cs.phase==='warmup')controls.appendChild(actions(control('Ready for round 1','ready')));
+        else if(match.cs)controls.appendChild(actions(control('Vote to surrender','surrender'),control('Tactical timeout','timeout')));
+        var roster=match.cs?match.cs.players:match.combat?match.combat.players:[],self=roster.filter(function(p){return p.member===lobby.self;})[0];
+        roster.forEach(function(p){var m=member(p.member);if(self&&p.team===self.team&&p.member!==lobby.self&&p.member!==lobby.hostId&&m&&!m.bot&&m.role==='player')controls.appendChild(actions(control('Vote to kick '+safe(m.name),'kickvote',p.member)));});
+      }
+      if(lobby.isHost&&match.cs)controls.appendChild(actions(control(match.cs.paused?'Resume match':'Pause match',match.cs.paused?'unpause':'pause')));
+      if(match.vote&&match.vote.eligible.indexOf(lobby.self)>=0){controls.appendChild(node('p','',match.vote.label+' · '+match.vote.yes.length+' / '+match.vote.required+' yes'));controls.appendChild(actions(control('F1 Yes','yes'),control('F2 No','no')));}
+      controls.appendChild(node('p','subtle','Chat: /surrender, /timeout, /kickvote name, /yes, /no. Host: /pause, /unpause.'));
+      side.appendChild(controls);
+    }
     if(playing){var you=node('div','panel mp-card');add(you,node('h2','','Your run'));var plan=planBox(lobby);if(plan)you.appendChild(plan);else you.appendChild(node('p','subtle','Play the round in KovaaK’s.'));
       side.appendChild(you);}
     var others=match.players.filter(function(id){var m=member(id);return id!==lobby.self&&m&&!m.simulated;});
