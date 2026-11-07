@@ -63,7 +63,7 @@ public static class FlickAnalysis
 
     public static FlickReport Analyze(AnalysisInput input) => Analyze(input, ViewPath.Resample(input.View, input.Duration));
 
-    public static FlickReport Analyze(AnalysisInput input, ViewPath path)
+    public static FlickReport Analyze(AnalysisInput input, ViewPath path, Action? checkpoint = null)
     {
         var flicks = new List<Flick>(); int skipped = 0;
         var clicks = input.FirePressed.Where(t => t >= path.T[0] && t <= path.T[^1]).Order().ToArray();
@@ -72,6 +72,7 @@ public static class FlickAnalysis
         double previousClick = path.T[0];
         for (int k = 0; k < clicks.Length; k++)
         {
+            checkpoint?.Invoke();
             var flick = Segment(input, path, clicks[k], previousClick, k, hits, spawns);
             previousClick = clicks[k];
             if (flick is null) { skipped++; continue; }

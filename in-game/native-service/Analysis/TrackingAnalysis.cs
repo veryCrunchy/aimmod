@@ -31,7 +31,7 @@ public static class TrackingAnalysis
 
     public static TrackingReport Analyze(AnalysisInput input) => Analyze(input, ViewPath.Resample(input.View, input.Duration));
 
-    public static TrackingReport Analyze(AnalysisInput input, ViewPath path)
+    public static TrackingReport Analyze(AnalysisInput input, ViewPath path, Action? checkpoint = null)
     {
         var n = Math.Min(path.Count, input.Targets.Count);
         // Nearest target per sample, absolute direction; NaN where no target is visible.
@@ -68,8 +68,8 @@ public static class TrackingAnalysis
 
         // Lag is only meaningful against a target that moves; static targets give boundary solutions.
         var targetMoves = moving.Length >= 0.2 * Math.Max(1, tracked.Length);
-        var (lagMs, correlation) = targetMoves ? LagByCorrelation(path.YawVelocity, tvYaw, id, n) : (double.NaN, double.NaN);
-        var lagByError = targetMoves ? LagByError(path.Yaw, tYaw, id, n) : double.NaN;
+        var (lagMs, correlation) = targetMoves ? LagByCorrelation(path.YawVelocity, tvYaw, id, n, checkpoint) : (double.NaN, double.NaN);
+        var lagByError = targetMoves ? LagByError(path.Yaw, tYaw, id, n, checkpoint) : double.NaN;
         var onShare = tracked.Length == 0 ? double.NaN : tracked.Average(i => on[i] ? 1.0 : 0);
         var firingTracked = tracked.Where(i => firing[i]).ToArray();
         var onFiring = firingTracked.Length == 0 ? double.NaN : firingTracked.Average(i => on[i] ? 1.0 : 0);
@@ -83,6 +83,7 @@ public static class TrackingAnalysis
         var sparcs = new List<double>(); var highs = new List<double>();
         for (int start = 0; start + window <= n; start += window / 2)
         {
+            checkpoint?.Invoke();
             bool complete = true;
             for (int i = start; i < start + window; i++) if (double.IsNaN(eYaw[i])) { complete = false; break; }
             if (!complete) continue;
@@ -128,12 +129,13 @@ public static class TrackingAnalysis
     }
 
     /// <summary>Shift of the target velocity (in samples, converted to ms) that maximises its correlation with the view velocity.</summary>
-    internal static (double LagMs, double Correlation) LagByCorrelation(double[] viewVelocity, double[] targetVelocity, double[] id, int n)
+    internal static (double LagMs, double Correlation) LagByCorrelation(double[] viewVelocity, double[] targetVelocity, double[] id, int n, Action? checkpoint = null)
     {
         var maxShift = (int)Math.Round(MaxLagSeconds * ViewPath.Rate);
         double best = double.NegativeInfinity; int bestShift = 0;
         for (int shift = -maxShift; shift <= maxShift; shift++)
         {
+            checkpoint?.Invoke();
             double sxy = 0, sxx = 0, syy = 0; int count = 0;
             for (int i = Math.Max(0, shift); i < n && i - shift < n; i++)
             {
@@ -150,12 +152,13 @@ public static class TrackingAnalysis
     }
 
     /// <summary>Shift of the target direction that minimises the RMS yaw error against the view.</summary>
-    internal static double LagByError(double[] viewYaw, double[] targetYaw, double[] id, int n)
+    internal static double LagByError(double[] viewYaw, double[] targetYaw, double[] id, int n, Action? checkpoint = null)
     {
         var maxShift = (int)Math.Round(MaxLagSeconds * ViewPath.Rate);
         double best = double.PositiveInfinity; int bestShift = 0;
         for (int shift = -maxShift; shift <= maxShift; shift++)
         {
+            checkpoint?.Invoke();
             double sum = 0; int count = 0;
             for (int i = Math.Max(0, shift); i < n && i - shift < n; i++)
             {

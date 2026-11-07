@@ -40,7 +40,7 @@ static class ReplayAnalysis
         return Math.Clamp(held / input.Duration, 0, 1);
     }
 
-    public static AnalysisInput Build(NativeReplay replay)
+    public static AnalysisInput Build(NativeReplay replay, Action? checkpoint = null)
     {
         // View path at the finest available rate.
         var view = new List<ViewSample>();
@@ -64,6 +64,7 @@ static class ReplayAnalysis
         var targets = new TargetSample[path.Count][];
         for (int i = 0; i < path.Count; i++)
         {
+            if (i % 250 == 0) checkpoint?.Invoke();
             var t = path.T[i];
             var frame = NativeReplayPlayback.Sample(replay, t);
             var c = frame.Camera;
