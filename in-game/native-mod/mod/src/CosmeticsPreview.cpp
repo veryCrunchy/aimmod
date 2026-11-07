@@ -229,12 +229,9 @@ namespace aimmod
 
     std::optional<PreviewRequest> CosmeticsPreview::ReadRequest()
     {
-        std::ifstream in(m_requestPath, std::ios::binary);
-        if (!in) return std::nullopt;
-        std::string text(MaxPreviewRequestBytes + 1, '\0');
-        in.read(text.data(), static_cast<std::streamsize>(text.size()));
-        text.resize(static_cast<std::size_t>(in.gcount()));
-        return ParsePreviewRequest(text, static_cast<std::int64_t>(std::time(nullptr)));
+        auto snapshot = m_output.Snapshot(2);
+        if (!snapshot || !snapshot->stamp) return std::nullopt;
+        return ParsePreviewRequest(snapshot->text, static_cast<std::int64_t>(std::time(nullptr)));
     }
 
     PreviewGameState CosmeticsPreview::GameState(bool inChallenge, bool loading) const

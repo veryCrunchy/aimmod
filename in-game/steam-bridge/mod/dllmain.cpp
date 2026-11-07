@@ -149,14 +149,29 @@ public:
         m_tickId = RegisterEngineTickPostCallback(
             [this](TCallbackIterationData<void>&, RC::Unreal::UEngine*, float, bool) {
                 if (m_gameThread.load(std::memory_order_relaxed) == 0) m_gameThread = GetCurrentThreadId();
+                const auto begin = std::chrono::steady_clock::now();
                 DrainGameThreadJobs();
+                const auto jobsDone = std::chrono::steady_clock::now();
                 if (m_stop.load(std::memory_order_relaxed)) return;
                 if (!m_ghosts)
                     if (auto* b = m_ready.load()) m_ghosts = std::make_unique<aimmod::GhostDemo>(*b, Log, m_ghostOptions);
                 if (m_ghosts) m_ghosts->Tick();
+                const auto ghostsDone = std::chrono::steady_clock::now();
                 // CS grenades: paths and line-of-sight traces for the host's service.
                 if (!m_grenades) m_grenades = std::make_unique<aimmod::GrenadeSim>(Log, m_ghostOptions.stateDir);
                 m_grenades->Tick();
+                const auto end = std::chrono::steady_clock::now();
+                const auto ms = [](auto duration) { return std::chrono::duration<double, std::milli>(duration).count(); };
+                static auto last = begin, nextWarning = begin;
+                const double own = ms(end-begin), delta = ms(begin-last);
+                last = begin;
+                if (begin >= nextWarning && (own > 2 || (delta > 50 && own > 0.1))) {
+                    const double jobs = ms(jobsDone-begin), avatars = ms(ghostsDone-jobsDone), grenades = ms(end-ghostsDone);
+                    const char* part = jobs >= avatars && jobs >= grenades ? "jobs" : avatars >= grenades ? "avatars" : "grenades";
+                    Log(std::string("perf: frame_ms=")+std::to_string(delta)+" own_ms="+std::to_string(own)+" subsystem="+part+
+                        " jobs_ms="+std::to_string(jobs)+" avatars_ms="+std::to_string(avatars)+" grenades_ms="+std::to_string(grenades));
+                    nextWarning = begin + std::chrono::seconds(5);
+                }
             },
             tick);
         if (m_tickId == ERROR_ID) m_tickId = 0;

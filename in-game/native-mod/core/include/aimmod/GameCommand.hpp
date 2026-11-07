@@ -21,8 +21,7 @@ namespace aimmod
         Mode mode{Mode::FreePlay};
         std::optional<double> timeScale, targetSize, targetSpeed, mapScale;
         std::string weapon;
-        // start-scenario: shared randomness for match players (freeplay, or
-        // challenge only for generated "AimMod Match - " scenarios).
+        // start-scenario: shared randomness for freeplay match players only.
         std::optional<std::uint32_t> seed;
         // end-run (freeplay AimMod match scenarios only): reload the scenario
         // without playing (stop, default) or restart it in freeplay (reset).

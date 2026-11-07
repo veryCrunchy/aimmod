@@ -72,6 +72,8 @@
     if(!state.enabled){page.appendChild(add(node('div','panel dev-card'),node('h2','','Developer mode is off'),node('p','subtle','Turn it on under Settings to use these tools.')));return;}
     var st=state.status||{};var lobby=st.lobby;
     var row=node('div','dev-row');page.appendChild(row);var left=node('div','dev-col dev-main'),right=node('div','dev-col dev-side');row.appendChild(left);row.appendChild(right);
+    var perf=section('Frame timings','Five-second window: mean and peak milliseconds. Nested timings overlap.');right.appendChild(perf.panel);
+    perf.body.appendChild(node('pre','',state.performance||'Waiting for frame timings.'));
     // Simulated lobby
     var sim=section('Simulated lobby','Simulated players ready up, chat, post scores and vote by themselves.');left.appendChild(sim.panel);
     var counts=[];for(var i=1;i<=7;i++)counts.push({id:i,label:String(i)});

@@ -54,7 +54,7 @@ namespace aimmod
 
     private:
         std::string m_cleanupScenario;
-        bool m_cleanupPending = true, m_wasLoading = false, m_dirty = false;
+        bool m_cleanupPending = false, m_wasLoading = false, m_dirty = false;
         void TickShots(double now, const PoseId& poseId, const std::unordered_map<std::uint32_t, std::string>& poseNames);
         // The visible characters other than the local one, with their capsules (what the shooter sees).
         void DrawnTargets(game::UObject* character, const PoseId& poseId, std::vector<Capsule>& capsules, std::vector<game::UObject*>& actors);

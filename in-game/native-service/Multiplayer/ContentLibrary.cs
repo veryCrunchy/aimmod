@@ -161,6 +161,7 @@ sealed partial class ContentLibrary : IContentResolver
                 foreach (var (file, workshop) in sources)
                 {
                     // Match scenarios AimMod generated are not offered as lobby content.
+                    if (PracticeDrills.IsDrill(Path.GetFileName(file))) continue;
                     if (Path.GetFileName(file).StartsWith(MatchScenario.Prefix, StringComparison.OrdinalIgnoreCase)) continue;
                     var header = ReadScenarioHeader(file);
                     if (header is null) continue;
@@ -220,6 +221,7 @@ sealed partial class ContentLibrary : IContentResolver
     // the "Map port" search tag, or the description older ports were written with.
     internal static bool IsMapPort(string name, IReadOnlyDictionary<string, string> header)
     {
+        if (PracticeDrills.IsDrill(name)) return false;
         if (name.StartsWith(MatchScenario.Prefix, StringComparison.OrdinalIgnoreCase)) return false;
         if (name.StartsWith("AimMod - ", StringComparison.Ordinal)) return true;
         var tags = (header.GetValueOrDefault("SearchTags") ?? "").Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);

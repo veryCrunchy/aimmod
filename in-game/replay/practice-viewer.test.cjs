@@ -1,0 +1,3 @@
+const {test}=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path');
+const read=n=>fs.readFileSync(path.join(__dirname,'../ue4ss/AimModNativeUI/Scripts',n),'utf8');
+test('native HUD connects paused path rendering and timeline markers',()=>{const hud=read('ReplayHUD.lua'),flicks=read('ReplayFlicks.lua');assert.match(hud,/require,'ReplayFlicks'/);assert.match(hud,/updateFlicks\(state\)/);assert.match(flicks,/enabled and not state.playing/);assert.match(flicks,/send\('flick-seek',index-1\)/);assert.match(flicks,/#out>=65/);assert.match(flicks,/selected==previous/);});

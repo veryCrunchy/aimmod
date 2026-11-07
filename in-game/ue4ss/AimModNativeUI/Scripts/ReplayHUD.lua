@@ -99,7 +99,7 @@ build=function(owner,send,registered,id)
         local state=not native:GetIsEnabled() and 'disabled' or (native:IsPressed() and 'pressed' or (native:IsHovered() and 'hover' or 'normal'))
         if state~=surface.state then surface.border:SetBrushColor(surface.colors[state]);surface.state=state end
     end
-    local function button(value,x,w,callback,primary)
+    local function button(value,x,w,callback,primary,y,h)
         local item=widget('PalettedBoxButtonWidget');item:SetVisibility(0)
         item.HideTrim=true;item.HoverEffect=false
         assert(valid(item.Binding_Button),'replay button unavailable')
@@ -107,7 +107,7 @@ build=function(owner,send,registered,id)
         -- Own the paint surface; preserve the game's complete native button style,
         -- including its nontrivial Slate sounds and brush resource ownership.
         local surface=make('Border');surface:SetVisibility(3)
-        place(body,surface,x,80,w,42)
+        place(body,surface,x,y or 80,w,h or 42)
         local entry={item=item,border=surface,colors={
             normal=primary and colors.mint or {R=.035,G=.095,B=.065,A=1},
             hover=primary and {R=.09,G=1,B=.65,A=1} or {R=.06,G=.18,B=.12,A=1},
@@ -116,7 +116,7 @@ build=function(owner,send,registered,id)
         surfaces[#surfaces+1]=entry
         local label=text(value,16,primary and colors.panel or colors.paper);label:SetJustification(1)
         item.ButtonContentsSlot:SetContent(label)
-        place(body,item,x,80,w,42)
+        place(body,item,x,y or 80,w,h or 42)
         local key=item:GetFullName();registered.routes[#registered.routes+1]=key
         routes[key]=function()frame:SetUserFocus(owner:GetOwningPlayer());callback()end;buttons[#buttons+1]=item
         return label
@@ -128,7 +128,15 @@ build=function(owner,send,registered,id)
     local timer=text('0:00 / 0:00',20);place(body,timer,492,78,240,28)
     local remaining=text('0:00 remaining',11,colors.muted);place(body,remaining,492,104,240,20)
     button('Exit replay',864,152,function()send('close')end)
-    place(body,text('Space: play / pause     Left / Right: 5s     Shift + Left / Right: 1s     Esc: exit',10,colors.muted),24,128,992,16)
+    place(body,text('Space: play / pause     Left / Right: 5s     Shift + Left / Right: 1s     Esc: exit     [ / ]: flick',10,colors.muted),24,128,992,16)
+    local updateFlicks=function()end
+    if id and id~='live' then
+        local ok,module=pcall(require,'ReplayFlicks')
+        if ok then
+            local built,update=pcall(module.create,id,make,place,text,canvas,button,send)
+            if built then updateFlicks=update end
+        end
+    end
     local seek=widget('PalettedSlider');seek:SetVisibility(0)
     local slider=seek.Binding_Slider;assert(valid(slider),'replay timeline unavailable')
     slider.IsFocusable=false
@@ -266,6 +274,7 @@ build=function(owner,send,registered,id)
         seekDuration=duration
         visibility(state)
         refreshControls()
+        updateFlicks(state)
         write(play,state.playing and 'Pause' or 'Play')
         write(status,state.playing and 'REPLAY PLAYING' or (duration>0 and time>=duration and 'REPLAY FINISHED' or 'REPLAY PAUSED'))
         write(speedLabel,tostring(state.speed)..'x speed')

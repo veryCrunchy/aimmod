@@ -14,6 +14,7 @@
 #include <aimmod/Supervisor.hpp>
 #include <aimmod/Water.hpp>
 
+#include <aimmod/Perf.hpp>
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -281,6 +282,10 @@ static void CommandChecks()
     CHECK(code("AIMMOD_CORE_COMMAND_1\nseq\t9\naction\treset-overrides\nextra\t1\n") == "invalid-command", "unknown fields rejected");
     CHECK(code("AIMMOD_CORE_COMMAND_1\nseq\t9\naction\treset-overrides\n") == "accepted", "reset accepted");
     CHECK(code("AIMMOD_CORE_COMMAND_1\nseq\t9\naction\trefresh-scenarios\n") == "accepted", "refresh accepted");
+    CHECK(code("AIMMOD_CORE_COMMAND_1\nseq\t11\naction\tstart-scenario\nscenario\tAimMod Drill - static - 12345678\nmode\tchallenge\n") == "drills-freeplay-only", "drills cannot start challenges");
+    CHECK(code("AIMMOD_CORE_COMMAND_1\nseq\t11\naction\tstart-scenario\nscenario\tAimMod Drill - static - 12345678\nmode\tfreeplay\nseed\t1\n") == "drills-freeplay-only", "drills cannot use seeds");
+    CHECK(code("AIMMOD_CORE_COMMAND_1\nseq\t11\naction\tstart-scenario\nscenario\tAimMod Drill - static - 12345678\nmode\tfreeplay\n") == "accepted", "unseeded freeplay drill accepted");
+    CHECK(code("AIMMOD_CORE_COMMAND_1\nseq\t11\naction\tstart-scenario\nscenario\tAIMMOD DRILL - static - 12345678\nmode\tchallenge\n") == "drills-freeplay-only", "drill guard ignores name casing");
     auto seeded = parse("AIMMOD_CORE_COMMAND_1\nseq\t11\naction\tstart-scenario\nscenario\tX\nmode\tfreeplay\nseed\t4294967295\n");
     CHECK(std::holds_alternative<GameCommand>(seeded) && std::get<GameCommand>(seeded).seed == 4294967295u, "freeplay seed parsed");
     CHECK(code("AIMMOD_CORE_COMMAND_1\nseq\t11\naction\tstart-scenario\nscenario\tX\nmode\tchallenge\nseed\t1\n") == "seed-not-allowed", "no seeds in ranked challenges");
@@ -1069,6 +1074,48 @@ static void WaterChecks()
 
 int main(int argc, char** argv)
 {
+    if (argc > 1 && std::string(argv[1]) == "--perf-benchmark") {
+        perf::Frame frame;
+        perf::Active = &frame;
+        constexpr int count = 100000;
+        const auto start = perf::Clock::now();
+        for (int i=0; i<count; ++i) {
+            const double now = static_cast<double>(i)/1000;
+            frame.Begin(now);
+            for(int part=0; part<perf::Count; ++part) { perf::Scope scope(static_cast<perf::Part>(part)); }
+            frame.End(now);
+            frame.Summary(now);
+        }
+        perf::Active = nullptr;
+        std::printf("Perf instrumentation: %.3f microseconds/frame (%d synthetic frames)\n", perf::Ms(perf::Clock::now()-start)*1000/count, count);
+        return 0;
+    }
+    perf::Frame measured;
+    measured.Begin(1); measured.outside=3; measured.Add(perf::Hud,3);
+    CHECK(measured.End(1).find("subsystem=hud")!=std::string::npos, "slow frame names its subsystem");
+    measured.Begin(2); measured.outside=3;
+    CHECK(measured.End(2).empty(), "warnings are rate limited");
+    measured.Begin(6); measured.outside=3;
+    CHECK(!measured.End(6).empty(), "warnings resume after the rate limit");
+    CHECK(measured.Summary(6).find("hud\t1.000000\t3.000000")!=std::string::npos, "summary records mean and peak");
+    CHECK(measured.Summary(7).empty(), "summary is throttled");
+    perf::Frame hitch;
+    hitch.Begin(1); hitch.End(1); hitch.Begin(1.1); hitch.outside=0.5;
+    CHECK(!hitch.End(1.1).empty(), "frame hitch with work produces a warning");
+    perf::Frame protection; protection.protect=true;
+    for(int i=0;i<3;++i) { protection.Begin(1+i*0.01); protection.outside=3; protection.Add(perf::Preview,3); protection.End(1+i*0.01); }
+    CHECK(!protection.Allowed(perf::Preview,1.03) && protection.Allowed(perf::Preview,2.03), "preview cooldown expires");
+    protection.Begin(6);
+    CHECK(protection.End(6).find("preview throttled")!=std::string::npos, "throttle notification survives warning rate limit");
+    perf::Budget budget;
+    CHECK(!budget.Observe(3, 1, true) && !budget.Observe(3, 2, true), "isolated overruns do not throttle");
+    CHECK(budget.Observe(3, 3, true) && !budget.Allowed(3.5) && budget.Allowed(4), "repeated overruns recover after cooldown");
+    perf::Budget critical;
+    for(int i=0;i<100;++i) CHECK(!critical.Observe(100, i, false) && critical.Allowed(i), "critical work is never throttled");
+    perf::Budget reset;
+    reset.Observe(3, 0, true); reset.Observe(1, 1, true);
+    CHECK(!reset.Observe(3, 2, true), "cheap work clears consecutive strikes");
+
     if (argc == 3 && std::strcmp(argv[1], "--write-samples") == 0)
     {
         WriteSamples(argv[2]);

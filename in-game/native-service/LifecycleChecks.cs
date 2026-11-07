@@ -134,6 +134,12 @@ static class LifecycleChecks
             File.WriteAllText(Path.Combine(win64, "dwmapi.dll"), "someone-elses-proxy");
             Directory.CreateDirectory(Path.Combine(win64, "ue4ss", "Mods", "OtherMod"));
             File.WriteAllText(Path.Combine(win64, "ue4ss", "Mods", "mods.txt"), "OtherMod : 1\r\nGone : 1\r\n");
+            foreach (var probe in new[] { "AimModModesProbe", "AimModDump", "AimModCosmetics" }) {
+                var folder=Path.Combine(win64,"ue4ss","Mods",probe);
+                Directory.CreateDirectory(folder);
+                File.WriteAllText(Path.Combine(folder,"keep.txt"),"synthetic");
+                File.AppendAllText(Path.Combine(win64,"ue4ss","Mods","mods.txt"),probe+" : 1\r\n");
+            }
             var original = Tree(win64);
             var state = Path.Combine(temp, "state", "updates");
             var gameUp = false;
@@ -148,6 +154,11 @@ static class LifecycleChecks
             Check(installed.Changed == 5 && record.Version == "1.0.0" && record.Managed && record.Files.Count == 5, "install records release");
             Check(File.ReadAllText(Path.Combine(win64, "dwmapi.dll")) == "proxy-1" && File.ReadAllText(Path.Combine(win64, "dwmapi.dll.aimmod-backup")) == "someone-elses-proxy" && record.Backups["dwmapi.dll"] == "dwmapi.dll.aimmod-backup", "foreign proxy kept as backup");
             var lists = ModList.Read(Path.Combine(win64, "ue4ss", "Mods"));
+            foreach (var probe in new[] { "AimModModesProbe", "AimModDump", "AimModCosmetics" }) {
+                Check(!lists[probe], "developer mod disabled on install");
+                Check(File.ReadAllText(Path.Combine(win64,"ue4ss","Mods",probe,"keep.txt"))=="synthetic", "developer files preserved");
+            }
+
             Check(lists.Keys.First() == "AimModCore" && lists["AimModCore"] && lists["OtherMod"] && !lists.ContainsKey("Gone"), "mod list: ours first, existing mods kept");
             Check(File.ReadAllText(Path.Combine(win64, "ue4ss", "Mods", "mods.json")).Contains("\"mod_name\": \"AimModCore\""), "mods.json written");
             Check(record.Files.All(f => f.Path.Contains('\\') || f.Path == "dwmapi.dll") && record.Files.All(f => f.Sha256 == f.Sha256.ToUpperInvariant()), "install manifest matches the PowerShell installer format");
@@ -174,7 +185,10 @@ static class LifecycleChecks
             Check(InstallLayout.SteamBuildId(win64) == 1000, "Steam build id read from appmanifest");
 
             // Repair re-applies the same package and fixes everything.
+            File.AppendAllText(Path.Combine(win64,"ue4ss","Mods","mods.txt"), "AimModModesProbe : 1\r\nAimModDump : 1\r\nAimModCosmetics : 1\r\n");
             var repaired = applier.Apply(win64, package1, "repair");
+            foreach (var probe in new[] { "AimModModesProbe", "AimModDump", "AimModCosmetics" })
+                Check(!ModList.Read(Path.Combine(win64,"ue4ss","Mods"))[probe], "developer mod disabled on repair");
             Check(repaired.Changed == 3 && !InstallHealth.Inspect(win64, InstallManifest.Read(win64), package1.Manifest).NeedsRepair, "repair restores the install");
             Check(InstallManifest.Read(win64)!.Backups["dwmapi.dll"] == "dwmapi.dll.aimmod-backup" && File.ReadAllText(Path.Combine(win64, "dwmapi.dll.aimmod-backup")) == "someone-elses-proxy", "repair keeps the original backup");
             Check(ModList.Read(Path.Combine(win64, "ue4ss", "Mods"))["AimModCore"], "repair re-enables the mod");
@@ -218,7 +232,12 @@ static class LifecycleChecks
             Directory.Delete(link);
 
 
+            var modListPath = Path.Combine(win64,"ue4ss","Mods","mods.txt");
+            File.WriteAllText(modListPath,File.ReadAllText(modListPath).Replace("AimModModesProbe : 0","AimModModesProbe : 1").Replace("AimModDump : 0","AimModDump : 1").Replace("AimModCosmetics : 0","AimModCosmetics : 1"));
+            before = Tree(win64);
             var updated = applier.Apply(win64, package2, "update");
+            foreach (var probe in new[] { "AimModModesProbe", "AimModDump", "AimModCosmetics" })
+                Check(!ModList.Read(Path.Combine(win64,"ue4ss","Mods"))[probe], "developer mod disabled on update");
             record = InstallManifest.Read(win64)!;
             Check(updated.PreviousVersion == "1.0.0" && record.Version == "1.1.0" && File.ReadAllText(Path.Combine(win64, "dwmapi.dll")) == "proxy-2", "update applied");
             Check(!File.Exists(Path.Combine(win64, "ue4ss", "UE4SS-settings.ini")), "files dropped from a release are removed");
