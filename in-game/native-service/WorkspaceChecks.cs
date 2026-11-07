@@ -108,6 +108,10 @@ static class WorkspaceChecks
                 Check(response.StatusCode == HttpStatusCode.BadRequest, "invalid shot page rejected");
             using (var response = await client.GetAsync(root + "/run-details/synthetic?shotPage=0"))
                 Check(response.StatusCode == HttpStatusCode.NotFound, "absent local run telemetry not invented");
+            var unicodeSnapshot = "{\"scenario\":\"Synthetic \u7df4\u7fd2\"}";
+            host.Update(unicodeSnapshot);
+            for (var poll = 0; poll < 2; poll++)
+                Check(await client.GetStringAsync(root + "/data") == unicodeSnapshot, "Cached snapshot preserves UTF-8 across repeated polls");
             host.Update("{\"synthetic\":true,\"revision\":7}");
             using (var response = await client.GetAsync(root + "/data"))
             {
