@@ -10,7 +10,7 @@ sealed partial class MultiplayerService
     void StepMatchControls()
     {
         var yes = voteKeys.PressedCode(0x70); var no = voteKeys.PressedCode(0x71);
-        if (!voteKeys.Foreground() || ChatCapturing || buyOpen || Current?.Match is not { Phase: MatchPhases.Live } match) return;
+        if (Current?.Match is not { Phase: MatchPhases.Live } match || ChatCapturing || buyOpen || !voteKeys.Foreground()) return;
         if (!voteKeys.DownCode(0x11) && !voteKeys.DownCode(0x12) && !voteKeys.DownCode(0x10) && match.Vote is { } vote && vote.Eligible.Contains(SelfId) && !vote.Yes.Contains(SelfId) && !vote.No.Contains(SelfId) && (yes || no))
             Command("match-control", JsonSerializer.SerializeToElement(new { command = yes ? "yes" : "no" }));
         if (match.Cs?.Players.Any(p => p.Member == SelfId && p.Afk) == true && clock() - returnRequestedAt >= 1000

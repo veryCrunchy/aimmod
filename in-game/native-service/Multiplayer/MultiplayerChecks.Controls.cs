@@ -5,6 +5,11 @@ static partial class MultiplayerChecks
     static void MatchControlChecks()
     {
         ControlPacketChecks();
+        if (OperatingSystem.IsWindows())
+        {
+            Check(string.Equals(CsKeyReader.ImagePath((uint)Environment.ProcessId), Environment.ProcessPath, StringComparison.OrdinalIgnoreCase), "Executable lookup reads the current process without remote module enumeration");
+            Check(CsKeyReader.ImagePath(0) is null, "An inaccessible process is not treated as the game");
+        }
         var heldKeys = new HashSet<int> { 0x70 };
         var reader = new CsKeyReader { ReadKey = heldKeys.Contains };
         Check(reader.PressedCode(0x70) && !reader.PressedCode(0x70) && !reader.Pressed('P'), "F1 is a function key with one edge, not the letter P");

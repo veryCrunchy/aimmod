@@ -389,6 +389,8 @@ sealed partial class MultiplayerService
 // Letter and digit keys while the game window is in front (GetAsyncKeyState), with press edges.
 sealed class CsKeyReader
 {
+    [DllImport("kernel32.dll")] static extern Microsoft.Win32.SafeHandles.SafeProcessHandle OpenProcess(uint access, bool inherit, uint processId);
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] static extern bool QueryFullProcessImageName(Microsoft.Win32.SafeHandles.SafeProcessHandle process, uint flags, System.Text.StringBuilder path, ref uint size);
     [DllImport("user32.dll")] static extern nint GetForegroundWindow();
     [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(nint window, out uint processId);
     [DllImport("user32.dll")] static extern short GetAsyncKeyState(int key);
@@ -402,10 +404,19 @@ sealed class CsKeyReader
         {
             var window = GetForegroundWindow();
             if (window == 0 || GetWindowThreadProcessId(window, out var pid) == 0) return false;
-            using var process = Process.GetProcessById(checked((int)pid));
-            return ReplayKeyboard.IsGameExecutable(process.MainModule?.FileName);
+            return ReplayKeyboard.IsGameExecutable(ImagePath(pid));
         }
         catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception or ArgumentException or OverflowException) { return false; }
+    }
+    // Query the executable without enumerating remote modules, which can block
+    // while Windows retries a process that is starting or shutting down.
+    internal static string? ImagePath(uint pid)
+    {
+        if (!OperatingSystem.IsWindows()) return null;
+        using var process = OpenProcess(0x1000, false, pid);
+        if (process.IsInvalid) return null;
+        var path = new System.Text.StringBuilder(32768); uint size = (uint)path.Capacity;
+        return QueryFullProcessImageName(process, 0, path, ref size) ? path.ToString() : null;
     }
     internal Func<int, bool>? ReadKey;
     public bool Down(char key) => DownCode(char.ToUpperInvariant(key));
