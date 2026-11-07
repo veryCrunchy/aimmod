@@ -35,8 +35,8 @@
   var undoStack=[],redoStack=[],checkpoint=null,restoring=false,clipboard=null,zoom=1,selection=[];
   function selectedGroup(){var sc=scene();return sc?sc.widgets.filter(function(w){return !w.locked&&(selection.indexOf(w.id)>=0||w.id===st.selected);}):[];}
   function arrange(mode){var list=selectedGroup();if(list.length<2)return;var anchor=list[0],i;if(mode==='distribute'){list.sort(function(a,b){return a.x-b.x;});var span=list[list.length-1].x-list[0].x;for(i=1;i<list.length-1;i++)list[i].x=Math.round(list[0].x+span*i/(list.length-1));}else for(i=1;i<list.length;i++){if(mode==='left')list[i].x=anchor.x;else list[i].y=anchor.y;}changed();}
-  function changed(rebuild){if(!restoring&&checkpoint){undoStack.push(checkpoint);if(undoStack.length>60)undoStack.shift();redoStack=[];}checkpoint=M.copy(st.store);dirtyRevision++;setStatus('Saving…');if(saveTimer!==null)root.clearTimeout(saveTimer);saveTimer=root.setTimeout(save,450);if(rebuild!==false)render();else preview();}
-  function history(back){var from=back?undoStack:redoStack,to=back?redoStack:undoStack;if(!from.length)return;to.push(M.copy(st.store));st.store=from.pop();if(!scene())st.scene=st.store.scenes[0].id;restoring=true;changed();restoring=false;}
+  function changed(rebuild){if(!restoring&&checkpoint){undoStack.push(checkpoint);if(undoStack.length>60)undoStack.shift();redoStack=[];}checkpoint=M.copy(st.store);dirtyRevision++;var ub=root.document.getElementById('ove-undo'),rb=root.document.getElementById('ove-redo');if(ub)ub.disabled=!undoStack.length;if(rb)rb.disabled=!redoStack.length;setStatus('Saving…');if(saveTimer!==null)root.clearTimeout(saveTimer);saveTimer=root.setTimeout(save,450);if(rebuild!==false)render();else preview();}
+  function history(back){var from=back?undoStack:redoStack,to=back?redoStack:undoStack;if(!from.length)return;to.push(M.copy(st.store));st.store=from.pop();if(!scene())st.scene=st.store.scenes[0].id;st.selected='';selection=[];restoring=true;changed();restoring=false;}
   function save(){
     saveTimer=null;if(writeInFlight||!st||!st.store||dirtyRevision===savedRevision)return;
     writeInFlight=true;var revision=dirtyRevision,body=M.normalize(st.store);
@@ -48,12 +48,12 @@
   function saveLegacy(patch){st.busy=true;request('overlay-settings',patch,function(ok,data){st.busy=false;if(ok)st.settings=data;render();setStatus(ok?'Saved.':'Could not save. Please try again.',!ok);});}
   // ---- data for the preview ----
   function data(){var now=new Date().getTime();if(st.data==='live'&&st.feed){var d=st.feed;d.peripherals=st.store.profile.peripherals;return d;}var s=W.sample(now);if(st.store.profile.peripherals.length)s.peripherals=st.store.profile.peripherals;if(st.ctx==='match'){var m=W.sampleMatch();s.board=m.board;s.tournament=m.tournament;}if(st.ctx==='menu')s.live={available:true,active:false};return s;}
-  function pollFeed(){if(feedTimer!==null){root.clearTimeout(feedTimer);feedTimer=null;}if(!container||!st||st.data!=='live')return;request('overlay-feed',null,function(ok,d){if(ok)st.feed=d;preview();if(st.panel==='data'&&explorerRefresh)explorerRefresh();feedTimer=root.setTimeout(pollFeed,1000);});}
+  function pollFeed(){if(feedTimer!==null){root.clearTimeout(feedTimer);feedTimer=null;}if(!container||!st||st.tab!=='editor'||st.data!=='live')return;request('overlay-feed',null,function(ok,d){if(ok)st.feed=d;preview();feedTimer=root.setTimeout(pollFeed,1000);});}
   var explorerRefresh=null;
   var motionBusy=false;
   // Live data: the mouse path and input display follow the real motion feed while the scene shows them.
   function pollMotion(){var sc=scene();if(motionBusy||!sc||st.data!=='live')return;var n=W.needsMotion(sc,null);if(!n.path&&!n.input){st.motion=null;return;}motionBusy=true;request('overlay-motion?'+(n.path?'path=1':'')+(n.path&&n.input?'&':'')+(n.input?'input=1':''),null,function(ok,d){motionBusy=false;st.motion=ok?d:null;});}
-  function tick(){if(tickTimer!==null)root.clearTimeout(tickTimer);tickTimer=null;if(!container||st.tab!=='editor')return;if(!drag)preview();pollMotion();tickTimer=root.setTimeout(tick,st.data==='sample'?100:120);}
+  function tick(){if(tickTimer!==null)root.clearTimeout(tickTimer);tickTimer=null;if(!container||st.tab!=='editor')return;if(!drag)preview();pollMotion();tickTimer=root.setTimeout(tick,250);}
   // ---- preview canvas ----
   var view={stage:null,layer:null,handles:null,scale:0.5,width:960,guides:null};
   function preview(){
@@ -84,7 +84,7 @@
     if(drag.mode==='move'){var r={x:drag.x+dx,y:drag.y+dy,w:drag.w,h:drag.h};if(!free){var s=M.snap(r,others,10/Math.max(0.3,view.scale*2),sc.width,sc.height);r=s;guides=s.guides;}w.x=Math.round(M.clamp(r.x,0,scene().width-20));w.y=Math.round(M.clamp(r.y,0,scene().height-20));}
     else{var nw=Math.max(80,drag.w+dx),nh=Math.max(48,drag.h+dy);if(!free){nw=Math.round(nw/8)*8;nh=Math.round(nh/8)*8;}w.w=Math.round(M.clamp(nw,60,scene().width-w.x));if(!M.entry(w.type).auto)w.h=Math.round(M.clamp(nh,40,scene().height-w.y));}
     if(drag.mode==='move')for(var gi=0;gi<drag.group.length;gi++){var original=drag.group[gi],member=M.findWidget(sc,original.id);if(member&&member!==w){member.x=Math.round(M.clamp(original.x+w.x-drag.x,0,scene().width-member.w));member.y=Math.round(M.clamp(original.y+w.y-drag.y,0,scene().height-member.h));}}
-    showGuides(guides);preview();syncFields(w);
+    showGuides(guides);if(drag.mode==='move'){var nodes=view.layer.childNodes||view.layer.children;for(var ni=0;ni<nodes.length;ni++)for(var wi=0;wi<sc.widgets.length;wi++){var item=sc.widgets[wi];if(nodes[ni].amKey==='w:'+item.id+':'+item.type){nodes[ni].style.left=item.x+'px';nodes[ni].style.top=item.y+'px';}}placeHandles();}else preview();syncFields(w);
   }
   function onUp(){if(!drag)return;var moved=drag.moved;drag=null;showGuides([]);if(moved)changed(false);}
   function listen(){if(listening||!root.document.addEventListener)return;listening=true;root.document.addEventListener('mousemove',onMove);root.document.addEventListener('mouseup',onUp);}
@@ -110,10 +110,10 @@
   function addScene(template){
     if(st.store.scenes.length>=M.MAX_SCENES){setStatus('You can keep up to '+M.MAX_SCENES+' scenes.',true);return;}
     var id=M.freshId(st.store.scenes,'scene'),s=template==='blank'?M.cleanScene({id:id,name:'New scene',theme:{preset:'mint'},widgets:[]}):M.fromTemplate(template,id);
-    st.store.scenes.push(s);st.scene=id;st.selected='';st.panel='';changed();
+    st.store.scenes.push(s);st.scene=id;st.selected='';selection=[];st.panel='';changed();
   }
-  function duplicateScene(){var sc=scene();if(!sc||st.store.scenes.length>=M.MAX_SCENES)return;var c=M.copy(sc);c.id=M.freshId(st.store.scenes,'scene');c.name=(sc.name+' copy').slice(0,48);st.store.scenes.push(M.cleanScene(c));st.scene=c.id;changed();}
-  function deleteScene(){var sc=scene();if(!sc||st.store.scenes.length<2)return;st.store.scenes=st.store.scenes.filter(function(s){return s!==sc;});var first=st.store.scenes[0].id;if(st.store.obsScene===sc.id)st.store.obsScene=first;if(st.store.gameScene===sc.id)st.store.gameScene=first;st.scene=first;st.selected='';st.panel='';changed();}
+  function duplicateScene(){var sc=scene();if(!sc||st.store.scenes.length>=M.MAX_SCENES)return;var c=M.copy(sc);c.id=M.freshId(st.store.scenes,'scene');c.name=(sc.name+' copy').slice(0,48);st.store.scenes.push(M.cleanScene(c));st.scene=c.id;st.selected='';selection=[];changed();}
+  function deleteScene(){var sc=scene();if(!sc||st.store.scenes.length<2)return;st.store.scenes=st.store.scenes.filter(function(s){return s!==sc;});var first=st.store.scenes[0].id;if(st.store.obsScene===sc.id)st.store.obsScene=first;if(st.store.gameScene===sc.id)st.store.gameScene=first;st.scene=first;st.selected='';selection=[];st.panel='';changed();}
   // ---- page ----
   function focusedId(){var a=root.document.activeElement;return a&&a.id&&a.id.indexOf('ove-')===0?a.id:'';}
   function render(){if(!container)return;var focus=focusedId();draw();if(focus&&root.document.getElementById){var n=root.document.getElementById(focus);if(n&&n.focus&&!n.disabled)n.focus();}}
@@ -121,32 +121,27 @@
     container.textContent='';view.layer=null;view.handles=null;view.stage=null;view.guides=null;
     if(!st.store){var p=add(container,el('div','panel ove-loading'));if(st.failed){var f=add(p,el('div','empty'));add(f,el('h3','','Could not load your overlays'));add(f,el('p','','AimMod couldn’t reach its local service. Your overlays keep their last saved layout.'));var a=add(f,el('div','actions center'));a.appendChild(button('Try again',function(){st.failed=false;render();load();},'primary'));}else add(p,el('p','subtle','Loading overlays…'));return;}
     var head=add(container,el('div','ove-top'));var tabs=add(head,el('div','ove-tabs'));tabs.setAttribute('role','tablist');tabs.setAttribute('aria-label','Overlay pages');
-    for(var i=0;i<TABS.length;i++)(function(t){var b=button(t[1],function(){st.tab=t[0];st.panel='';render();tick();},'ove-tab'+(st.tab===t[0]?' active':''),'ove-tab-'+t[0]);b.setAttribute('role','tab');b.setAttribute('aria-selected',String(st.tab===t[0]));tabs.appendChild(b);})(TABS[i]);
+    for(var i=0;i<TABS.length;i++)(function(t){var b=button(t[1],function(){st.tab=t[0];st.panel='';render();tick();pollFeed();},'ove-tab'+(st.tab===t[0]?' active':''),'ove-tab-'+t[0]);b.setAttribute('role','tab');b.setAttribute('aria-selected',String(st.tab===t[0]));tabs.appendChild(b);})(TABS[i]);
     var status=add(head,el('div','ove-status'+(st.warn?' warn':'')+(st.status?'':' idle'),st.status));status.id='ove-status';status.setAttribute('role','status');if(st.warn&&dirtyRevision>savedRevision)head.appendChild(button('Retry',save,'compact','ove-save-retry'));
     if(st.tab==='editor')editor();else if(st.tab==='outputs')outputs();else if(st.tab==='profile')profile();else opponent();
   }
   function editor(){
     var sc=scene();
-    if(st.store.gameScene===sc.id&&st.settings&&!st.settings.gameEnabled){var off=add(container,el('div','ove-note warn'));add(off,el('span','','In-game overlay is off - '));var action=add(off,el('div','actions'));action.appendChild(button('Turn on',function(){saveLegacy({gameEnabled:true});},'compact primary','ove-enable-game'));}
+    if(st.store.gameScene===sc.id&&st.settings&&!st.settings.gameEnabled){var off=add(container,el('div','ove-note warn'));add(off,el('span','','In-game HUD is off. Preview and edit your scenes below.'));var action=add(off,el('div','actions'));action.appendChild(button('Turn on',function(){saveLegacy({gameEnabled:true});},'compact','ove-enable-game'));}
     if(!checkpoint)checkpoint=M.copy(st.store);
     var bar=add(container,el('div','ove-bar'));var picker=add(bar,el('div','ove-scenes'));
     for(var i=0;i<st.store.scenes.length;i++)(function(s){var b=button(s.name,function(){st.scene=s.id;st.selected='';selection=[];st.panel='';st.rename=false;render();},'ove-scene'+(s.id===st.scene?' active':''),'ove-scene-'+s.id);
       var tags=[];if(st.store.obsScene===s.id)tags.push('OBS');if(st.store.gameScene===s.id)tags.push('Game');if(tags.length)b.appendChild(el('span','ove-scene-tag',tags.join(' · ')));picker.appendChild(b);})(st.store.scenes[i]);
     picker.appendChild(button('New scene',function(){st.panel=st.panel==='new'?'':'new';render();},'quiet','ove-new-scene'));
     var groups=add(bar,el('div','ove-bar-right'));
-    function group(label){var box=add(groups,el('div','ove-tool-group'));box.setAttribute('role','group');box.setAttribute('aria-label',label);add(box,el('span','ove-tool-label',label));return box;}
-    var right=group('Edit');
-    right.appendChild(button('Undo',function(){history(true);},'compact','ove-undo'));
-    right.appendChild(button('Redo',function(){history(false);},'compact','ove-redo'));
-    right.appendChild(button('Copy',function(){clipboard=M.copy(selectedGroup());},'compact'));
-    right.appendChild(button('Paste',function(){if(clipboard)for(var ci=0;ci<clipboard.length;ci++)duplicateWidget(clipboard[ci]);},'compact'));
-    var arrangeBox=group('Arrange');arrangeBox.appendChild(root.AimModFormat.dropdown('Arrange',[{value:'left',label:'Align left'},{value:'top',label:'Align top'},{value:'distribute',label:'Distribute'}],'',arrange));
-    right=group('View');
-    right.appendChild(button('Data explorer',function(){st.panel=st.panel==='data'?'':'data';render();},'compact','ove-explorer'));
-    right.appendChild(segmented([['0.5','50%'],['1','Fit'],['1.5','150%']],String(zoom),function(v){zoom=Number(v);render();},'Canvas zoom'));
-    right.appendChild(segmented([['sample','Sample data'],['live','Live data']],st.data,function(v){st.data=v;render();pollFeed();},'Preview data','ove-data'));
-    right=group('Scene');right.appendChild(segmented(CONTEXTS,st.ctx,function(v){st.ctx=v;render();},'Preview context','ove-ctx'));
-    right.appendChild(button('Share',function(){st.panel=st.panel==='share'?'':'share';st.importError='';render();},st.panel==='share'?'primary compact':'compact','ove-share'));
+    var undo=button('Undo',function(){history(true);},'compact','ove-undo');undo.disabled=!undoStack.length;groups.appendChild(undo);
+    var redo=button('Redo',function(){history(false);},'compact','ove-redo');redo.disabled=!redoStack.length;groups.appendChild(redo);
+    groups.appendChild(root.AimModFormat.dropdown('Edit',[{value:'copy',label:'Copy selection'},{value:'paste',label:'Paste'},{value:'left',label:'Align left'},{value:'top',label:'Align top'},{value:'distribute',label:'Distribute horizontally'}],'',function(v){if(v==='copy')clipboard=M.copy(selectedGroup());else if(v==='paste'){if(clipboard)for(var ci=0;ci<clipboard.length;ci++)duplicateWidget(clipboard[ci]);}else arrange(v);}));
+    groups.appendChild(root.AimModFormat.dropdown('Zoom',[{value:'0.5',label:'50%'},{value:'1',label:'Fit'},{value:'1.5',label:'150%'}],String(zoom),function(v){zoom=Number(v);render();}));
+    var dataPicker=root.AimModFormat.dropdown('Preview data',[{value:'sample',label:'Sample data'},{value:'live',label:'Live data'}],st.data,function(v){st.data=v;render();pollFeed();});dataPicker.id='ove-data-picker';groups.appendChild(dataPicker);
+    groups.appendChild(root.AimModFormat.dropdown('Preview context',CONTEXTS.map(function(c){return {value:c[0],label:c[1]};}),st.ctx,function(v){st.ctx=v;preview();}));
+    groups.appendChild(button('Data explorer',function(){st.panel=st.panel==='data'?'':'data';render();},'compact','ove-explorer'));
+    groups.appendChild(button('Share',function(){st.panel=st.panel==='share'?'':'share';st.importError='';render();},'compact','ove-share'));
     if(st.panel==='new')templates();if(st.panel==='share')share();if(st.panel==='data')explorer();
     var body=add(container,el('div','ove-body'));
     library(add(body,el('div','ove-library')));
@@ -155,7 +150,7 @@
   }
   function explorer(){
     var box=add(container,el('div','panel ove-drawer'));add(box,el('h3','','Data explorer'));
-    var search=add(box,el('input','ove-text'));search.type='text';search.setAttribute('aria-label','Filter data paths');var list=add(box,el('div','ove-data-list'));
+    add(box,el('div','ove-line-label','Filter data paths'));var search=add(box,el('input','ove-text'));search.type='text';search.setAttribute('aria-label','Filter data paths');var list=add(box,el('div','ove-data-list'));
     function show(){list.textContent='';var fields=st.catalog||[],query=search.value.toLowerCase();for(var i=0;i<fields.length;i++)(function(f){if(f.path.toLowerCase().indexOf(query)<0)return;var b=button(f.path+' ['+f.type+(f.unit?' '+f.unit:'')+'] = '+M.formatValue(M.value(data(),f.path),{}),function(){var w=selectedWidget();if(!w||!Object.prototype.hasOwnProperty.call(w.opts,'path')){addWidget('stat');w=selectedWidget();}w.opts.path=f.path;changed();},'compact');b.title=f.description;list.appendChild(b);})(fields[i]);}
     explorerRefresh=show;search.oninput=show;show();box.appendChild(button('Refresh values',function(){request('overlay-data',null,function(ok,d){if(ok)st.catalog=d.fields;request('overlay-feed',null,function(ok2,d2){if(ok2)st.feed=d2;show();});});},'compact'));
   }
@@ -171,21 +166,22 @@
     var code=el('input','ove-code');code.type='text';code.readOnly=true;code.value=M.encodeShare(sc);code.id='ove-export';code.setAttribute('aria-label','Share code');add(box,code);
     var a=add(box,el('div','actions'));var fb=el('span','subtle ove-feedback','');a.appendChild(button('Copy code',function(){code.focus();code.select();var ok=false;try{ok=root.document.execCommand('copy');}catch(e){}fb.textContent=ok?'Copied.':'Code selected. Press Ctrl+C to copy.';},'primary compact'));a.appendChild(fb);
     add(box,el('h3','ove-sub','Import a scene'));var input=el('input','ove-code');input.type='text';input.id='ove-import';input.value=st.importText;input.oninput=function(){st.importText=input.value;};add(box,field(input,'Paste a share code (AIMMOD-OVERLAY-1:…)'));
-    var b=add(box,el('div','actions'));b.appendChild(button('Import as a new scene',function(){var s=M.decodeShare(st.importText);if(!s){st.importError='That code isn’t a valid AimMod overlay scene.';render();return;}if(st.store.scenes.length>=M.MAX_SCENES){st.importError='You can keep up to '+M.MAX_SCENES+' scenes. Delete one first.';render();return;}s.id=M.freshId(st.store.scenes,'scene');st.store.scenes.push(s);st.scene=s.id;st.importText='';st.panel='';st.importError='';changed();},'compact'));
+    var b=add(box,el('div','actions'));b.appendChild(button('Import as a new scene',function(){var s=M.decodeShare(st.importText);if(!s){st.importError='That code isn’t a valid AimMod overlay scene.';render();return;}if(st.store.scenes.length>=M.MAX_SCENES){st.importError='You can keep up to '+M.MAX_SCENES+' scenes. Delete one first.';render();return;}s.id=M.freshId(st.store.scenes,'scene');st.store.scenes.push(s);st.scene=s.id;st.selected='';selection=[];st.importText='';st.panel='';st.importError='';changed();},'compact'));
     if(st.importError)add(box,el('p','ove-error',st.importError));
   }
   function library(box){
     add(box,el('div','ove-col-title','Add a widget'));var groups=[],seen={};for(var i=0;i<M.CATALOG.length;i++){var g=M.CATALOG[i].group;if(!seen[g]){seen[g]=[];groups.push(g);}seen[g].push(M.CATALOG[i]);}
+    add(box,el('div','ove-line-label','Search widgets'));var search=add(box,el('input','ove-text ove-library-search'));search.type='text';search.setAttribute('aria-label','Search widgets');search.oninput=function(){var nodes=box.querySelectorAll('.ove-lib');for(var n=0;n<nodes.length;n++)nodes[n].style.display=nodes[n].textContent.toLowerCase().indexOf(search.value.toLowerCase())>=0?'flex':'none';};
     for(var j=0;j<groups.length;j++){add(box,el('div','ove-group',groups[j]));for(var k=0;k<seen[groups[j]].length;k++)(function(entry){var b=button('',function(){addWidget(entry.type);},'ove-lib','ove-add-'+entry.type);add(b,el('span','ove-lib-name',entry.name));add(b,el('span','ove-lib-add','+'));b.setAttribute('aria-label','Add '+entry.name);b.title=entry.desc;box.appendChild(b);})(seen[groups[j]][k]);}
   }
   function stage(center){
-    var sc=scene(),avail=(container.offsetWidth||1500)-560-40;var width=Math.max(480,Math.min(1280,avail))*zoom;view.scale=width/scene().width;view.width=width;
+    var sc=scene(),avail=(container.offsetWidth||1500)-560;var width=Math.max(240,Math.min(1280,avail))*zoom;view.scale=width/scene().width;view.width=width;
     var frame=add(center,el('div','ove-stage-frame'));frame.style.width=width+'px';frame.style.height=Math.round(width*sc.height/sc.width)+'px';
     var stg=add(frame,el('div','ove-stage'));stg.style.width=width+'px';stg.style.height=Math.round(width*sc.height/sc.width)+'px';view.stage=stg;
     var world=add(stg,el('div','ove-world'));world.style.width=sc.width+'px';world.style.height=sc.height+'px';world.style.transform='scale('+view.scale.toFixed(5)+')';
     add(world,el('div','ove-sky'));add(world,el('div','ove-floor'));
     view.layer=add(world,el('div','ove-layer'));view.guides=add(world,el('div','ove-guides'));view.handles=add(world,el('div','ove-handles'));
-    stg.onmousedown=function(e){if(e.target===stg||e.target===world||(e.target&&e.target.className&&/ove-(sky|floor|layer)/.test(e.target.className))){if(st.selected){st.selected='';render();}}};
+    stg.onmousedown=function(e){if(e.target===stg||e.target===world||(e.target&&e.target.className&&/ove-(sky|floor|layer)/.test(e.target.className))){if(st.selected){st.selected='';selection=[];render();}}};
     for(var i=0;i<sc.widgets.length;i++)(function(w){var hnd=el('div','ove-handle');hnd.amId=w.id;hnd.setAttribute('aria-label',M.entry(w.type).name);hnd.onmousedown=function(e){startDrag(e,w,'move');};
       var grip=add(hnd,el('div','ove-grip'+(M.entry(w.type).auto?' wide':'')));grip.onmousedown=function(e){startDrag(e,w,'resize');};
       add(hnd,el('div','ove-handle-label',M.entry(w.type).name));view.handles.appendChild(hnd);})(sc.widgets[i]);
@@ -281,7 +277,7 @@ line(side,'Canvas width',numberField('canvas-width',sc.width,320,7680,function(v
     var name=section(side,'');var input=el('input','ove-text');input.type='text';input.maxLength=48;input.value=sc.name;input.id='ove-scene-name';input.setAttribute('aria-label','Scene name');input.onchange=function(){var v=input.value.replace(/^\s+|\s+$/g,'');if(v){sc.name=v.slice(0,48);changed();}else input.value=sc.name;};
     var nb=add(name,el('div','ove-block'));add(nb,el('div','ove-line-label','Name'));nb.appendChild(input);
     var use=section(side,'Use this scene for');line(use,'OBS browser source',toggle(st.store.obsScene===sc.id,'Use for OBS',function(){st.store.obsScene=sc.id;changed();},'ove-use-obs'));
-    line(use,'In-game HUD',toggle(st.store.gameScene===sc.id,'Use in game',function(){st.store.gameScene=sc.id;changed();if(st.settings&&!st.settings.gameEnabled)saveLegacy({gameEnabled:true});},'ove-use-game'));
+    line(use,'In-game HUD',toggle(st.store.gameScene===sc.id,'Use in game',function(){st.store.gameScene=sc.id;changed();},'ove-use-game'));
     var th=section(side,'Theme');var list=add(th,el('div','ove-themes'));
     for(var i=0;i<M.THEMES.length;i++)(function(t){var b=button('',function(){sc.theme=M.cleanTheme({preset:t.key});changed();},'ove-theme'+(sc.theme.preset===t.key?' on':''),'ove-theme-'+t.key);var chip=add(b,el('span','ove-theme-chip'));chip.style.background=t.surface;var dot=add(chip,el('span','ove-theme-dot'));dot.style.background=t.accent;add(b,el('span','ove-theme-name',t.name));list.appendChild(b);})(M.THEMES[i]);
     var ac=add(th,el('div','ove-block'));add(ac,el('div','ove-line-label','Accent colour'));ac.appendChild(swatches(sc.theme.accent,M.ACCENTS,function(v){sc.theme.accent=v||M.theme(sc.theme.preset).accent;changed();},false,'Theme accent','ove-theme-accent'));
@@ -293,7 +289,6 @@ line(side,'Canvas width',numberField('canvas-width',sc.width,320,7680,function(v
   }
   // ---- outputs ----
   function outputs(){
-    obsControl();
     st.resolution=scene().width+'x'+scene().height;
     var wrap=add(container,el('div','ove-cols'));var left=add(wrap,el('div','ove-col-main')),right=add(wrap,el('div','ove-col-side'));
     var obs=add(left,el('div','panel ove-card'));var head=add(obs,el('div','ove-card-head'));var ht=add(head,el('div',''));add(ht,el('h2','','OBS browser sources'));add(ht,el('p','subtle','Every scene and every widget has its own transparent browser source.'));
@@ -316,8 +311,9 @@ line(side,'Canvas width',numberField('canvas-width',sc.width,320,7680,function(v
     gh.appendChild(toggle(!!st.settings.gameEnabled,'In-game overlay',function(v){saveLegacy({gameEnabled:v});},'ove-game-enabled'));
     var pick=root.AimModFormat.dropdown('In-game scene',st.store.scenes.map(function(s){return {value:s.id,label:s.name};}),st.store.gameScene,function(value){st.store.gameScene=value;changed();});pick.id='ove-game-scene';
     var pb=add(game,el('div','ove-block'));add(pb,el('div','ove-line-label','Scene shown in game'));pb.appendChild(pick);
-    add(game,el('p','subtle ove-hint','Each widget chooses where it shows: Menu, Scenario or Match (Editor, Visibility). In game, AimMod draws the overlay while a scenario or match runs; widgets set to Menu show on OBS.'));
+    add(game,el('p','subtle ove-hint','Each widget chooses where it shows: Menu, Scenario or Match (Editor, Visibility). In game, AimMod draws the overlay while a scenario or match runs; the game HUD stays hidden in menus, including paused runs. Menu widgets show on OBS.'));
     add(game,el('p','subtle ove-hint','Overlays are display only. They never change your game, inputs or ranked scores.'));
+    var advanced=add(container,el('div','ove-advanced'));advanced.appendChild(button('OBS automatic scene switching',function(){st.panel=st.panel==='obs'?'':'obs';render();},'compact'));if(st.panel==='obs')obsControl();
   }
   // ---- profile ----
   function obsControl(){
@@ -367,13 +363,13 @@ line(side,'Canvas width',numberField('canvas-width',sc.width,320,7680,function(v
   function load(){
     request('overlay-obs-settings',null,function(ok,d){if(ok)st.obsControl=d;if(st.tab==='outputs')render();});
     request('overlay-data',null,function(ok,d){if(ok)st.catalog=d.fields;});
-    if(!st.store)request('overlay-scenes',null,function(ok,d){if(ok&&d&&d.scenes){st.store=M.normalize(d);if(!M.find(st.store,st.scene))st.scene=st.store.gameScene||st.store.scenes[0].id;}else st.failed=true;render();tick();});
+    if(!st.store)request('overlay-scenes',null,function(ok,d){if(ok&&d&&d.scenes){st.store=M.normalize(d);checkpoint=M.copy(st.store);if(!M.find(st.store,st.scene))st.scene=st.store.gameScene||st.store.scenes[0].id;}else st.failed=true;render();tick();});
     request('overlay-settings',null,function(ok,d){st.settings=ok?d:{gameEnabled:false,obsEnabled:false};if(st.store)render();});
     request('overlay-setup',null,function(ok,d){if(ok)st.setup=d;if(st.store)render();});
     request('overlay-opponents',null,function(ok,d){if(ok)st.opponents=d;});
     request('overlay-feed',null,function(ok,d){if(ok)st.feed=d;});
   }
-  function leave(){generation++;motionBusy=false;pending.forEach(function(x){x.abort();});pending=[];if(saveTimer!==null){root.clearTimeout(saveTimer);saveTimer=null;if(st&&st.store)save();}
+  function leave(){if(drag&&drag.moved)onUp();generation++;motionBusy=false;pending.forEach(function(x){x.abort();});pending=[];if(saveTimer!==null){root.clearTimeout(saveTimer);saveTimer=null;}if(st&&st.store&&dirtyRevision>savedRevision)save();
     if(feedTimer!==null)root.clearTimeout(feedTimer);if(tickTimer!==null)root.clearTimeout(tickTimer);feedTimer=tickTimer=null;drag=null;unlisten();if(root.document.removeEventListener)root.document.removeEventListener('keydown',nudge);container=null;}
   root.AimModOverlayEditor={
     enter:function(target){leave();generation++;container=target;if(!st||(!writeInFlight&&dirtyRevision===savedRevision)){st=blank();checkpoint=null;undoStack=[];redoStack=[];selection=[];}st.settings={gameEnabled:false,obsEnabled:false};if(container){if(root.document.addEventListener)root.document.addEventListener('keydown',nudge);render();load();}},
