@@ -74,6 +74,11 @@ sealed partial class MultiplayerService
     // Down and the round still on (live, planted or its end): who is watched, and the camera file.
     void DeadSpectate(MatchSnapshot match, CsView cs, CsPlayerView me, bool keys)
     {
+        if (me.Afk && me.Alive)
+        {
+            deadWatch = SelfId; deadWatchFor = match.Id + "#" + cs.Round;
+            WriteSpectateView(standIns.GetValueOrDefault(SelfId)); return;
+        }
         var key = match.Id + "#" + cs.Round;
         var down = !me.Alive && match.Phase == MatchPhases.Live && cs.Phase is "live" or "planted" or "end";
         if (!down) { deadWatch = null; deadWatchFor = null; WriteSpectateView(null); return; }

@@ -219,14 +219,14 @@ sealed record MapObjectives(IReadOnlyList<ObjectiveZone> Zones, IReadOnlyList<Ob
 // Grenades: what they carry (GrenadeRules ids, in slot order); Flash: the last flash that hit them.
 sealed record CsPlayerView(string Member, int Team, string Side, int Money, bool Alive, double Health, double Armor, bool Helmet, bool Kit, string? Primary, string? Secondary, int Kills, int Deaths,
     bool? InBuyZone = null, string? Site = null, string? Callout = null, string? Holding = null, IReadOnlyList<string>? Grenades = null, CsFlashView? Flash = null,
-    string? HeldGrenade = null, double Adr = 0, double HsPercent = 0, int Mvps = 0);
+    string? HeldGrenade = null, double Adr = 0, double HsPercent = 0, int Mvps = 0, bool Afk = false, bool Spectating = false, long SpawnSerial = 0);
 // A bomb site's centre (world units), for the HUD's site markers.
 sealed record CsSiteView(string Name, double X, double Y, double Z);
 sealed record CsBombView(string State, string? Carrier, string? Site, double[]? Position, long? ExplodesAt, string? Planter, long? PlantDoneAt, string? Defuser, long? DefuseDoneAt);
 sealed record CsEvent(long Id, string Kind, long T, string? Member, string? Text, int Amount = 0);
 sealed record CsView(int Round, string Phase, long PhaseEndsAt, long? LiveAt, int[] Score, string Team1Side, int HalfRounds, bool Overtime, IReadOnlyList<CsPlayerView> Players,
     CsBombView Bomb, int? LastWinner, string? LastReason, int? WinnerTeam, IReadOnlyList<CsEvent> Events, IReadOnlyDictionary<string, double[]>? Spawns,
-    IReadOnlyList<CsSiteView>? Sites = null, IReadOnlyList<CsGrenadeView>? Grenades = null, IReadOnlyList<CsDropView>? Drops = null);
+    IReadOnlyList<CsSiteView>? Sites = null, IReadOnlyList<CsGrenadeView>? Grenades = null, IReadOnlyList<CsDropView>? Drops = null, bool Paused = false, long? TimeoutUntil = null, IReadOnlyList<string>? Ready = null);
 
 sealed partial class CsMatch
 {
@@ -235,6 +235,7 @@ sealed partial class CsMatch
         public required string Id; public int Team; public int Money = CsRules.StartMoney;
         public CsWeapon? Primary, Secondary; public double Armor; public bool Helmet, Kit; public int Kills, Deaths;
         public double EnemyDamage; public int EnemyKills, HeadKills, RoundKills, Mvps;
+        public bool Afk, Spectating; public long SpawnSerial;
         public int Held = -1; // the weapon slot the player says they hold (-1: not told yet)
         public readonly List<string> Grenades = []; public CsFlashView? Flash;
         public string? HeldGrenade; // the grenade in their hand while they hold the grenade slot (their client says)
@@ -297,7 +298,7 @@ sealed partial class CsMatch
 
     public string SideOf(int team) => (team == 1) != swapped ? CsRules.T : CsRules.CT;
     public string SideOf(string id) => players.TryGetValue(id, out var p) ? SideOf(p.Team) : "";
-    IEnumerable<P> Side(string side) => players.Values.Where(p => SideOf(p.Team) == side);
+    IEnumerable<P> Side(string side) => players.Values.Where(p => !p.Spectating && SideOf(p.Team) == side);
     void Event(string kind, long t, string? member, string? text, int amount = 0) { events.Add(new CsEvent(++eventId, kind, t, member, text, amount)); if (events.Count > 64) events.RemoveAt(0); }
     void Pay(P p, int amount, long t, string why) { var before = p.Money; p.Money = Math.Clamp(p.Money + amount, 0, CsRules.MaxMoney); if (p.Money != before) Event("money", t, p.Id, why, p.Money - before); }
 
@@ -313,6 +314,7 @@ sealed partial class CsMatch
     void Killed(string victim, string killer, CombatWeapon weapon, bool head)
     {
         var now = Combat.Position(victim)?.T ?? 0;
+        if (Phase == "warmup") { warmupRespawns[victim] = (Combat.EventsSince(damageCursor).LastOrDefault(e => e.Member == victim && e.Kind == "damage")?.T ?? now) + 2000; return; }
         if (players.TryGetValue(killer, out var k))
         {
             k.Kills++;
@@ -364,6 +366,7 @@ sealed partial class CsMatch
 
     void StartRound(long now)
     {
+        Combat.CancelPending(now);
         drops.Clear();
         foreach (var p in players.Values) p.RoundKills = 0;
         Round++;
@@ -373,6 +376,8 @@ sealed partial class CsMatch
         var index = new Dictionary<string, int>();
         foreach (var p in players.Values)
         {
+            if (p.Spectating) continue;
+            p.SpawnSerial++;
             Combat.Revive(p.Id, now, CsRules.MaxHealth);
             Combat.SetTeam(p.Id, p.Team);
             p.Flash = null;
@@ -393,6 +398,7 @@ sealed partial class CsMatch
             : ts.Count > 0 ? ts[new Random(unchecked((int)(Combat.Start ^ Round * 7919L))).Next(ts.Count)].Id : null;
         dropper = null; dropperBlockedUntil = 0;
         bombState = carrier is null ? "none" : "carried"; site = null; planter = null; defuser = null; bombAt = null; explodesAt = null; plantDoneAt = null; defuseDoneAt = null; plantedThisRound = false;
+        ApplyTimeouts(now);
         Event("round", now, null, "Round " + Round);
     }
 
@@ -401,11 +407,11 @@ sealed partial class CsMatch
     public string? Buy(string id, string item, long now)
     {
         if (!players.TryGetValue(id, out var p)) return "not-playing";
-        if (!(Phase == "freeze" || (Phase == "live" && LiveAt is { } live && now < live + CsRules.BuyMs))) return "buy-time";
+        if (!(Phase is "warmup" or "freeze" || (Phase == "live" && LiveAt is { } live && now < live + CsRules.BuyMs))) return "buy-time";
         if (!Combat.Alive(id)) return "dead";
         var side = SideOf(p.Team);
         var zones = map?.BuyZones(side) ?? [];
-        if (zones.Count > 0 && (Combat.Position(id) is not { } at || !zones.Any(z => z.Contains(at.X, at.Y, at.Z, 50)))) return "buy-zone";
+        if (Phase != "warmup" && zones.Count > 0 && (Combat.Position(id) is not { } at || !zones.Any(z => z.Contains(at.X, at.Y, at.Z, 50)))) return "buy-zone";
         int price; Action grant;
         if (CsRules.Find(item) is { } w)
         {
@@ -440,6 +446,7 @@ sealed partial class CsMatch
             price = CsRules.KitPrice; grant = () => p.Kit = true;
         }
         else return "unknown-item";
+        if (Phase == "warmup") price = 0;
         if (p.Money < price) return "money";
         p.Money -= price; grant();
         Event("buy", now, id, item, -price);
@@ -548,7 +555,7 @@ sealed partial class CsMatch
     public string? Throw(string id, string kind, double strength, double[] origin, double pitch, double yaw, long now)
     {
         if (!players.TryGetValue(id, out var p) || !Combat.Alive(id)) return "dead";
-        if (Phase is not ("live" or "planted")) return Phase == "freeze" ? "freeze" : "not-now";
+        if (Paused || Phase is not ("warmup" or "live" or "planted")) return Phase == "freeze" ? "freeze" : "not-now";
         if (!p.Grenades.Contains(kind)) return "no-grenade";
         if (origin is not { Length: 3 } || origin.Any(v => !double.IsFinite(v) || Math.Abs(v) > 1e7) || !double.IsFinite(pitch) || !double.IsFinite(yaw) || Math.Abs(pitch) > 90.5 || !double.IsFinite(strength)) return "invalid";
         if (Combat.Position(id) is not { } at) return "no-track";
@@ -560,7 +567,7 @@ sealed partial class CsMatch
     public string? BotThrow(string id, string kind, double[] origin, double[] velocity, long now)
     {
         if (!players.TryGetValue(id, out var p) || !Combat.Alive(id)) return "dead";
-        if (Phase is not ("live" or "planted")) return "not-now";
+        if (Paused || Phase is not ("warmup" or "live" or "planted")) return "not-now";
         if (!p.Grenades.Contains(kind)) return "no-grenade";
         if (origin is not { Length: 3 } || velocity is not { Length: 3 } || origin.Concat(velocity).Any(v => !double.IsFinite(v) || Math.Abs(v) > 1e7)) return "invalid";
         var speed = Math.Sqrt(velocity.Sum(v => v * v));
@@ -581,6 +588,8 @@ sealed partial class CsMatch
     public void Tick(long now)
     {
         if (Over) return;
+        if (Paused) { ShiftPause(now); return; }
+        if (TickWarmup(now)) return;
         RememberPositions();
         CollectDamage();
         if (Phase is "freeze" or "live" or "planted") foreach (var p in players.Values) TryPickup(p.Id, now, false);
@@ -683,6 +692,7 @@ sealed partial class CsMatch
         if (switchNow)
         {
             swapped = !swapped;
+            Array.Clear(timeoutUsed);
             var money = roundsPlayed >= 2 * HalfRounds ? CsRules.OvertimeMoney : CsRules.StartMoney;
             foreach (var p in players.Values) { p.Money = money; p.Primary = null; p.Secondary = null; p.Armor = 0; p.Helmet = false; p.Kit = false; p.Grenades.Clear(); }
             lossStreak[0] = 0; lossStreak[1] = 0;
@@ -693,6 +703,7 @@ sealed partial class CsMatch
 
     bool? InBuyZone(P p)
     {
+        if (Phase == "warmup") return true;
         var zones = map?.BuyZones(SideOf(p.Team)) ?? [];
         if (zones.Count == 0) return null;
         return Combat.Position(p.Id) is { } at && zones.Any(z => z.Contains(at.X, at.Y, at.Z, 50));
@@ -707,9 +718,9 @@ sealed partial class CsMatch
     public CsView View() => new(Round, Phase, PhaseEndsAt, LiveAt, [score[0], score[1]], SideOf(1), HalfRounds, Overtime,
         players.Values.Select(p => new CsPlayerView(p.Id, p.Team, SideOf(p.Team), p.Money, Combat.Alive(p.Id), Math.Round(Combat.Health(p.Id), 1), Math.Round(p.Armor, 1), p.Helmet, p.Kit,
             p.Primary?.Id, p.Secondary?.Id, p.Kills, p.Deaths, InBuyZone(p), SiteOf(p), CalloutOf(p), Holding(p).Id, p.Grenades.Count > 0 ? p.Grenades.ToArray() : null, p.Flash,
-            p.Held == CsRules.GrenadeSlot ? p.HeldGrenade : null, Math.Round(p.EnemyDamage / Math.Max(1, roundsPlayed), 1), p.EnemyKills > 0 ? Math.Round(100.0 * p.HeadKills / p.EnemyKills, 1) : 0, p.Mvps)).ToArray(),
+            p.Held == CsRules.GrenadeSlot ? p.HeldGrenade : null, Math.Round(p.EnemyDamage / Math.Max(1, roundsPlayed), 1), p.EnemyKills > 0 ? Math.Round(100.0 * p.HeadKills / p.EnemyKills, 1) : 0, p.Mvps, p.Afk, p.Spectating, p.SpawnSerial)).ToArray(),
         new CsBombView(bombState, carrier, site, bombAt, explodesAt, planter, plantDoneAt, defuser, defuseDoneAt), lastWinner, lastReason, WinnerTeam, events.TakeLast(16).ToArray(),
         roundSpawns.Count > 0 ? new Dictionary<string, double[]>(roundSpawns) : null,
         map?.BombSites.Select(z => new CsSiteView(z.Name, Math.Round((z.Min[0] + z.Max[0]) / 2), Math.Round((z.Min[1] + z.Max[1]) / 2), Math.Round((z.Min[2] + z.Max[2]) / 2))).ToArray(),
-        Grenades.View() is { Count: > 0 } thrownGrenades ? thrownGrenades : null, drops.ToArray());
+        Grenades.View() is { Count: > 0 } thrownGrenades ? thrownGrenades : null, drops.ToArray(), Paused, TimeoutUntil, warmupReady.ToArray());
 }

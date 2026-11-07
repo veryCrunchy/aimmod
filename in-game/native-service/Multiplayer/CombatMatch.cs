@@ -167,6 +167,7 @@ sealed class CombatMatch
     // Round-based modes (CS) set these: no respawns, a weapon per shooter and slot (null: that
     // slot is empty), a damage model (armour), and a hook on every kill.
     public bool Respawns { get; set; } = true;
+    public bool CountScores { get; set; } = true;
     public Func<string, int, CombatWeapon?>? WeaponFor { get; set; }
     // CS: the weapon's feel (spread, movement inaccuracy) for a shooter's slot; null: no spread (the camera ray).
     public Func<string, int, CsFeelSpec?>? SpreadFor { get; set; }
@@ -379,6 +380,17 @@ sealed class CombatMatch
             shooter.Pending = Math.Max(0, shooter.Pending - 1);
             Evaluate(shooter, c, now, received, rtt);
         }
+    }
+
+    public void CancelPending(long now)
+    {
+        foreach (var (from, claim, received, _) in pending)
+        {
+            if (!players.TryGetValue(from, out var shooter)) continue;
+            shooter.Pending = Math.Max(0, shooter.Pending - 1);
+            Decide(shooter, from, claim, now, received, "round-phase", "Play stopped before this hit could be resolved.");
+        }
+        pending.Clear();
     }
 
     string? Decide(Player? shooter, string from, HitClaim c, long now, long received, string? reason, string? detail, string? victim = null, double damage = 0, bool head = false, bool kill = false)
@@ -622,8 +634,8 @@ sealed class CombatMatch
         Emit("damage", now, victim.Id, shooter.Id, dealt, false, victim.Health, null, null, dir is { Length: 3 } ? dir.Select(v => Math.Round(v, 4)).ToArray() : null);
         if (victim.Health <= 0.0001)
         {
-            victim.Health = 0; victim.Alive = false; victim.Deaths++; victim.DiedAt = now; victim.RespawnAt = Respawns ? now + CombatRules.RespawnMs(Mode) : null;
-            if (own || teamHit) shooter.Frags = Math.Max(0, shooter.Frags - 1); else shooter.Frags++;
+            victim.Health = 0; victim.Alive = false; if (CountScores) victim.Deaths++; victim.DiedAt = now; victim.RespawnAt = Respawns ? now + CombatRules.RespawnMs(Mode) : null;
+            if (CountScores) { if (own || teamHit) shooter.Frags = Math.Max(0, shooter.Frags - 1); else shooter.Frags++; }
             OnKill?.Invoke(victim.Id, shooter.Id, weapon, false);
             Emit("death", now, victim.Id, shooter.Id, dealt, false, 0, shooter.Health);
         }
@@ -645,9 +657,9 @@ sealed class CombatMatch
         Emit("damage", t, victim.Id, shooter.Id, damage, head, victim.Health, healed, null, dir);
         if (victim.Health <= 0.0001)
         {
-            victim.Health = 0; victim.Alive = false; victim.Deaths++; victim.DiedAt = t; victim.RespawnAt = Respawns ? now + CombatRules.RespawnMs(Mode) : null;
+            victim.Health = 0; victim.Alive = false; if (CountScores) victim.Deaths++; victim.DiedAt = t; victim.RespawnAt = Respawns ? now + CombatRules.RespawnMs(Mode) : null;
             // A team kill scores nothing (CS takes a kill away); the kill hook decides the rest.
-            if (teamHit) shooter.Frags = Math.Max(0, shooter.Frags - 1); else shooter.Frags++;
+            if (CountScores) { if (teamHit) shooter.Frags = Math.Max(0, shooter.Frags - 1); else shooter.Frags++; }
             OnKill?.Invoke(victim.Id, shooter.Id, weapon, head);
             if (Mode == LobbyModes.Vampiric) shooter.Health = Math.Min(CombatRules.MaxHealth, shooter.Health + CombatRules.VampiricHealthOnKill);
             Emit("death", t, victim.Id, shooter.Id, damage, head, 0, shooter.Health);

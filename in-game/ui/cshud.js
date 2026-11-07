@@ -61,18 +61,20 @@
     else if(menuKey&&layers.menu.firstChild&&layers.menu.firstChild.timeNode)layers.menu.firstChild.timeNode.textContent=typeof c.buyLeft==='number'?'Buy time '+clock(c.buyLeft):'Buy time over';
     if(!c){root2.className='';while(liveTarget.firstChild)liveTarget.removeChild(liveTarget.firstChild);return;}
     root2.className='show';
-    if(c.sessionId&&c.controls&&c.round===1&&c.phase==='freeze'&&!controlsSeen[c.sessionId]){var help=node('div','cs-controls');help.appendChild(node('strong','','Your controls'));for(var binding in c.controls)help.appendChild(node('div','',binding+': '+c.controls[binding]));var dismiss=node('button','button','Got it');dismiss.onclick=function(){controlsSeen[c.sessionId]=true;draw(root2,c,act);};help.appendChild(dismiss);target.appendChild(help);}else if(c.sessionId&&(c.round!==1||c.phase!=='freeze'))controlsSeen[c.sessionId]=true;
+    if(c.sessionId&&c.controls&&c.round===1&&c.phase==='freeze'&&!controlsSeen[c.sessionId]){var help=node('div','cs-controls');help.appendChild(node('strong','','Your controls'));for(var binding in c.controls)help.appendChild(node('div','',binding+': '+c.controls[binding]));var dismiss=node('button','button','Got it');dismiss.onclick=function(){controlsSeen[c.sessionId]=true;draw(root2,c,act);};help.appendChild(dismiss);target.appendChild(help);}else if(c.sessionId&&c.phase!=='warmup'&&(c.round!==1||c.phase!=='freeze'))controlsSeen[c.sessionId]=true;
     // Top: score strip and the clock for this phase.
     var group=node('div','cs-top-group');target.appendChild(group);var top=node('div','cs-top');
     var t=node('div','cs-score t'+(c.side==='T'?' mine':''));t.appendChild(node('span','cs-team','T'));t.appendChild(node('span','cs-points',c.tScore));
     var mid=node('div','cs-clock'+(c.phase==='planted'?' bomb':''));
     // Freeze time here; the buy menu counts the buy window (freeze plus buy time) and says so.
-    var label=c.phase==='freeze'?'Freeze time':c.phase==='planted'?'Bomb planted'+(c.site?' · '+c.site:''):c.phase==='end'?'Round over':'Round '+c.round;
+    var label=c.paused?'Host pause':c.timeout?'Tactical timeout':c.phase==='warmup'?'Warmup':c.phase==='freeze'?'Freeze time':c.phase==='planted'?'Bomb planted'+(c.site?' · '+c.site:''):c.phase==='end'?'Round over':'Round '+c.round;
     mid.appendChild(node('span','cs-clock-label',label));
     mid.appendChild(node('span','cs-clock-time',c.phase==='planted'&&typeof c.bombIn==='number'?clock(c.bombIn):clock(c.left)));
-    mid.appendChild(node('span','cs-clock-round','Round '+c.round+' of '+c.rounds+(typeof c.tAlive==='number'?' · T '+c.tAlive+' · CT '+c.ctAlive:'')));
+    mid.appendChild(node('span','cs-clock-round',(c.phase==='warmup'?'Practice':'Round '+c.round+' of '+c.rounds)+(typeof c.tAlive==='number'?' · T '+c.tAlive+' · CT '+c.ctAlive:'')));
     var ct=node('div','cs-score ct'+(c.side==='CT'?' mine':''));ct.appendChild(node('span','cs-points',c.ctScore));ct.appendChild(node('span','cs-team','CT'));
     top.appendChild(t);top.appendChild(mid);top.appendChild(ct);group.appendChild(top);
+    if(c.afk)group.appendChild(node('div','cs-controls','A bot is playing your slot. Move or fire to return.'));
+    if(c.phase==='warmup')group.appendChild(node('div','cs-controls','Free buys · Type /ready in chat to begin'));
     // Bomb sites on a compass under the strip (90 degrees either side; behind clamps to an edge), and
     // the site letter (and callout) while you stand in one.
     if(c.sites&&c.sites.length&&!c.buyOpen){

@@ -73,7 +73,7 @@ sealed partial class MultiplayerService
         // Key 4 again with a grenade already in hand: the next kind you carry (CS).
         if (csKeys.Pressed('4') && inHand && now - grenadeSlotSince > 150 && !grenadeTrigger.Pulled) grenadeHand = GrenadeRules.Next(carried, grenadeHand);
         var (left, leftTap) = csKeys.State((char)0x01); var (right, rightTap) = csKeys.State((char)0x02);
-        if (!inHand || cs.Phase is not ("live" or "planted")) { grenadeTrigger.Reset(); return; }
+        if (!inHand || cs.Paused || me.Afk || cs.Phase is not ("warmup" or "live" or "planted")) { grenadeTrigger.Reset(); return; }
         var strength = grenadeTrigger.Step(now, grenadeSlotSince, left, right, leftTap, rightTap);
         if (grenadeTrigger.TakePinSound()) roundAudio.Play(new RoundCue("nade-pin", null, GrenadeSoundPlan.PinGain), null);
         if (strength is not { } s) return;

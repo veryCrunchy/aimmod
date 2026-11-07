@@ -141,6 +141,8 @@ static class KeyBinds
     public static IReadOnlyList<string> Conflicts(string hotkey, string clipKey, IReadOnlySet<string> game)
     {
         var list = new List<string>();
+        if (hotkey is "F1" or "F2") list.Add("The lobby key also votes in team matches. Use /yes or /no in chat, or choose another lobby key.");
+        if (clipKey is "F1" or "F2") list.Add("The clip key also votes in team matches. Use /yes or /no in chat, or choose another clip key.");
         if (hotkey == clipKey) list.Add("The lobby key and the clip key are both " + hotkey + ".");
         if (game.Contains(hotkey)) list.Add("KovaaK’s already uses " + hotkey + "; pick another lobby key.");
         if (game.Contains(clipKey)) list.Add("KovaaK’s already uses " + clipKey + "; pick another clip key.");

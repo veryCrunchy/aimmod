@@ -484,3 +484,11 @@ test('Cosmetics failures retry and empty models have an explicit state',()=>{
  const s=setup();s.api.enter(s.container);s.requests[0].finish(200,view());s.button('Cosmetics').onclick();s.requests.find(r=>r.url.endsWith('part=looks')).finish(503,{});
  const retry=s.button("Couldn't load character options. Retry.");assert.ok(retry);retry.onclick();s.requests.filter(r=>r.url.endsWith('part=looks')).at(-1).finish(200,{models:[]});assert.ok(s.text().includes('No character options available.'));
 });
+
+test('live team controls send votes and host pause commands',()=>{
+  const s=setup();s.api.enter(s.container);
+  const match={id:'m1',phase:'live',mode:'cs',scenario:'Synthetic Scenario',timeLimit:60,round:1,totalRounds:24,startsAt:0,players:['p1','p2'],live:[],rounds:[],standings:[],rematch:[],cs:{phase:'live',paused:false,players:[{member:'p1',team:1},{member:'p2',team:1}]}};
+  s.requests[0].finish(200,view({lobby:lobby({settings:Object.assign({},settings,{mode:'cs'}),match})}));
+  assert.ok(s.button('Vote to surrender')&&s.button('Tactical timeout')&&s.button('Vote to kick Synthetic Two'));
+  s.button('Pause match').onclick();assert.deepEqual(JSON.parse(s.last().body),{action:'match-control',command:'pause'});
+});

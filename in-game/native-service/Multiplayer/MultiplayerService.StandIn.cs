@@ -14,6 +14,8 @@ sealed partial class MultiplayerService
     public const string StandInPeer = "1";
     public const int MaxStandIns = 16;
     readonly Dictionary<string, string> standIns = new(StringComparer.Ordinal); // member -> peer
+    readonly Dictionary<string, string> standInSlots = new(StringComparer.Ordinal);
+    string? standInMatch;
     bool standInAuto; long standInTriedAt = long.MinValue / 2; string? standInSent;
 
     // The first simulated member shown, while a match of ours runs.
@@ -23,10 +25,14 @@ sealed partial class MultiplayerService
     void UpdateStandIn()
     {
         standIns.Clear();
+        if (standInMatch != Current?.Match?.Id) { standInMatch = Current?.Match?.Id; standInSlots.Clear(); }
         var dev = Simulation is not null && core is not null;
         if (Current is { Match: { Phase: MatchPhases.Loading or MatchPhases.Countdown or MatchPhases.Live } match } lobby && match.Players.Contains(SelfId))
-            foreach (var (id, i) in match.Players.Where(id => id != SelfId && lobby.Members.Any(m => m.Id == id && ((IsBot(m) && LobbyModes.Shooting(match.Mode)) || (dev && m.Simulated)))).Take(MaxStandIns).Select((id, i) => (id, i)))
-                standIns[id] = (i + 1).ToString(System.Globalization.CultureInfo.InvariantCulture);
+            foreach (var (id, i) in match.Players.Where(id => (id != SelfId || match.Cs?.Players.Any(p => p.Member == id && p.Afk) == true) && lobby.Members.Any(m => m.Id == id && ((IsBot(m) && LobbyModes.Shooting(match.Mode)) || (dev && m.Simulated)))).Take(MaxStandIns).Select((id, i) => (id, i)))
+            {
+                if (!standInSlots.TryGetValue(id, out var slot)) standInSlots[id] = slot = (standInSlots.Count + 1).ToString(System.Globalization.CultureInfo.InvariantCulture);
+                standIns[id] = slot;
+            }
         if (standIns.Count == 0)
         {
             if (standInAuto) { standInAuto = false; standInSent = null; transport.DevAvatar(false, "circle", null); }
@@ -57,7 +63,8 @@ sealed partial class MultiplayerService
     (double[][] Points, int Own) WalkPointsFor(string member)
     {
         var own = SpawnsFor(member);
-        if (Current?.Members.FirstOrDefault(m => m.Id == member) is not { Bot: not null }) return (own, own.Length);
+        if (Current?.Match?.Cs is { } cs && cs.Players.Any(p => p.Member == member && p.Afk) && cs.Spawns?.GetValueOrDefault(member) is { } spot) own = [spot.Take(3).ToArray()];
+        if (Current?.Members.FirstOrDefault(m => m.Id == member) is not { } owner || !IsBot(owner)) return (own, own.Length);
         if (core is null) return ([], 0);
         own = own.Take(8).ToArray();
         IEnumerable<double[]> more;
@@ -91,7 +98,7 @@ sealed partial class MultiplayerService
     {
         if (core is null || standIns.Count == 0) return;
         // Bots have their own, authoritative feed (MultiplayerService.Bots.cs FeedBotTracks).
-        foreach (var group in batch.Seen.Where(v => v.Member is { } m && standIns.ContainsKey(m) && Current?.Members.FirstOrDefault(x => x.Id == m) is not { Bot: not null }).GroupBy(v => v.Member!))
+        foreach (var group in batch.Seen.Where(v => v.Member is { } m && standIns.ContainsKey(m) && (Current?.Members.FirstOrDefault(x => x.Id == m) is not { } owner || !IsBot(owner))).GroupBy(v => v.Member!))
         {
             var samples = group.Select(v => new TrackSample(v.T, v.X, v.Y, v.Z + TrackingRound.DefaultEyeAboveCentre, 0, 0)).ToArray();
             var last = group.Last();

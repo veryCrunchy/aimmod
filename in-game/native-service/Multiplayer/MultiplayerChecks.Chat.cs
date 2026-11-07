@@ -82,7 +82,7 @@ static partial class MultiplayerChecks
     {
         var content = new FakeContent();
         var (core, clock, advance) = Lobby();
-        core.Apply("host", "settings", Patch(new { mode = "cs", maxPlayers = 6, countdown = 3 }), content);
+        core.Apply("host", "settings", Patch(new { mode = "cs", csWarmup = false, maxPlayers = 6, countdown = 3 }), content);
         core.Apply("host", "add-bot", J(new { skill = "normal", fill = true }), content);
         ReadyAll(core);
         core.SetCsObjectives(MapObjectives.Parse(CsSpec()));
