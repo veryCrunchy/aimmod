@@ -23,6 +23,10 @@ sealed class Motion
     { this.times = times; this.pitch = pitch; this.yaw = yaw; this.roll = roll; this.cameraT = cameraT; this.camera = camera; this.tracks = tracks; }
     public int EngineFrames => times.Length;
     public double[] Times => times;
+    /// <summary>Raw target tracks (keyframes, segment starts) for analysis; playback uses Pose.</summary>
+    internal IReadOnlyList<Track> Tracks => tracks;
+    /// <summary>Registered hits of the player's shots (time, target id), in order.</summary>
+    internal IReadOnlyList<(double T, int Target)> Hits { get; init; } = [];
 
     static double Angle(double a, double b, double u) => a + (((b - a + 540) % 360 + 360) % 360 - 180) * u;
     // Index of the first element >= t.
@@ -244,7 +248,8 @@ static class ReplayFormat2
         var motion = new Motion(times, pitch, yaw, roll, T(camera), camera.Select(q => q.V).ToArray(), tracks.Select(track => new Motion.Track(
             track.Id, track.Profile, T(track.Points), track.Points.Select(q => q.Start).ToArray(), track.Points.Select(q => q.V).ToArray(),
             track.Health.Select(x => times[x.Frame]).ToArray(), track.Health.Select(x => x.Value).ToArray(),
-            T(track.Rotation), track.Rotation.Select(q => q.Start).ToArray(), track.Rotation.Select(q => q.V).ToArray())).ToArray());
+            T(track.Rotation), track.Rotation.Select(q => q.Start).ToArray(), track.Rotation.Select(q => q.V).ToArray())).ToArray())
+            { Hits = hits.Select(x => (times[x.Frame], x.Target)).ToArray() };
         var frames = new List<ReplayFrame>(grid.Count);
         int statIndex = -1; var statValues = new double?[6]; double secondsAt = 0;
         double? lastHits = null, hitTime = null, hitDelta = null;
