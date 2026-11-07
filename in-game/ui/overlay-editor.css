@@ -125,3 +125,32 @@
 .ove-data-list { max-height: 280px; overflow: auto; }
 .ove-data-list button { display: block; text-align: left; margin-bottom: 4px; width: 100%; }
 .ove-center { overflow: auto; }
+/* Explicit dimensions keep the studio stable in the embedded view. */
+.ove-top{margin-bottom:12px}
+.ove-bar{margin-bottom:12px}
+.ove-scenes{flex-wrap:nowrap;height:40px;overflow:auto;flex:none}
+.ove-scene{display:flex;flex-direction:row;align-items:center;flex-shrink:0}
+.ove-scene-tag{flex-shrink:0}
+.ove-bar-right{flex-wrap:nowrap;align-items:center;height:44px;margin:0;padding:4px 8px;background:#121a17;border:1px solid #1f2b27;border-radius:8px}
+.ove-bar-right>.button{flex-shrink:0;margin-right:8px}
+.ove-bar-right>.dropdown{width:140px;flex-shrink:0;margin-right:8px}
+.ove-body{position:relative;height:600px;display:block}
+.ove-library{position:absolute;left:0;top:0;width:196px;height:600px;overflow:auto;padding:12px;background:#121a17;border:1px solid #1f2b27;border-radius:8px}
+.ove-center{position:absolute;left:208px;right:332px;top:0;height:600px;padding:0;overflow:auto}
+.ove-inspector{position:absolute;right:0;top:0;width:320px;height:600px;overflow:auto;padding:16px;background:#121a17}
+.ove-line{display:block;margin:8px 0}
+.ove-line-label{display:block;padding:0;margin-bottom:6px;line-height:18px}
+.ove-line-control{display:block;width:100%}
+.ove-line-control>.ove-num{width:100%}
+.ove-line-control>.dropdown{width:100%}
+.ove-note{display:flex;flex-direction:row;align-items:center;background:#121a17;border:1px solid #1f2b27;padding:8px 12px;min-height:40px}
+.ove-note.warn{background:#121a17;border:1px solid #1f2b27;color:#93a69c}
+.ove-note>.actions{margin:0 0 0 16px}
+.ove-library-search{margin-bottom:12px}
+.ove-sky{background:#18231f}
+.ove-floor{background:#121a17}
+.ove-drawer{background:#121a17;border:1px solid #1f2b27}
+.ove-data-list{height:220px;overflow:auto;margin:8px 0}
+.ove-xy{width:62px;flex:none}
+.ove-gear-add{display:flex;flex-direction:column;align-items:flex-start}
+.ove-gear-add .button{display:block}
