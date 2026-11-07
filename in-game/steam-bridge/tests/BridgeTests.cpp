@@ -522,6 +522,9 @@ int main()
                                    "pose\t1759300000100\t1.5\t-2\t160\t-10\t90\t0\t103\n"
                                    "pose\t1759300000116\t1.6\t-2\t161\t-10\t91\t0\t103\n"
                                    "target\t7\t500\t0\t90\t34\t88\n";
+        auto malformed = sample;
+        malformed.replace(malformed.find("1.5"), 3, std::string("1\0x", 3));
+        Check(!Parse(malformed), "rejects embedded null in pose numbers");
         auto parsed = Parse(sample);
         Check(parsed && parsed->sequence == 42 && parsed->scenario == "AimMod - aim_map (CSS) - CS Movement" && parsed->map == "aimmod_aim_map_css.map" &&
                   parsed->scale == 4 && parsed->rows.size() == 2 && parsed->rows[1].ms == 1759300000116 && parsed->rows[1].v[4] == 91 &&
