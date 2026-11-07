@@ -32,7 +32,7 @@ function makeXhr(log){
     finish(status,data){this.status=status;this.readyState=4;this.responseText=typeof data==='string'?data:JSON.stringify(data);this.onreadystatechange();}};
 }
 const UI=__dirname;
-function load(window,files){const context=vm.createContext({window,Date,Math,JSON});for(const f of files)vm.runInContext(fs.readFileSync(path.join(UI,f),'utf8'),context,{filename:f});return context;}
+function load(window,files){const context=vm.createContext({window,Date,Math,JSON});require('./test-format.cjs').loadFormat(context);for(const f of files)vm.runInContext(fs.readFileSync(path.join(UI,f),'utf8'),context,{filename:f});return context;}
 function makeWindow(extra){
   const document=makeDocument(),requests=[],timers=[];
   const window=Object.assign({document,XMLHttpRequest:makeXhr(requests),location:{pathname:'/cap/ui',search:''},innerWidth:1920,innerHeight:1080,

@@ -20,6 +20,7 @@ Surfaces: surface-canvas #0b1110, surface-panel #151f1c, surface-raised #1d2b26.
 - Chips: chip or badge, optionally success or warning. Put them in a flex row.
 - Switches: existing switch, on and knob. Use a button with role=switch, aria-checked and aria-label.
 - Inputs: input, an explicit label, and existing AimModFormat.field when a hint is needed. Never rely on hint text as the label.
+- Dropdowns: `AimModFormat.dropdown(label, items, value, onChange)` returns a shared button and positioned list. Items have `value` and `label` fields. Lists above 12 items include search. Arrow keys, Home, End, Escape and native button activation are supported. Use `setDisabled(true)` while saving. Native select and datalist controls are prohibited in embedded pages.
 - Tooltips: tooltip-wrap containing tooltip with role=tooltip; connect the trigger with aria-describedby. Essential instructions must also be visible on the page.
 
 All interactive controls receive a visible mint focus ring. Use native buttons for actions. Avoid overriding the shared focus style.

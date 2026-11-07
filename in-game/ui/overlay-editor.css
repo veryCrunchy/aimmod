@@ -4,13 +4,20 @@
 .ove-tab{display:flex;align-items:center;justify-content:center;height:44px;padding:0 16px;margin:0 2px -1px 0;background:transparent;border:0;border-bottom:2px solid transparent;border-radius:0;color:#a7bab0;font-size:14px;font-weight:500}
 .ove-tab:hover{color:#eef5f1;background:#151f1c}.ove-tab.active{color:#27e4a1;border-bottom-color:#27e4a1;background:transparent}
 .ove-status{flex-shrink:0;font-size:12px;color:#7f968a;padding:0 4px 0 16px;white-space:nowrap}.ove-status.warn{color:#f0b45a}.ove-status.idle{display:none}
-.ove-bar{display:flex;flex-direction:row;align-items:center;flex-wrap:wrap;margin-bottom:12px}
+.ove-bar{display:flex;flex-direction:column;align-items:stretch;margin-bottom:12px}
 .ove-scenes{display:flex;flex-direction:row;flex-wrap:wrap;align-items:center;flex:1;min-width:0}
 .ove-scene{height:34px;line-height:32px;padding:0 14px;margin:0 6px 6px 0;background:#151f1c;border-color:#22302a;color:#a7bab0}
 .ove-scene.active{background:#173b2f;border-color:#2c6b52;color:#eef5f1}
 .ove-scene-tag{display:block;margin-left:8px;padding:0 6px;height:18px;line-height:18px;border-radius:9px;background:#1d2b26;color:#7f968a;font-size:10px;font-weight:700;letter-spacing:.6px;text-transform:uppercase}
 .ove-scene.active .ove-scene-tag,.ove-scene-tag.on{background:#27e4a1;color:#06231a}
-.ove-bar-right{display:flex;flex-direction:row;align-items:center;flex-shrink:0;margin-bottom:6px}
+.ove-bar-right{display:flex;flex-direction:row;align-items:flex-start;flex-wrap:wrap;width:100%;margin-bottom:6px}
+.ove-tool-group{display:flex;flex-wrap:wrap;align-items:center;padding:8px;margin:0 8px 8px 0;border:1px solid #30433a;border-radius:6px}
+.ove-tool-group>.button{margin:2px}
+.ove-tool-label{width:100%;font-size:11px;color:#a7bab0;margin-bottom:6px}
+.ove-tool-group .dropdown{min-width:130px}
+.ove-layer-row{padding:6px 0;border-bottom:1px solid #30433a}
+.ove-layer-row>.button{margin-right:4px}
+.ove-lib-add{display:flex;align-items:center;justify-content:center}
 .ove-bar-right .segmented{margin-right:8px}
 .ove-seg .button{height:28px;line-height:28px;padding:0 10px;font-size:12px}
 .ove-drawer{padding:16px 20px;margin-bottom:12px}.ove-drawer h3{font-size:15px;margin-bottom:4px}.ove-drawer>p{font-size:13px;margin-bottom:12px}.ove-sub{margin-top:16px}

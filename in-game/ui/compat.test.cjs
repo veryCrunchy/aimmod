@@ -6,6 +6,22 @@ const vm=require('node:vm');
 const {loadFormat}=require('./test-format.cjs');
 const context=vm.createContext({window:{}});
 const F=loadFormat(context);
+test('embedded pages never construct native popup controls',()=>{
+  for(const file of fs.readdirSync(__dirname).filter(f=>/\.(js|html|ts)$/.test(f))){
+    const source=fs.readFileSync(path.join(__dirname,file),'utf8');
+    assert.doesNotMatch(source,/<\s*(select|datalist)\b|(?:createElement|node|el)\(\s*['"](?:select|datalist)['"]/,file);
+    assert.doesNotMatch(source,/\.type\s*=\s*['"](?:range|date|color)['"]|type\s*=\s*['"](?:range|date|color)['"]/,file);
+  }
+});
+test('every HTML entry point keeps embedded styles compatible',()=>{
+  for(const file of fs.readdirSync(__dirname).filter(f=>f.endsWith('.html'))){
+    const source=fs.readFileSync(path.join(__dirname,file),'utf8');
+    for(const match of source.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/g)){
+      const css=match[1].replace(/\/\*[\s\S]*?\*\//g,'');
+      assert.doesNotMatch(css,/display:\s*(inline-)?grid|(^|[;{\s])(row-|column-)?gap\s*:|position:\s*sticky|var\(--|calc\(/,file);
+    }
+  }
+});
 test('Gameface formatting works without Intl options',()=>{
   assert.equal(F.number(98.123456789),'98.1');
   assert.equal(F.percent(83.876543210),'83.9%');

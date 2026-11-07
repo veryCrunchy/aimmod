@@ -1,6 +1,6 @@
 (function (global) {
   'use strict';
-  var runFilter = 'all', periodKey = '30', chartMetric = 'Score', detailKey = 'overview', scenarioQuery = '', scenarioLimit = 200, root, report, signature = '', selectScenario;
+  var runFilter = 'all', periodKey = 'all', chartMetric = 'Score', detailKey = 'overview', scenarioQuery = '', scenarioLimit = 200, root, report, signature = '', selectScenario;
   var SERIES = { value: '#27e4a1', average: '#c8f3e0', trend: '#e8b667' };
   var measures = [
     ['Overshoot','Overshoot','%',100],['SpeedVariation','Speed variation',' CV',1],['AverageSpeed','Average speed',' px/s at 800 DPI',1],
@@ -120,10 +120,9 @@
     var heading = append(toolbar, node('div', undefined, 'stats-heading')); append(heading, node('h2', selected && selected.Name || 'Choose a scenario'));
     append(heading, node('p', selected ? number(selected.Runs, 0) + (selected.Runs === 1 ? ' run' : ' runs') + (period.Days ? ' in the last ' + period.Days + ' days' : ' in your history') : 'Pick a scenario in the top bar.', 'stats-muted'));
     var scenarioField=append(heading,node('label','Scenario','stats-filter-label'));
-    var scenarioSelect=append(scenarioField,node('select',undefined,'input stats-scenario-select'));scenarioSelect.setAttribute('aria-label','Scenario');
     var allPeriod=report.Periods.filter(function(p){return !p.Days;})[0]||period;
-    (allPeriod.ScenarioTable||[]).forEach(function(s){var option=append(scenarioSelect,node('option',s.Name));option.value=s.Name;option.selected=!!selected&&s.Name===selected.Name;});
-    scenarioSelect.onchange=function(){if(selectScenario)selectScenario(scenarioSelect.value);};
+    append(scenarioField,F().dropdown('Scenario',(allPeriod.ScenarioTable||[]).map(function(s){return {value:s.Name,label:s.Name};}),selected&&selected.Name,function(value){if(selectScenario)selectScenario(value);}));
+    if(!period.Days)append(heading,node('p','Showing all recorded activity. Choose a shorter period to compare recent practice.','stats-muted'));
     if(period.Warmup&&period.Settled){var filters=append(toolbar,node('div',undefined,'segmented stats-filter'));filters.setAttribute('aria-label','Run type');[['all','All runs'],['warmup','Warm-up ('+period.Warmup.Runs+')'],['settled','Other runs ('+period.Settled.Runs+')']].forEach(function(f){var b=append(filters,button(f[1],function(){runFilter=f[0];draw();},runFilter===f[0]));b.setAttribute('aria-pressed',String(runFilter===f[0]));});}
     var periods = append(toolbar, node('div', undefined, 'segmented'));periods.setAttribute('aria-label','Period');
     report.Periods.forEach(function (p) { var b = append(periods, button(p.Days ? p.Days + ' days' : 'All time', function () { periodKey = p.Key; draw(); }, p.Key === period.Key)); b.setAttribute('aria-pressed', String(p.Key === period.Key)); });

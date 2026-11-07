@@ -22,6 +22,15 @@ function fixture(){
     Calendar:[{Date:'2026-01-01',Minutes:60,Runs:1}],ScenarioTable:[selected],Blocks:[{Start:'2026-01-01T12:00:00Z',Runs:1,Minutes:60,Scenarios:['A']}]};
   return {Periods:[period,{...period,Key:'7',Days:7,Runs:0}],AvailableRuns:1};
 }
+test('initial period includes history older than the recent windows',()=>{
+  const data=fixture(),all={...data.Periods[0],Key:'all',Days:null,Runs:4320};
+  data.Periods[0]={...data.Periods[0],Runs:0,Selected:{...data.Periods[0].Selected,Runs:0,Points:[]}};
+  data.Periods.push(all);const s=surface();s.api.render(s.root,data);
+  assert.ok(s.all().some(e=>e.tag==='button'&&e.textContent==='All time'&&e.className.includes('primary')));
+  assert.ok(s.all().some(e=>e.textContent.includes('Showing all recorded activity')));
+  s.all().find(e=>e.tag==='button'&&e.textContent==='30 days').onclick();
+  assert.ok(s.all().some(e=>e.textContent==='0 runs in the last 30 days'));
+});
 test('statistics renders literal scenario names, legitimate zero and unknown metrics without Intl',()=>{
   const s=surface();let selected;
   s.api.render(s.root,fixture(),value=>selected=value);
@@ -30,7 +39,7 @@ test('statistics renders literal scenario names, legitimate zero and unknown met
   assert.ok(s.all().some(e=>e.textContent==='0'));
   assert.ok(s.all().some(e=>e.textContent==='—'));
   s.all().find(e=>e.tag==='button'&&e.textContent==='Compare scenarios').onclick();
-  const target=s.all().find(e=>e.tag==='button'&&e.textContent==='<img onerror=alert(1)>');target.onclick();
+  const target=s.all().find(e=>e.tag==='button'&&e.className!=='dropdown-trigger'&&e.textContent==='<img onerror=alert(1)>');target.onclick();
   assert.equal(selected,'<img onerror=alert(1)>');assert.ok(s.drawing()>0);
 });
 test('period and metric controls redraw real supplied series and search filters the scenario table',()=>{

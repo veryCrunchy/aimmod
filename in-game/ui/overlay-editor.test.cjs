@@ -76,7 +76,7 @@ test('OBS and in-game outputs: master switches keep the earlier settings API, ev
   assert.equal(s.byId('ove-url-legacy').value,setupInfo.obsUrl);assert.equal(s.byId('ove-url-board').value,setupInfo.boardUrl);
   s.byId('ove-game-enabled').onclick();deq(JSON.parse(s.posts('overlay-settings')[0].body),{gameEnabled:true});
   s.posts('overlay-settings')[0].finish(200,{...settings,gameEnabled:true});assert.equal(s.byId('ove-game-enabled').attrs['aria-checked'],'true');
-  const pick=s.byId('ove-game-scene');pick.value='setup';pick.onchange();assert.equal(s.saveNow().gameScene,'setup');
+  const pick=s.byId('ove-game-scene');pick.children[0].onclick();pick.find(n=>n.getAttribute('role')==='option'&&n.textContent==='Setup card').onclick();assert.equal(s.saveNow().gameScene,'setup');
   s.byId('ove-url-stream-copy').onclick();assert.ok(s.byId('ove-url-stream').selected);
 });
 test('profile peripherals are added, edited, reordered and removed; KovaaK’s settings are listed read-only',()=>{
@@ -87,7 +87,7 @@ test('profile peripherals are added, edited, reordered and removed; KovaaK’s s
   assert.match(s.container.textContent,/30\.00 cm\/360/);assert.match(s.container.textContent,/103° · Overwatch/);
 });
 test('VS opponent selection still saves through overlay-opponents',()=>{
-  const s=setup();s.ready();s.byId('ove-tab-vs').onclick();const sel=s.byId('ove-opponent');sel.value='r1';sel.onchange();deq(JSON.parse(s.posts('overlay-opponents')[0].body),{key:'r1'});
+  const s=setup();s.ready();s.byId('ove-tab-vs').onclick();const sel=s.byId('ove-opponent');sel.children[0].onclick();sel.find(n=>n.getAttribute('role')==='option'&&n.textContent.indexOf('Example')===0).onclick();deq(JSON.parse(s.posts('overlay-opponents')[0].body),{key:'r1'});
 });
 test('a failed load offers a retry, and leaving aborts requests so late responses cannot render',()=>{
   const s=setup();s.route('overlay-scenes')[0].finish(500,'');assert.match(s.container.textContent,/Could not load your overlays/);s.button('Try again').onclick();assert.equal(s.route('overlay-scenes').length,2);

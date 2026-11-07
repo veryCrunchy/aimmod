@@ -132,18 +132,19 @@
     for(var i=0;i<st.store.scenes.length;i++)(function(s){var b=button(s.name,function(){st.scene=s.id;st.selected='';selection=[];st.panel='';st.rename=false;render();},'ove-scene'+(s.id===st.scene?' active':''),'ove-scene-'+s.id);
       var tags=[];if(st.store.obsScene===s.id)tags.push('OBS');if(st.store.gameScene===s.id)tags.push('Game');if(tags.length)b.appendChild(el('span','ove-scene-tag',tags.join(' · ')));picker.appendChild(b);})(st.store.scenes[i]);
     picker.appendChild(button('New scene',function(){st.panel=st.panel==='new'?'':'new';render();},'quiet','ove-new-scene'));
-    var right=add(bar,el('div','ove-bar-right'));
+    var groups=add(bar,el('div','ove-bar-right'));
+    function group(label){var box=add(groups,el('div','ove-tool-group'));box.setAttribute('role','group');box.setAttribute('aria-label',label);add(box,el('span','ove-tool-label',label));return box;}
+    var right=group('Edit');
     right.appendChild(button('Undo',function(){history(true);},'compact','ove-undo'));
     right.appendChild(button('Redo',function(){history(false);},'compact','ove-redo'));
     right.appendChild(button('Copy',function(){clipboard=M.copy(selectedGroup());},'compact'));
     right.appendChild(button('Paste',function(){if(clipboard)for(var ci=0;ci<clipboard.length;ci++)duplicateWidget(clipboard[ci]);},'compact'));
-    right.appendChild(button('Align left',function(){arrange('left');},'compact'));
-    right.appendChild(button('Align top',function(){arrange('top');},'compact'));
-    right.appendChild(button('Distribute',function(){arrange('distribute');},'compact'));
+    var arrangeBox=group('Arrange');arrangeBox.appendChild(root.AimModFormat.dropdown('Arrange',[{value:'left',label:'Align left'},{value:'top',label:'Align top'},{value:'distribute',label:'Distribute'}],'',arrange));
+    right=group('View');
     right.appendChild(button('Data explorer',function(){st.panel=st.panel==='data'?'':'data';render();},'compact','ove-explorer'));
     right.appendChild(segmented([['0.5','50%'],['1','Fit'],['1.5','150%']],String(zoom),function(v){zoom=Number(v);render();},'Canvas zoom'));
     right.appendChild(segmented([['sample','Sample data'],['live','Live data']],st.data,function(v){st.data=v;render();pollFeed();},'Preview data','ove-data'));
-    right.appendChild(segmented(CONTEXTS,st.ctx,function(v){st.ctx=v;render();},'Preview context','ove-ctx'));
+    right=group('Scene');right.appendChild(segmented(CONTEXTS,st.ctx,function(v){st.ctx=v;render();},'Preview context','ove-ctx'));
     right.appendChild(button('Share',function(){st.panel=st.panel==='share'?'':'share';st.importError='';render();},st.panel==='share'?'primary compact':'compact','ove-share'));
     if(st.panel==='new')templates();if(st.panel==='share')share();if(st.panel==='data')explorer();
     var body=add(container,el('div','ove-body'));
@@ -256,8 +257,8 @@
     var fb=el('span','ove-copied','');row.appendChild(button('Copy URL',function(){i.focus();i.select();var ok=false;try{ok=root.document.execCommand('copy');}catch(e){}fb.textContent=ok?'Copied':'Press Ctrl+C';},'compact primary',id+'-copy'));row.appendChild(fb);return row;}
   function sceneInspector(side,sc){
     add(side,el('div','ove-col-title','Scene'));
-    line(side,'Automatic state',segmented([['','Manual'],['menu','Menu'],['scenario','Run'],['match','Match'],['replay','Replay']],sc.auto,function(v){sc.auto=v;changed();},'Automatic scene'));
-    var layers=section(side,'Layers');for(var li=sc.widgets.length-1;li>=0;li--)(function(w){var row=add(layers,el('div','actions'));row.appendChild(button(M.entry(w.type).name,function(){st.selected=w.id;render();},'compact'));row.appendChild(button(w.visible?'Hide':'Show',function(){w.visible=!w.visible;changed();},'compact'));row.appendChild(button(w.locked?'Unlock':'Lock',function(){w.locked=!w.locked;changed();},'compact'));})(sc.widgets[li]);
+    var automatic=add(side,el('div','ove-block'));add(automatic,el('div','ove-line-label','Automatic state'));automatic.appendChild(root.AimModFormat.dropdown('Automatic state',[{value:'',label:'Manual'},{value:'menu',label:'Menu'},{value:'scenario',label:'Run'},{value:'match',label:'Match'},{value:'replay',label:'Replay'}],sc.auto,function(v){sc.auto=v;changed();}));
+    var layers=section(side,'Layers');layers.setAttribute('role','list');for(var li=sc.widgets.length-1;li>=0;li--)(function(w){var row=add(layers,el('div','ove-layer-row'));row.setAttribute('role','listitem');row.appendChild(button(M.entry(w.type).name,function(){st.selected=w.id;render();},'ove-layer-name'));var visible=button(w.visible?'Hide':'Show',function(){w.visible=!w.visible;changed();},'compact');visible.setAttribute('aria-label',(w.visible?'Hide ':'Show ')+M.entry(w.type).name);visible.setAttribute('aria-pressed',String(w.visible));row.appendChild(visible);var lock=button(w.locked?'Unlock':'Lock',function(){w.locked=!w.locked;changed();},'compact');lock.setAttribute('aria-label',(w.locked?'Unlock ':'Lock ')+M.entry(w.type).name);lock.setAttribute('aria-pressed',String(w.locked));row.appendChild(lock);})(sc.widgets[li]);
     var name=section(side,'');var input=el('input','ove-text');input.type='text';input.maxLength=48;input.value=sc.name;input.id='ove-scene-name';input.setAttribute('aria-label','Scene name');input.onchange=function(){var v=input.value.replace(/^\s+|\s+$/g,'');if(v){sc.name=v.slice(0,48);changed();}else input.value=sc.name;};
     var nb=add(name,el('div','ove-block'));add(nb,el('div','ove-line-label','Name'));nb.appendChild(input);
     var use=section(side,'Use this scene for');line(use,'OBS browser source',toggle(st.store.obsScene===sc.id,'Use for OBS',function(){st.store.obsScene=sc.id;changed();},'ove-use-obs'));
@@ -294,7 +295,7 @@
     }
     var game=add(right,el('div','panel ove-card'));var gh=add(game,el('div','ove-card-head'));var gt=add(gh,el('div',''));add(gt,el('h2','','In game'));add(gt,el('p','subtle','Draws a scene over KovaaK’s. It never takes your mouse or keyboard.'));
     gh.appendChild(toggle(!!st.settings.gameEnabled,'In-game overlay',function(v){saveLegacy({gameEnabled:v});},'ove-game-enabled'));
-    var pick=el('select','ove-select');pick.id='ove-game-scene';pick.setAttribute('aria-label','In-game scene');for(var k=0;k<st.store.scenes.length;k++){var o=el('option','',st.store.scenes[k].name);o.value=st.store.scenes[k].id;pick.appendChild(o);}pick.value=st.store.gameScene;pick.onchange=function(){st.store.gameScene=pick.value;changed();};
+    var pick=root.AimModFormat.dropdown('In-game scene',st.store.scenes.map(function(s){return {value:s.id,label:s.name};}),st.store.gameScene,function(value){st.store.gameScene=value;changed();});pick.id='ove-game-scene';
     var pb=add(game,el('div','ove-block'));add(pb,el('div','ove-line-label','Scene shown in game'));pb.appendChild(pick);
     add(game,el('p','subtle ove-hint','Each widget chooses where it shows: Menu, Scenario or Match (Editor, Visibility). In game, AimMod draws the overlay while a scenario or match runs; widgets set to Menu show on OBS.'));
     add(game,el('p','subtle ove-hint','Overlays are display only. They never change your game, inputs or ranked scores.'));
@@ -322,10 +323,10 @@
   // ---- VS opponent (unchanged behaviour) ----
   function opponent(){
     var card=add(container,el('div','panel ove-card'));add(card,el('h2','','VS opponent'));add(card,el('p','subtle','PB pace compares your live pace with this score. Personal best is the default.'));
-    var chooser=el('select','ove-select');chooser.id='ove-opponent';chooser.setAttribute('aria-label','VS opponent');var own=el('option','','Personal best');own.value='';chooser.appendChild(own);
-    var o=st.opponents,selected=o&&o.selectedKey||'',found=!selected;(o&&o.rows||[]).forEach(function(row){var opt=el('option','',(row.name||'Unknown player')+' · '+W.format.number(row.score)+' · '+(row.scenario||'Unknown scenario'));opt.value=row.key;chooser.appendChild(opt);if(row.key===selected)found=true;});
-    if(!found){var missing=el('option','','Selected opponent unavailable');missing.value=selected;chooser.appendChild(missing);}chooser.value=selected;
-    chooser.onchange=function(){st.busy=true;chooser.disabled=true;request('overlay-opponents',{key:chooser.value},function(ok,d){st.busy=false;if(ok)st.opponents=d;render();setStatus(ok?'Opponent saved.':'Could not select this opponent. Refresh and try again.',!ok);});};
+    var choices=[{value:'',label:'Personal best'}],o=st.opponents,selected=o&&o.selectedKey||'',found=!selected;
+    (o&&o.rows||[]).forEach(function(row){choices.push({value:row.key,label:(row.name||'Unknown player')+' · '+W.format.number(row.score)+' · '+(row.scenario||'Unknown scenario')});if(row.key===selected)found=true;});
+    if(!found)choices.push({value:selected,label:'Selected opponent unavailable'});
+    var chooser=root.AimModFormat.dropdown('VS opponent',choices,selected,function(value){st.busy=true;chooser.setDisabled(true);request('overlay-opponents',{key:value},function(ok,d){st.busy=false;if(ok)st.opponents=d;render();setStatus(ok?'Opponent saved.':'Could not select this opponent. Refresh and try again.',!ok);});});chooser.id='ove-opponent';
     card.appendChild(chooser);add(card,el('p','subtle ove-hint','Open a scenario’s leaderboard in game to pick its players here.'));
     var a=add(card,el('div','actions'));a.appendChild(button('Refresh opponents',function(){request('overlay-opponents',null,function(ok,d){if(ok)st.opponents=d;render();if(!ok)setStatus('Could not refresh opponents.',true);});}));
   }
