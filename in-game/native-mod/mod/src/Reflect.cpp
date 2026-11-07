@@ -1,4 +1,5 @@
 #include "Reflect.hpp"
+#include <aimmod/Perf.hpp>
 
 #include <Unreal/CoreUObject/UObject/Class.hpp>
 #include <Unreal/CoreUObject/UObject/UnrealType.hpp>
@@ -170,6 +171,7 @@ namespace aimmod::reflect
 
     bool Call(UObject* self, const wchar_t* path, const Fill& fill, UObject** returned, const Read& read)
     {
+        perf::Scope timing(perf::Reflection);
         if (!InObjectArray(self)) return false;
         struct Parameter { FProperty* property; std::wstring name; int offset; bool returned; bool allocated; };
         struct Descriptor { FWeakObjectPtr weak; UFunction* function{}; int size{}; std::vector<Parameter> params; };

@@ -1,3 +1,4 @@
+#include <aimmod/Perf.hpp>
 #include "ReplaySampler.hpp"
 
 #include "Output.hpp"
@@ -47,6 +48,7 @@ namespace aimmod
 
     bool ReplaySampler::Begin(const std::string& id, const std::string& scenario, const std::string& startEvent)
     {
+        perf::Scope timing(perf::Replay);
         m_stopReason.clear();
         if (!m_b.replayReady() || !IsValidAttemptId(id))
         {
@@ -67,7 +69,8 @@ namespace aimmod
             m_stopReason = "capture-clock-unavailable";
             return false;
         }
-        auto capture = std::make_unique<replay2::Capture>();
+        auto capture = m_output.TakeCapture();
+        if (!capture) { m_stopReason = "capture-buffer-pending"; return false; }
         ReplayHeader& header = capture->header;
         header.id = id;
         header.scenario = scenario;
@@ -84,8 +87,6 @@ namespace aimmod
                 header.mapScale = scale;
             }
         }
-        capture->frameTimes.reserve(60 * 400);
-        capture->inputs.reserve(60 * 1000);
         m_capture = std::move(capture);
         m_player = player;
         m_character = character;
@@ -105,6 +106,7 @@ namespace aimmod
 
     bool ReplaySampler::Tick(const AttemptStats& stats, bool sample)
     {
+        perf::Scope timing(perf::Replay);
         if (!m_capture) return false;
         UObject* player = m_player.Get();
         if (!player)
@@ -258,6 +260,7 @@ namespace aimmod
 
     void ReplaySampler::Finish(const std::string& reason, std::optional<double> score)
     {
+        perf::Scope timing(perf::Replay);
         if (!m_capture) return;
         std::unique_ptr<replay2::Capture> capture = std::move(m_capture);
         m_stopReason = reason;
@@ -273,6 +276,7 @@ namespace aimmod
             capture->score = score;
             m_output.ReplayWrite(std::move(capture));
         }
+        if (capture) m_output.ReplayWrite(std::move(capture), true);
         PublishStatus("ready", reason);
     }
 

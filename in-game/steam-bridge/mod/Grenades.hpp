@@ -7,6 +7,7 @@
 // components that block line traces, and the line from a flash to the thrower's own eye ends inside
 // the thrower (build 50: your own flash never blinded you).
 #include "Bridge.hpp"
+#include "FileMailbox.hpp"
 #include "GameBindings.hpp"
 #include "GrenadePhysics.hpp"
 
@@ -40,6 +41,8 @@ namespace aimmod
         // point and the surface normal, or nullopt (no hit, or a trace that starts inside geometry).
         std::optional<bridge::grenades::Hit> Trace(RC::Unreal::UObject* context, const bridge::grenades::Vec& a, const bridge::grenades::Vec& b, bool occlusion = false);
 
+        std::unique_ptr<FileMailbox> m_files;
+        std::shared_ptr<const std::string> m_text;
         bridge::LogFn m_log;
         std::wstring m_stateDir;
         bool m_bound = false, m_ready = false, m_byObjects = false, m_logged = false;

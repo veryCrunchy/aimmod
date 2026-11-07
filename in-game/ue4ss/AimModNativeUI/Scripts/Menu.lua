@@ -219,8 +219,10 @@ function M.start()
     LoopInGameThreadWithDelay(100,function()
         local ok=pcall(function()
             -- AimModCore hosts the in-game HUD view when core-active.tsv lists "hud".
-            LiveHUD.update(not valid(menu) or menu:IsVisible() or opened,
-                ReplayMainBridge.active(),Telemetry.liveSnapshot(),Telemetry.coreActive~=nil and Telemetry.coreActive('hud'))
+            local native=Telemetry.coreActive~=nil and Telemetry.coreActive('hud')
+            if native then LiveHUD.update(false,false,nil,true)
+            else LiveHUD.update(not valid(menu) or menu:IsVisible() or opened,
+                ReplayMainBridge.active(),Telemetry.liveSnapshot(),false) end
         end)
         if not ok then pcall(LiveHUD.hide) end
         -- Multiplayer notices, shown while the AimMod panel itself is not on screen.

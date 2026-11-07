@@ -1089,24 +1089,12 @@ namespace aimmod
     void GhostDemo::ReadBotOrders()
     {
         if (m_options.stateDir.empty()) return;
-        const std::filesystem::path file = std::filesystem::path(m_options.stateDir) / L"bot-orders.tsv";
-        WIN32_FILE_ATTRIBUTE_DATA info{};
-        if (!GetFileAttributesExW(file.c_str(), GetFileExInfoStandard, &info) || info.nFileSizeLow > 64 * 1024 || info.nFileSizeHigh != 0)
-        {
-            m_botOrders.reset();
-            return;
-        }
-        FILETIME now{};
-        GetSystemTimeAsFileTime(&now);
-        const auto u64 = [](FILETIME ft) { return (static_cast<std::uint64_t>(ft.dwHighDateTime) << 32) | ft.dwLowDateTime; };
-        if (u64(now) - u64(info.ftLastWriteTime) > 30'000'000ull)
-        {
-            m_botOrders.reset();
-            return;
-        }
-        std::ifstream in(file, std::ios::binary);
-        std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-        m_botOrders = bridge::bots::Parse(text);
+        if (!m_orderFiles) m_orderFiles=std::make_unique<FileMailbox>(std::filesystem::path(m_options.stateDir)/L"bot-orders.tsv",std::filesystem::path(m_options.stateDir)/L"bot-sight.tsv",3,100);
+        auto text=m_orderFiles->Read();
+        if (!text) { m_botOrders.reset(); return; }
+        if (text==m_orderText) return;
+        m_orderText=text;
+        m_botOrders = bridge::bots::Parse(*text);
         if (m_botOrders && !m_botOrders->bots.empty() && !m_botOrdersLogged)
         {
             m_botOrdersLogged = true;
@@ -1127,14 +1115,7 @@ namespace aimmod
         GetSystemTimeAsFileTime(&ft);
         const std::uint64_t ticks = (static_cast<std::uint64_t>(ft.dwHighDateTime) << 32) | ft.dwLowDateTime;
         const auto unixMs = static_cast<std::int64_t>((ticks - 116444736000000000ull) / 10000ull);
-        const std::filesystem::path file = std::filesystem::path(m_options.stateDir) / L"bot-sight.tsv";
-        const std::wstring temp = file.wstring() + L".tmp";
-        {
-            std::ofstream out(temp, std::ios::binary | std::ios::trunc);
-            if (!out) return;
-            out << bridge::bots::Format(unixMs, reports);
-        }
-        MoveFileExW(temp.c_str(), file.c_str(), MOVEFILE_REPLACE_EXISTING);
+        if (m_orderFiles) m_orderFiles->Write(bridge::bots::Format(unixMs, reports));
     }
 
     // The local player's run speed and step height (CharacterMovement), so bots move like a player
@@ -1621,18 +1602,13 @@ namespace aimmod
     // avatar-state.tsv from the service (combat matches). Stale or missing = everyone alive, enemies.
     void GhostDemo::ReadAvatarState()
     {
-        m_avatarState.reset();
         if (m_options.stateDir.empty()) return;
-        const std::filesystem::path file = std::filesystem::path(m_options.stateDir) / L"avatar-state.tsv";
-        WIN32_FILE_ATTRIBUTE_DATA info{};
-        if (!GetFileAttributesExW(file.c_str(), GetFileExInfoStandard, &info)) return;
-        FILETIME now{};
-        GetSystemTimeAsFileTime(&now);
-        const auto u64 = [](FILETIME ft) { return (static_cast<std::uint64_t>(ft.dwHighDateTime) << 32) | ft.dwLowDateTime; };
-        if (u64(now) - u64(info.ftLastWriteTime) > 100'000'000ull) return; // older than 10 s: no match running
-        std::ifstream in(file, std::ios::binary);
-        std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-        m_avatarState = bridge::avatarstate::Parse(text);
+        if (!m_stateFiles) m_stateFiles=std::make_unique<FileMailbox>(std::filesystem::path(m_options.stateDir)/L"avatar-state.tsv",std::filesystem::path{},10,200);
+        auto text=m_stateFiles->Read();
+        if (!text) { m_avatarState.reset(); return; }
+        if (text==m_stateText) return;
+        m_stateText=text;
+        m_avatarState=bridge::avatarstate::Parse(*text);
     }
 
     void GhostDemo::ApplyCombatState(Ghost& ghost, UObject* localCharacter)

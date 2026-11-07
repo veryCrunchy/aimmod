@@ -72,6 +72,7 @@ static class DeveloperEndpoints
         notices = MultiplayerService.DevNotices,
         status = mode.Enabled ? multiplayer.DevStatus() : null,
         tools = mode.Enabled ? tools?.View() : null,
+        performance = mode.Enabled ? tools?.Performance() : null,
         camera = mode.Enabled ? tools?.Camera() : null,
         workshop = mode.Enabled ? multiplayer.DevWorkshopItems() : null,
         tournament = mode.Enabled ? multiplayer.Tournaments?.DevView() : null,

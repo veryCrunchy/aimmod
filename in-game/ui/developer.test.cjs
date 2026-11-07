@@ -71,3 +71,10 @@ test('with bot debug on the page lists each bot\'s senses: what it heard, the de
   assert.ok(heldText.includes('BOT Ace · post-plant (entrance 0)')&&heldText.includes('entrance 0 at (-3900, 1500), sees the bomb, cover 3')&&heldText.includes('looking at (-3000, 1300, 160)'),'a holding bot shows its spot and where it looks');
   s.button(s.container,'Off').onclick();assert.deepEqual(JSON.parse(s.last().body),{action:'bot-debug',on:false});
 });
+
+test('frame timing summary is shown as plain text',()=>{
+  const s=setup();s.api.enter(s.container);
+  const value=JSON.parse(JSON.stringify(on));value.performance='AIMMOD_PERF_1\t300\t16.7\noverlay\t0.02\t0.08';
+  s.last().finish(200,value);
+  assert.ok(s.text(s.container).includes('overlay\t0.02\t0.08'));
+});

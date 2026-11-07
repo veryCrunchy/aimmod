@@ -1,4 +1,5 @@
 #include "MatchPlay.hpp"
+#include <aimmod/Perf.hpp>
 
 #include "Log.hpp"
 #include "Output.hpp"
@@ -59,12 +60,11 @@ namespace aimmod
     void MatchPlay::Tick(double now, const std::string& scenario, bool inChallenge, bool loading, const PoseId& poseId,
                          const std::unordered_map<std::uint32_t, std::string>& poseNames)
     {
-        const auto marker = m_output.root() / L"runtime-edits.pending";
-        if (scenario != m_cleanupScenario || (loading && !m_wasLoading)) m_cleanupPending = true;
+        if (!m_output.RuntimeEditsKnown()) return;
+        if ((scenario != m_cleanupScenario || (loading && !m_wasLoading)) && (m_dirty || m_output.RuntimeEditsPending())) m_cleanupPending = true;
         m_cleanupScenario = scenario;
         m_wasLoading = loading;
-        std::error_code cleanupError;
-        if (inChallenge && (m_dirty || (m_cleanupPending && std::filesystem::exists(marker, cleanupError))))
+        if (inChallenge && (m_dirty || (m_cleanupPending && m_output.RuntimeEditsPending())))
         {
             m_cleanupPending = true;
             if (reflect::Call(m_scene.Manager(), STR("/Script/GameSkillsTrainer.ScenarioManager:CancelChallenge")))
@@ -72,7 +72,7 @@ namespace aimmod
         }
         if (m_cleanupPending && !loading && !scenario.empty())
         {
-            if (m_dirty || std::filesystem::exists(marker, cleanupError))
+            if (m_dirty || m_output.RuntimeEditsPending())
             {
                 UObject* player = m_scene.Player();
                 UObject* character = player ? m_b.myCharacter.Object(player) : nullptr;
@@ -80,9 +80,9 @@ namespace aimmod
                 if (!handler || !BindRound()) return;
                 m_feel.Release(player, character, "scenario load");
                 ReleaseRound("scenario load");
-                if (!m_loadWeapons.Call(handler, [](std::uint8_t*, const Param&) {})) return;
+                { perf::Scope timing(perf::Weapons); if (!m_loadWeapons.Call(handler, [](std::uint8_t*, const Param&) {})) return; }
                 reflect::SetBool(handler, STR("BlockADS"), false);
-                std::filesystem::remove(marker, cleanupError);
+                m_output.ClearRuntimeEdits();
                 m_dirty = false;
                 Log("match play: scenario weapon profiles restored; runtime spread, speed and scope released");
             }
@@ -661,10 +661,7 @@ namespace aimmod
         m_closedReason.clear();
         if (!m_engaged)
         {
-            std::ofstream marker(m_output.root() / L"runtime-edits.pending", std::ios::trunc);
-            marker << "1\n";
-            marker.close();
-            if (!marker) return;
+            if (!m_output.RequestRuntimeEdits()) return;
             m_dirty = true;
             m_engaged = true;
             m_dead = Health(character).value_or(1) <= 0;
@@ -980,10 +977,7 @@ namespace aimmod
         const bool freezePhase = r->phase && r->phase->name == "freeze";
         if (!m_roundEngaged)
         {
-            std::ofstream marker(m_output.root() / L"runtime-edits.pending", std::ios::trunc);
-            marker << "1\n";
-            marker.close();
-            if (!marker) return;
+            if (!m_output.RequestRuntimeEdits()) return;
             m_dirty = true;
             m_roundEngaged = true;
             // A spawn already in the file is history, except at a round start.
@@ -1062,7 +1056,7 @@ namespace aimmod
         {
             UObject* handler = Describe(character).weaponHandler.Object(character);
             m_gear.Tick(now, player, character, handler, *r);
-            m_grenades.Tick(character, m_gear.hand(), m_output.root(), scenario);
+            m_grenades.Tick(character, m_gear.hand(), m_output, scenario);
             // CS weapon feel: spread, scope, speed (CsFeel.hpp).
             if (m_csLoadout) m_feel.Tick(now, player, character, handler, m_gear.hand(), *m_csLoadout, r->feel, m_shotSequence + 1, m_output.root());
         }

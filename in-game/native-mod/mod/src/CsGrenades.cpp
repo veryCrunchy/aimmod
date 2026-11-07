@@ -1,3 +1,5 @@
+#include <aimmod/Perf.hpp>
+#include "Output.hpp"
 #include "CsGrenades.hpp"
 
 #include "CsGear.hpp"
@@ -109,30 +111,16 @@ namespace aimmod
         }
     } // namespace
 
-    void CsGrenades::Read(const std::filesystem::path& root)
+    void CsGrenades::Read(Output& output)
     {
         const std::int64_t now = UnixMs();
         if (now < m_nextRead) return;
         m_nextRead = now + 40;
-        const auto file = root / L"grenades.tsv";
-        WIN32_FILE_ATTRIBUTE_DATA data{};
-        std::uint64_t stamp = 0;
-        if (GetFileAttributesExW(file.c_str(), GetFileExInfoStandard, &data) && data.nFileSizeHigh == 0 && data.nFileSizeLow <= 64 * 1024)
-            stamp = (static_cast<std::uint64_t>(data.ftLastWriteTime.dwHighDateTime) << 32) | data.ftLastWriteTime.dwLowDateTime;
-        FILETIME nowFile{};
-        GetSystemTimeAsFileTime(&nowFile);
-        const std::uint64_t nowStamp = (static_cast<std::uint64_t>(nowFile.dwHighDateTime) << 32) | nowFile.dwLowDateTime;
-        // Not rewritten for 5 s: the service stopped (nothing to draw).
-        if (stamp == 0 || nowStamp - stamp >= 5ull * 10000000ull)
-        {
-            m_state.reset();
-            m_stamp = 0;
-            return;
-        }
-        if (stamp == m_stamp) return;
-        m_stamp = stamp;
-        std::ifstream in(file, std::ios::binary);
-        const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        auto snapshot = output.Snapshot(0);
+        if (!snapshot || !snapshot->stamp) { m_state.reset(); m_stamp=0; return; }
+        if (snapshot->stamp == m_stamp) return;
+        m_stamp = snapshot->stamp;
+        const auto& text = snapshot->text;
         std::string why;
         m_state = cs::ParseGrenades(text, &why);
         if (!m_state && !m_logged)
@@ -144,9 +132,10 @@ namespace aimmod
         }
     }
 
-    void CsGrenades::Tick(UObject* character, int hand, const std::filesystem::path& root, const std::string& scenario)
+    void CsGrenades::Tick(UObject* character, int hand, Output& output, const std::string& scenario)
     {
-        Read(root);
+        perf::Scope timing(perf::Grenades);
+        Read(output);
         if (m_state && m_state->scenario != scenario) m_state.reset();
         const std::int64_t now = UnixMs();
         Hand(character, hand, now);
