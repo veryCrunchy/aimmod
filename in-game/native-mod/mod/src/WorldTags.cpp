@@ -64,28 +64,11 @@ namespace aimmod
     {
         if (now < m_nextRead) return;
         m_nextRead = now + ReadInterval;
-        const auto path = m_output.root() / L"world-tags.tsv";
-        WIN32_FILE_ATTRIBUTE_DATA data{};
-        std::uint64_t stamp = 0;
-        if (GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &data))
-            stamp = (static_cast<std::uint64_t>(data.ftLastWriteTime.dwHighDateTime) << 32) | data.ftLastWriteTime.dwLowDateTime;
-        FILETIME nowFile{};
-        GetSystemTimeAsFileTime(&nowFile);
-        const std::uint64_t nowStamp = (static_cast<std::uint64_t>(nowFile.dwHighDateTime) << 32) | nowFile.dwLowDateTime;
-        // The service rewrites it at least every second: older than 5 s by the system clock is stale. A
-        // write stamped ahead of the clock counts as fresh (nowStamp - stamp would wrap round).
-        const bool stale = stamp != 0 && nowStamp > stamp && nowStamp - stamp >= RosterMaxAge;
-        if (stamp == 0 || stale || data.nFileSizeLow > worldtags::MaxBytes)
-        {
-            m_rosterState = stamp == 0 ? "missing" : stale ? "stale (" + std::to_string((nowStamp - stamp) / 10000000ull) + " s old)" : "too large";
-            m_roster.clear();
-            m_rosterStamp = 0;
-            return;
-        }
-        if (stamp == m_rosterStamp) return;
-        m_rosterStamp = stamp;
-        std::ifstream in(path, std::ios::binary);
-        const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        auto snapshot = m_output.Snapshot(1);
+        if (!snapshot || !snapshot->stamp) { m_roster.clear(); m_rosterStamp=0; m_rosterState="missing or stale"; return; }
+        if (snapshot->stamp == m_rosterStamp) return;
+        m_rosterStamp = snapshot->stamp;
+        const auto& text = snapshot->text;
         if (auto roster = worldtags::Parse(text))
         {
             m_roster = std::move(*roster);

@@ -58,3 +58,13 @@ files[base..'core-active.tsv']='garbage'
 now=now+1
 check(not M.coreActive('replay'),'malformed heartbeat is ignored')
 print('PASS '..checks..' native core handshake checks')
+
+files[base..'core-active.tsv']='AIMMOD_CORE_1\t0.1.0\t'..(now+1)..'\ttelemetry,replay,hud'
+now=now+1
+local originalOpen=io.open
+io.open=function(path,mode)
+    assert(path~=base..'live-overlay.json','native HUD skips fallback live file')
+    return originalOpen(path,mode)
+end
+loop()
+print('PASS native HUD avoids fallback file read')

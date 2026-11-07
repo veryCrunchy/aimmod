@@ -162,16 +162,10 @@ namespace aimmod
         const double now = bridge::Bridge::Now();
         if (now < m_nextRead) return;
         m_nextRead = now + 0.02;
-        const std::filesystem::path file = std::filesystem::path(m_stateDir) / L"grenade-sim.tsv";
-        std::uint64_t size = 0;
-        const std::uint64_t stamp = FileStamp(file, size);
-        if (stamp == 0 || size > 64 * 1024) { m_requests.reset(); m_pending.clear(); return; }
-        if (stamp != m_stamp)
-        {
-            std::ifstream in(file, std::ios::binary);
-            const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-            if (auto parsed = g::ParseSim(text)) { m_requests = std::move(parsed); m_stamp = stamp; }
-        }
+        if (!m_files) m_files=std::make_unique<FileMailbox>(std::filesystem::path(m_stateDir)/L"grenade-sim.tsv",std::filesystem::path(m_stateDir)/L"grenade-paths.tsv");
+        auto text=m_files->Read();
+        if (!text || text->empty()) { m_requests.reset(); m_pending.clear(); return; }
+        if (text!=m_text) { m_requests=g::ParseSim(*text); m_text=std::move(text); }
         if (!m_requests) return;
         const auto& requests = m_requests;
         UObject* context = Context();
@@ -181,7 +175,7 @@ namespace aimmod
         for (const auto& weak : m_pawns)
             if (auto* pawn = weak.Get(); pawn && game::IsLiveInstance(pawn)) m_ignore.push_back(pawn);
         for (std::uint8_t t = 0, i = 0; t < 32; ++t) if (t != 2) m_objectTypes[i++] = t;
-        int budget = 600;
+        int budget = 64;
         const auto trace = [&](const g::Vec& a, const g::Vec& b) { return Trace(context, a, b); };
         // Fly each new throw once; keep answers only for what is still asked.
         std::set<std::int64_t> ids;
@@ -220,13 +214,6 @@ namespace aimmod
             m_log("grenades: first answers (" + std::to_string(m_paths.size()) + " path(s), " + std::to_string(m_los.size()) + " line(s) of sight, " + std::to_string(m_floors.size()) +
                   " floor(s), " + std::to_string(m_traces) + " traces; " + std::to_string(m_pawns.size()) + " pawn(s) left out)");
         }
-        const std::filesystem::path out = std::filesystem::path(m_stateDir) / L"grenade-paths.tsv";
-        const std::wstring temp = out.wstring() + L".tmp";
-        {
-            std::ofstream o(temp, std::ios::binary | std::ios::trunc);
-            if (!o) return;
-            o << g::FormatPaths(UnixMs(), m_paths, m_los, m_floors);
-        }
-        MoveFileExW(temp.c_str(), out.c_str(), MOVEFILE_REPLACE_EXISTING);
+        m_files->Write(g::FormatPaths(UnixMs(), m_paths, m_los, m_floors));
     }
 } // namespace aimmod

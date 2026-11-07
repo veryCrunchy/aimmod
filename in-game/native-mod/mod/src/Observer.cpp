@@ -209,7 +209,9 @@ namespace aimmod
         present.HookName = STR("AimModCore.Present");
         if (auto id = RegisterEngineTickPreCallback([this](TCallbackIterationData<void>&, UEngine*, float, bool) {
                 if (m_shutdown.load(std::memory_order_relaxed) || !OnGameThread()) return;
+                const auto start = perf::Clock::now();
                 m_presenter.Apply();
+                m_presentMs += perf::Ms(perf::Clock::now()-start);
             }, present);
             id != ERROR_ID)
             m_callbacks.push_back(id);
@@ -613,7 +615,15 @@ namespace aimmod
         if (m_inTick || m_shutdown.load(std::memory_order_relaxed)) return;
         m_inTick = true;
         const double now = Seconds();
+        m_perf.Begin(now);
+        m_perf.outside = m_presentMs;
+        m_perf.Add(perf::Replay, m_presentMs);
+        m_presentMs = 0;
+        perf::Active = &m_perf;
+        static const bool protect = GetEnvironmentVariableW(L"AIMMOD_PERF_PROTECT", nullptr, 0) != 0;
+        m_perf.protect = protect;
         m_lastTick = now;
+        { perf::Scope timing(perf::Lifecycle);
         ++m_tickIndex;
         if (now >= m_nextRebind) Rebind(now);
         if (!m_pendingSignals.empty())
@@ -627,24 +637,25 @@ namespace aimmod
             m_nextPoll = now + PollInterval;
             Poll(now);
         }
-        m_control.Tick(now, m_scenarioName, m_inChallenge, m_loading);
+        }
+        { perf::Scope timing(perf::Control); m_control.Tick(now, m_scenarioName, m_inChallenge, m_loading); }
         AuditQuit(now);
         {
             const bool wasAvailable = m_match.available();
-            m_match.Tick(now, m_scenarioName, m_inChallenge, m_loading, [this](UObject* actor) { return PoseId(actor); }, m_poseNames);
+            { perf::Scope timing(perf::Match); m_match.Tick(now, m_scenarioName, m_inChallenge, m_loading, [this](UObject* actor) { return PoseId(actor); }, m_poseNames); }
             if (wasAvailable != m_match.available()) m_output.SetCapabilities(Capabilities());
         }
-        m_cosmetics.Tick(now);
-        m_water.Tick(now, m_scenarioName, m_inChallenge, m_loading);
-        m_preview.Tick(now, m_inChallenge, m_loading);
+        { perf::Scope timing(perf::Cosmetics); m_cosmetics.Tick(now); }
+        { perf::Scope timing(perf::Water); m_water.Tick(now, m_scenarioName, m_inChallenge, m_loading); }
+        if (m_inChallenge || m_loading || m_perf.Allowed(perf::Preview, now)) { perf::Scope timing(perf::Preview); m_preview.Tick(now, m_inChallenge, m_loading); }
         {
             const bool wasReady = m_overlay.ready();
             const bool wasHud = m_hud.ready();
-            m_overlay.Tick(now, m_output.playbackActive());
-            m_hud.Tick(now, m_output.playbackActive(), m_inChallenge);
+            { perf::Scope timing(perf::Overlay); m_overlay.Tick(now, m_output.playbackActive()); }
+            { perf::Scope timing(perf::Hud); m_hud.Tick(now, m_output.playbackActive(), m_inChallenge); }
             if (wasReady != m_overlay.ready() || wasHud != m_hud.ready()) m_output.SetCapabilities(Capabilities());
         }
-        TickTags(now);
+        { perf::Scope timing(perf::Tags); TickTags(now); }
         m_match.Sights(now, m_overlay.Gameface());
         PollClipKey();
         if (m_output.poseRequested() && now >= m_nextPose)
@@ -661,6 +672,11 @@ namespace aimmod
             if (!m_output.recordingEnabled()) m_sampler.Finish("recording-disabled", std::nullopt);
             else m_sampler.Tick(m_stats, sample);
         }
+        const auto warning = m_perf.End(now);
+        if (!warning.empty()) m_output.PerfWarning(warning);
+        auto summary = m_perf.Summary(now);
+        if (!summary.empty()) m_output.PublishPerf(std::move(summary));
+        perf::Active = nullptr;
         m_inTick = false;
     }
 
@@ -829,6 +845,8 @@ namespace aimmod
     // Teammates' names (and an aimed-at enemy's) over the avatars AimModSteam spawned.
     void Observer::TickTags(double now)
     {
+        if (now < m_nextTags) return;
+        m_nextTags = now + 1.0 / 60.0;
         UObject* widget = m_overlay.Gameface();
         UObject* player = m_scene.Player();
         UObject* camera = player ? m_b.cameraManager.Object(player) : nullptr;

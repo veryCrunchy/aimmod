@@ -8,7 +8,7 @@ function M.start()
  pcall(function()steamConverter=StaticFindObject('/Script/GameSkillsTrainer.Default__WorksStatics')end)
  LoopInGameThreadWithDelay(1000,function()
   pcall(function()
-   scans=scans-1;if scans<=0 then scans=10;widget=nil;for _,candidate in ipairs(FindAllOf('LeaderboardsWidget')or{})do if valid(candidate)and not candidate:GetFullName():find('Default__',1,true)then widget=candidate;break end end end
+   scans=scans-1;if scans<=0 and not valid(widget) then scans=10;widget=nil;for _,candidate in ipairs(FindAllOf('LeaderboardsWidget')or{})do if valid(candidate)and not candidate:GetFullName():find('Default__',1,true)then widget=candidate;break end end end
    if not valid(widget)then return end
    -- Do not label the previous list with a newly requested scenario while the
    -- widget is fetching its replacement rows.

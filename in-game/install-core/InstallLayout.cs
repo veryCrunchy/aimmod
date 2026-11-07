@@ -272,6 +272,12 @@ static class ModList
             if (names.Contains(name) || remove.Contains(name, StringComparer.OrdinalIgnoreCase)) continue;
             if (Directory.Exists(Path.Combine(modsDir, name)) && names.Add(name)) entries.Add((name, enabled));
         }
+        foreach (var probe in new[] { "AimModModesProbe", "AimModDump", "AimModCosmetics" })
+        {
+            var index = entries.FindIndex(e => e.Name.Equals(probe, StringComparison.OrdinalIgnoreCase));
+            if (index >= 0) { if (entries[index].Enabled) Console.WriteLine("Disabled developer mod: " + probe); entries[index] = (entries[index].Name, false); }
+            else if (Directory.Exists(Path.Combine(modsDir, probe))) { entries.Add((probe, false)); Console.WriteLine("Disabled developer mod: " + probe); }
+        }
         Directory.CreateDirectory(modsDir);
         AtomicFile.WriteText(Path.Combine(modsDir, "mods.txt"), string.Join("\r\n", entries.Select(e => $"{e.Name} : {(e.Enabled ? 1 : 0)}")) + "\r\n");
         var json = new JsonObject { ["mods"] = new JsonArray(entries.Select(e => (JsonNode)new JsonObject { ["mod_name"] = e.Name, ["mod_enabled"] = e.Enabled }).ToArray()) };

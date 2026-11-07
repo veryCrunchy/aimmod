@@ -1,3 +1,4 @@
+#include <aimmod/Perf.hpp>
 #include "CsGear.hpp"
 
 #include "Log.hpp"
@@ -151,6 +152,7 @@ namespace aimmod
 
     void CsGear::Tick(double now, UObject* player, UObject* character, UObject* handler, const RoundState& round)
     {
+        perf::Scope timing(perf::Gear);
         if (!Bind(player)) return;
         if (m_releaseSlot >= 0)
         {

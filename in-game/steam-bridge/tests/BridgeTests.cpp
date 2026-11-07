@@ -2,6 +2,7 @@
 // lobby keys, join strings, launch command lines and the AMP1 wire format.
 // Synthetic ids only.
 #include "AvatarImage.hpp"
+#include "../mod/FileMailbox.hpp"
 #include "AvatarPath.hpp"
 #include "AvatarState.hpp"
 #include "BotOrders.hpp"
@@ -1624,6 +1625,28 @@ int main()
         walker.PlanRoute({500, 0, 1100}, 100, floor, clear);
         Check(walker.Cache().links.contains({0, 0, 10, 50, 0, 10}) && walker.Cache().links.contains({0, 0, 110, 50, 0, 110}),
               "stacked routes retain both vertical link identities");
+    }
+    {
+        const auto dir=std::filesystem::temp_directory_path()/("aimmod-mailbox-test-"+std::to_string(GetCurrentProcessId()));
+        std::filesystem::create_directories(dir);
+        const auto source=dir/"input.tsv", destination=dir/"output.tsv";
+        { std::ofstream out(source); out<<"synthetic"; }
+        {
+            aimmod::FileMailbox mailbox(source,destination,1,10);
+            auto wait=[&](auto predicate) {
+                for(int i=0;i<200;++i) { if(predicate()) return true; std::this_thread::sleep_for(std::chrono::milliseconds(10)); }
+                return false;
+            };
+            Check(wait([&]{auto text=mailbox.Read();return text && *text=="synthetic";}),"mailbox publishes a worker snapshot");
+            mailbox.Write("answer");
+            Check(wait([&]{std::ifstream in(destination);std::string text;in>>text;return text=="answer";}),"mailbox writes outside the caller");
+            std::filesystem::last_write_time(source,std::filesystem::file_time_type::clock::now()-std::chrono::seconds(5));
+            Check(wait([&]{auto text=mailbox.Read();return text && text->empty();}),"mailbox expires stale inputs");
+            {std::ofstream out(source);out<<std::string(65537,'x');}
+            std::this_thread::sleep_for(std::chrono::milliseconds(30));
+            Check(mailbox.Read()->empty(),"mailbox rejects oversized inputs");
+        }
+        std::filesystem::remove_all(dir);
     }
     std::printf("%d/%d checks passed\n", checks - failures, checks);
     return failures == 0 ? 0 : 1;

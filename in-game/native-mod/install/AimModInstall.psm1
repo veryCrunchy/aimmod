@@ -99,6 +99,12 @@ function Update-ModList {
             }
         }
     }
+    foreach ($probe in 'AimModModesProbe', 'AimModDump', 'AimModCosmetics') {
+        if ($entries.Contains($probe) -or (Test-Path -LiteralPath (Join-Path $ModsDir $probe))) {
+            if (-not $entries.Contains($probe) -or $entries[$probe]) { Write-Host "Disabled developer mod: $probe" }
+            $entries[$probe] = 0
+        }
+    }
     $lines = foreach ($k in $entries.Keys) { "$k : $($entries[$k])" }
     Set-Content -LiteralPath $txt -Value $lines -Encoding ascii
     $json = @{ mods = @(foreach ($k in $entries.Keys) { [ordered]@{ mod_name = $k; mod_enabled = [bool]$entries[$k] } }) }

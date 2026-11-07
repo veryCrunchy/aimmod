@@ -7,6 +7,6 @@ FindAllOf=function(name)assert(name=='LeaderboardsWidget');scans=scans+1;return{
 os.getenv=function()return'synthetic'end;os.remove=function(p)files[p]=nil end;os.rename=function(a,b)files[b]=files[a];files[a]=nil end
 io.open=function(p)return{write=function(_,s)files[p]=s;return true end,close=function()end}end
 local M=dofile('../ue4ss/AimModNativeUI/Scripts/LiveOpponents.lua');M.start();M.start();loop()
-local output=files['synthetic/AimMod/KovaaksNative/live-opponents.json'];assert(output:find('"source":"friends"',1,true));assert(output:find('"score":700',1,true));assert(not output:find('Invalid',1,true));assert(not output:find('Rank',1,true),'non-finite or fractional ranks never reach JSON');for i=1,9 do loop()end;assert(scans==1);loop();assert(scans==2)
+local output=files['synthetic/AimMod/KovaaksNative/live-opponents.json'];assert(output:find('"source":"friends"',1,true));assert(output:find('"score":700',1,true));assert(not output:find('Invalid',1,true));assert(not output:find('Rank',1,true),'non-finite or fractional ranks never reach JSON');for i=1,9 do loop()end;assert(scans==1);loop();assert(scans==1,'valid widget stays cached');widget.IsValid=function()return false end;loop();assert(scans==2,'invalid widget triggers a new scan')
 assert(output:find('"steamId":"76561198000000001"',1,true))
-print('PASS 7 observed opponent checks')
+print('PASS 8 observed opponent checks')

@@ -1,3 +1,4 @@
+#include <aimmod/Perf.hpp>
 #include "Output.hpp"
 
 #include "Log.hpp"
@@ -125,6 +126,12 @@ namespace aimmod
         m_view = m_mapping = nullptr;
     }
 
+    void Output::PerfWarning(std::string line)
+    {
+        { std::lock_guard lock(m_mutex); m_jobs.push_back({Job::Kind::Warning, std::move(line)}); }
+        m_wake.notify_one();
+    }
+
     void Output::AppendJournal(std::string line)
     {
         {
@@ -144,6 +151,7 @@ namespace aimmod
 
     std::optional<std::variant<GameCommand, CommandError>> Output::TakeCommand()
     {
+        perf::Scope timing(perf::Ipc);
         std::lock_guard lock(m_mutex);
         if (m_commands.empty()) return std::nullopt;
         auto command = std::move(m_commands.front());
@@ -252,6 +260,7 @@ namespace aimmod
 
     Output::RoundStateSnapshot Output::roundState() const
     {
+        perf::Scope timing(perf::Ipc);
         std::lock_guard lock(const_cast<std::mutex&>(m_mutex));
         return {m_roundState, m_roundStateVersion};
     }
@@ -291,6 +300,7 @@ namespace aimmod
 
     Output::PlayStateSnapshot Output::playState() const
     {
+        perf::Scope timing(perf::Ipc);
         std::lock_guard lock(const_cast<std::mutex&>(m_mutex));
         return {m_playState, m_playStateVersion};
     }
@@ -333,6 +343,7 @@ namespace aimmod
 
     Output::OverlayInputs Output::overlay() const
     {
+        perf::Scope timing(perf::Ipc);
         std::lock_guard lock(const_cast<std::mutex&>(m_mutex));
         auto result = m_overlay;
         if (!result.serviceAlive) result.notice.reset();
@@ -432,6 +443,7 @@ namespace aimmod
 
     Output::CosmeticsInputs Output::cosmetics() const
     {
+        perf::Scope timing(perf::Ipc);
         std::lock_guard lock(const_cast<std::mutex&>(m_mutex));
         return m_cosmetics;
     }
@@ -629,12 +641,12 @@ namespace aimmod
         }
     }
 
-    void Output::ReplayWrite(std::unique_ptr<replay2::Capture> capture)
+    void Output::ReplayWrite(std::unique_ptr<replay2::Capture> capture, bool discard)
     {
         if (!capture) return;
         {
             std::lock_guard lock(m_mutex);
-            Job job{Job::Kind::Replay};
+            Job job{discard ? Job::Kind::Discard : Job::Kind::Replay};
             job.capture = std::move(capture);
             m_jobs.push_back(std::move(job));
         }
@@ -673,6 +685,8 @@ namespace aimmod
         const std::filesystem::path replays = m_root / L"replays";
         switch (job.kind)
         {
+        case Job::Kind::Warning: Warn(job.data); return true;
+        case Job::Kind::Discard: job.capture.reset(); return true;
         case Job::Kind::Journal:
         {
             HANDLE file = CreateFileW((m_root / L"completed.tsv").c_str(), FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
@@ -745,6 +759,45 @@ namespace aimmod
 
     void Output::Periodic(bool force)
     {
+        bool prepare;
+        { std::lock_guard lock(m_mutex); prepare = !m_spareCapture; }
+        if (prepare) {
+            auto capture = std::make_unique<replay2::Capture>();
+            capture->frameTimes.reserve(60 * 400);
+            capture->inputs.reserve(60 * 1000);
+            std::lock_guard lock(m_mutex); m_spareCapture = std::move(capture);
+        }
+        const wchar_t* names[] = {L"grenades.tsv", L"world-tags.tsv", L"cosmetics-preview.txt"};
+        FILETIME clock{}; GetSystemTimeAsFileTime(&clock);
+        const auto current = (static_cast<std::uint64_t>(clock.dwHighDateTime) << 32) | clock.dwLowDateTime;
+        for (unsigned i=0; i<3; ++i) {
+            const auto path = m_root / names[i];
+            WIN32_FILE_ATTRIBUTE_DATA info{};
+            std::uint64_t stamp{};
+            if (GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &info) && !info.nFileSizeHigh && info.nFileSizeLow <= 65536)
+                stamp = (static_cast<std::uint64_t>(info.ftLastWriteTime.dwHighDateTime) << 32) | info.ftLastWriteTime.dwLowDateTime;
+            if (current > stamp && current-stamp >= 50000000ull) stamp=0;
+            auto old=m_files[i].load();
+            if (old && old->stamp==stamp) continue;
+            auto next=std::make_shared<FileSnapshot>(); next->stamp=stamp;
+            if(stamp && !ReadSmall(path,next->text,65537)) continue;
+            m_files[i].store(std::move(next));
+        }
+        const auto marker = m_root / L"runtime-edits.pending";
+        std::error_code error;
+        if (m_editsSaved.load() < 0) {
+            const bool exists = std::filesystem::exists(marker, error);
+            if (!error) m_editsSaved = exists ? 1 : 0;
+        }
+        const int wanted = m_editsWanted.load();
+        if (wanted >= 0 && wanted != m_editsSaved.load()) {
+            if (wanted == 1) { if (WriteAtomic(marker, "1\n")) m_editsSaved = 1; }
+            else { std::filesystem::remove(marker, error); if (!error) { m_editsSaved = 0; m_editsClearing = false; } }
+        }
+        std::string perf;
+        { std::lock_guard lock(m_mutex); perf.swap(m_perf); }
+        if (!perf.empty()) WriteAtomic(m_root / L"core-perf.tsv", perf);
+
         const std::uint64_t now = NowMs();
         std::string live, status, caps, scene;
         bool liveDirty = false, statusDirty = false;
