@@ -121,3 +121,4 @@ test('unchanged polls preserve inbox controls and keyboard focus',()=>{
   const button=t.buttons(inbox)[0];t.api.visible(true);t.requests.at(-1).finish(200,data);
   assert.equal(t.buttons(inbox)[0],button);
 });
+test('identical snapshots preserve settings controls and hidden views do not load',()=>{const t=setup(),box=new t.El('div');t.api.start({});t.requests[0].finish(200,snapshot());t.api.renderSettings(box);const first=box.all().find(x=>x.tag==='button');t.requests[1].finish(200,snapshot());assert.equal(box.all().find(x=>x.tag==='button'),first);t.api.visible(false);const count=t.requests.length;t.api.renderSettings(box);assert.equal(t.requests.length,count);});

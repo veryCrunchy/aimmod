@@ -6,9 +6,9 @@ Use the existing Roboto face and dark green surfaces. Load shared-components.css
 
 Spacing follows 4, 8, 12, 16, 24 and 32 pixels. Use pad-sm/md/lg for 8/16/24 pixel padding and stack-sm/md/lg for vertical sibling spacing. Use flex layouts and sibling margins.
 
-Type: text-title (24/32), text-heading (18/26), text-body (14/22), text-caption (12/18). text-muted uses readable secondary copy. text-accent, text-warning and text-danger provide semantic colours; always include a text label with status.
+Type: text-title (28/36), text-heading (20/28), text-body (14/22), text-caption (12/18). text-muted uses readable secondary copy. text-accent, text-warning and text-danger provide semantic colours; always include a text label with status.
 
-Surfaces: surface-canvas #0b1110, surface-panel #151f1c, surface-raised #1d2b26. Text #eef5f1, secondary #a7bab0, mint #27e4a1. Focus #8bf5ce. These are literal class tokens, not custom properties.
+Surfaces: surface-canvas #0b1110, surface-panel #121a17, surface-raised #18231f. Text #eef5f1, secondary #93a69c, mint #27e4a1. Focus #8bf5ce. These are literal class tokens, not custom properties.
 
 ## Components
 
@@ -44,3 +44,13 @@ Navigation keeps native Tab/Enter behavior and supports Up/Down/Home/End focus m
 Use the shared dropdown for every choice list. Native select, datalist and range, date or colour inputs require browser chrome that the embedded view cannot render. Long lists include a search field and keyboard navigation.
 
 Gameface supports `::before` and `::after`; other pseudo-elements are outside this UI's supported subset. Fixed positioning arrived in Gameface 1.56 and received subsequent layout fixes. Use absolute positioning inside an explicit relative container for contextual notices, and test scrolling and clipping at 720p. See the [CSS properties table](https://docs.coherent-labs.com/cpp-gameface/content_development/supported_features_tables/cssproperties/), [selector table](https://docs.coherent-labs.com/cpp-gameface/content_development/supported_features_tables/cssselectors/) and [feature changelog](https://docs.coherent-labs.com/cpp-gameface/changelog/feature/).
+
+## Home and History contracts
+
+Use Roboto 12, 13, 14, 16, 20 and 28 pixels, with 500 labels and 700 headings. Panel borders are #1f2b27, warning #f5b94a and danger #ff6b6b. Use literal values for Cohtml 1.19. Pages have 24px padding. Keep one primary action per view; selected navigation and segmented choices use a raised neutral surface and mint text.
+
+Home falls back to the latest practice date when today has no activity. Recent bests exclude zero or missing scores. The service currently has no completion flag: Home and History label zero scores as No score, while negative penalty scores remain numeric. Score history uses equally spaced run indices with date labels, a mint score series, pale rolling average and amber best line. Do not interpret horizontal distance as elapsed time.
+
+History search and scenario filtering apply in the service before paging. Sorting applies to the current page and says so beneath the table. The shared dropdown exposes close() and setValue(value) for navigation and server-state synchronization. Preserve IDs and class names when composing other pages.
+
+Only render Home and History while active. Lifecycle polling pauses while hidden and unchanged lifecycle snapshots do not rebuild controls. Delayed refreshes must check visibility before reading or rendering data.
