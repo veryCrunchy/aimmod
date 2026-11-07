@@ -12,6 +12,12 @@ test('assigning another HUD scene also enables the master',()=>{
   const s=setup();s.ready();s.byId('ove-scene-setup').onclick();s.byId('ove-use-game').onclick();
   assert.equal(s.api.state().store.gameScene,'setup');deq(JSON.parse(s.posts('overlay-settings').at(-1).body),{gameEnabled:true});
 });
+test('failed HUD enable keeps the warning and allows retry',()=>{
+  const s=setup();s.ready();s.byId('ove-enable-game').onclick();s.posts('overlay-settings').at(-1).finish(500,{});
+  assert.equal(s.api.state().settings.gameEnabled,false);assert.match(s.container.textContent,/In-game overlay is off/);
+  s.byId('ove-enable-game').onclick();s.posts('overlay-settings').at(-1).finish(200,{...settings,gameEnabled:true});
+  assert.equal(s.byId('ove-enable-game'),null);
+});
 function setup(){
   const w=makeWindow();const container=w.document.createElement('section');container.offsetWidth=1500;w.document.roots.push(container);
   load(w.window,['overlay-model.js','overlay-widgets.js','overlay-editor.js']);const M=w.window.AimModOverlayModel,api=w.window.AimModOverlayEditor;api.enter(container);
@@ -79,9 +85,9 @@ test('share codes export the current scene and import as a new one; bad codes ex
 test('OBS and in-game outputs: master switches keep the earlier settings API, every scene and widget has a URL',()=>{
   const s=setup();s.ready();s.byId('ove-tab-outputs').onclick();
   assert.equal(s.byId('ove-url-stream').value,'http://127.0.0.1:1234/obs/scene?id=stream&w=1920&h=1080');
-  s.byId('ove-res-2560x1440').onclick();assert.equal(s.byId('ove-url-setup').value,'http://127.0.0.1:1234/obs/scene?id=setup&w=2560&h=1440');
+  s.byId('ove-res-2560x1440').onclick();assert.equal(s.byId('ove-url-setup').value,'http://127.0.0.1:1234/obs/scene?id=setup&w=1920&h=1080');
   assert.match(s.container.textContent,/Set Width to 2560 and Height to 1440/);
-  const widgetUrls=s.container.findAll(n=>n.className==='ove-url small').map(n=>n.value);assert.ok(widgetUrls.includes('http://127.0.0.1:1234/obs/scene?id=game&widget=stats&w=2560&h=1440'));
+  const widgetUrls=s.container.findAll(n=>n.className==='ove-url small').map(n=>n.value);assert.ok(widgetUrls.includes('http://127.0.0.1:1234/obs/scene?id=game&widget=stats&w=616&h=120'));
   assert.equal(s.byId('ove-url-legacy').value,setupInfo.obsUrl);assert.equal(s.byId('ove-url-board').value,setupInfo.boardUrl);
   s.byId('ove-game-enabled').onclick();deq(JSON.parse(s.posts('overlay-settings')[0].body),{gameEnabled:true});
   s.posts('overlay-settings')[0].finish(200,{...settings,gameEnabled:true});assert.equal(s.byId('ove-game-enabled').attrs['aria-checked'],'true');

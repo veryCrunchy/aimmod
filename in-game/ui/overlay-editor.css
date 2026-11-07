@@ -29,13 +29,13 @@
 .ove-center{flex:1;min-width:0;padding:0 16px}
 .ove-stage-frame{position:relative;border:1px solid #30433a;border-radius:8px;overflow:hidden;background:#0b1110}
 .ove-stage{position:relative;overflow:hidden}
-.ove-world{position:absolute;left:0;top:0;width:1920px;height:1080px;transform-origin:0 0}
-.ove-sky{position:absolute;left:0;top:0;width:1920px;height:594px;background:#55626d}
-.ove-floor{position:absolute;left:0;top:594px;width:1920px;height:486px;background:#323b33}
-.ove-layer{position:absolute;left:0;top:0;width:1920px;height:1080px}
-.ove-guides{position:absolute;left:0;top:0;width:1920px;height:1080px;pointer-events:none}
-.ove-guide{position:absolute;background:#ff5fa2}.ove-guide.x{top:0;width:2px;height:1080px;margin-left:-1px}.ove-guide.y{left:0;height:2px;width:1920px;margin-top:-1px}
-.ove-handles{position:absolute;left:0;top:0;width:1920px;height:1080px}
+.ove-world{position:absolute;left:0;top:0;width:100%;height:100%;transform-origin:0 0}
+.ove-sky{position:absolute;left:0;top:0;width:100%;height:55%;background:#55626d}
+.ove-floor{position:absolute;left:0;top:55%;width:100%;height:45%;background:#323b33}
+.ove-layer{position:absolute;left:0;top:0;width:100%;height:100%}
+.ove-guides{position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none}
+.ove-guide{position:absolute;background:#ff5fa2}.ove-guide.x{top:0;width:2px;height:100%;margin-left:-1px}.ove-guide.y{left:0;height:2px;width:100%;margin-top:-1px}
+.ove-handles{position:absolute;left:0;top:0;width:100%;height:100%}
 .ove-handle{position:absolute;border:2px solid transparent;border-radius:6px;cursor:move}
 .ove-handle:hover{border-color:#5bedb9}
 .ove-handle.selected{border:3px solid #27e4a1}

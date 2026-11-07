@@ -20,6 +20,8 @@ sealed class WorkspaceHost : IAsyncDisposable
     readonly OpponentData opponents;
     readonly ObsOverlayHost obs;
     readonly OverlayService overlays;
+    public OverlayAnalysisSource OverlayAnalysis => overlays.Analysis;
+    readonly ObsSceneSwitching obsSwitching;
     readonly OverlayHistory overlayHistory = new();
     Tournaments.TournamentService? tournaments;
     public Tournaments.TournamentService? TournamentsService => tournaments;
@@ -102,6 +104,11 @@ sealed class WorkspaceHost : IAsyncDisposable
         new CoachingFeedback(output).MapEndpoints(app, prefix);
         multiplayer = Multiplayer.MultiplayerHosting.Create(hub, output, args, () => liveFeed.Read(outputFolder, Volatile.Read(ref overlayRuns)), () => Volatile.Read(ref overlayRuns));
         multiplayer.MapEndpoints(app, prefix);
+        overlays.MultiplayerSource = multiplayer.OverlayView;
+        overlays.AvatarSource = multiplayer.OverlayAvatar;
+        overlays.ReplaySource = playback.OverlayView;
+        obsSwitching = new ObsSceneSwitching(output, () => new ObsSwitchState(multiplayer.OverlayView().Match is { Phase: not "final" }, ReadLive().Active, playback.Visible));
+        obsSwitching.Map(app, prefix);
         // A pending replay's scenario loads by itself, through the lobby's load path (ScenarioLoader).
         var lobby = multiplayer;
         autoLoad = new ReplayAutoLoad(startGate, new Multiplayer.CoreGameControl(output), () => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), lobby.Library, lobby.SourceOf);
@@ -347,6 +354,7 @@ sealed class WorkspaceHost : IAsyncDisposable
     public async Task Start(CancellationToken token)
     {
         await app.StartAsync(token);
+        obsSwitching.Start();
         playback.Start();
         keyboard.Start();
         _ = Task.Run(async () => {
@@ -382,6 +390,7 @@ sealed class WorkspaceHost : IAsyncDisposable
         // Stop accepting requests first, then publish a closed replay frame and
         // retract this process's overlay URL so the game never loads a dead port.
         startLoop.Cancel();
+        await obsSwitching.DisposeAsync();
         tournaments?.Dispose();
         multiplayer.Dispose();
         await keyboard.DisposeAsync();

@@ -106,8 +106,8 @@ sealed class OverlayScenes
         {
             ["id"] = id, ["type"] = type, ["locked"] = Bool(o["locked"], false),
             ["family"] = Str(o["family"]) == "monospace" ? "monospace" : "sans-serif", ["weight"] = Num(o["weight"], 100, 900, 400), ["textColor"] = Color(o["textColor"]), ["padding"] = Num(o["padding"], -1, 80, -1), ["radius"] = Num(o["radius"], -1, 80, -1), ["shadow"] = Bool(o["shadow"], false),
-            ["x"] = Math.Round(Num(o["x"], 0, 1900, 0)), ["y"] = Math.Round(Num(o["y"], 0, 1060, 0)),
-            ["w"] = Math.Round(Num(o["w"], 60, 1920, 400)), ["h"] = Math.Round(Num(o["h"], 40, 1080, 120)),
+            ["x"] = Math.Round(Num(o["x"], 0, 7660, 0)), ["y"] = Math.Round(Num(o["y"], 0, 4300, 0)),
+            ["w"] = Math.Round(Num(o["w"], 60, 7680, 400)), ["h"] = Math.Round(Num(o["h"], 40, 4320, 120)),
             ["visible"] = Bool(o["visible"], true), ["opacity"] = Round3(Num(o["opacity"], 0.1, 1, 1)), ["font"] = Round3(Num(o["font"], 0.6, 2.5, 1)),
             ["variant"] = Str(o["variant"]) == "compact" ? "compact" : "expanded",
             ["layout"] = layout is "horizontal" or "vertical" ? layout : DefaultLayout(type),
@@ -132,7 +132,9 @@ sealed class OverlayScenes
         var name = Text(o["name"], 48).Trim(); var widgets = new JsonArray(); var seen = new HashSet<string>(StringComparer.Ordinal);
         if (o["widgets"] is JsonArray list)
             foreach (var w in list) { if (widgets.Count >= MaxWidgets) break; if (CleanWidget(w) is { } c && seen.Add((string)c["id"]!)) widgets.Add(c); }
-        return new JsonObject { ["id"] = id, ["name"] = name.Length > 0 ? name : "Scene", ["auto"] = Str(o["auto"]) is "menu" or "scenario" or "match" or "replay" ? Str(o["auto"]) : "", ["theme"] = CleanTheme(o["theme"]), ["widgets"] = widgets };
+        var width = Math.Round(Num(o["width"], 320, 7680, 1920)); var height = Math.Round(Num(o["height"], 180, 4320, 1080));
+        foreach (var child in widgets) { child!["x"] = Math.Min((double)child["x"]!, width - 20); child["y"] = Math.Min((double)child["y"]!, height - 20); child["w"] = Math.Min((double)child["w"]!, width); child["h"] = Math.Min((double)child["h"]!, height); }
+        return new JsonObject { ["id"] = id, ["name"] = name.Length > 0 ? name : "Scene", ["width"] = Math.Round(Num(o["width"], 320, 7680, 1920)), ["height"] = Math.Round(Num(o["height"], 180, 4320, 1080)), ["auto"] = Str(o["auto"]) is "menu" or "scenario" or "match" or "replay" ? Str(o["auto"]) : "", ["theme"] = CleanTheme(o["theme"]), ["widgets"] = widgets };
     }
     /// <summary>The canonical store, or null when the input is not a store with at least one scene.</summary>
     internal static JsonObject? Clean(JsonNode? raw)

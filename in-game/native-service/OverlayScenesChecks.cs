@@ -20,6 +20,7 @@ static class OverlayScenesChecks
 
     public static async Task Run()
     {
+        await OverlayStudioChecks.Run();
         count = 0;
         var catalog = OverlayDataCatalog.Read(new { enabled = true, live = new { score = 0, active = false }, session = new { runs = 0 } });
         Check(catalog.Single(f => f.Path == "live.score").Value.GetInt32() == 0, "catalog preserves zero");
@@ -208,6 +209,7 @@ static class OverlayScenesChecks
                 Check(line?.StartsWith("data: ") == true, "stream emits a snapshot immediately");
                 using var streamed = JsonDocument.Parse(line![6..]);
                 Check(streamed.RootElement.GetProperty("enabled").GetBoolean(), "stream uses presentation feed");
+                Check(streamed.RootElement.TryGetProperty("multiplayer", out _) && streamed.RootElement.TryGetProperty("replay", out _) && streamed.RootElement.TryGetProperty("mouse", out _), "stream carries extended sources");
             }
             using (var scenes = JsonDocument.Parse(await client.GetStringAsync(root + "/overlay-scenes")))
                 Check(scenes.RootElement.GetProperty("scenes").GetArrayLength() == 3 && scenes.RootElement.GetProperty("gameScene").GetString() == "game", "first start serves the migrated scenes");
@@ -236,6 +238,16 @@ static class OverlayScenesChecks
             using (var enabledGame = JsonDocument.Parse(await client.GetStringAsync(root + "/overlay-feed?surface=game")))
                 Check(enabledGame.RootElement.GetProperty("enabled").GetBoolean(), "game feed enabled independently of OBS");
             await SetSurface(false);
+            using (var config = JsonDocument.Parse(await client.GetStringAsync(root + "/overlay-obs-settings")))
+                Check(!config.RootElement.GetProperty("enabled").GetBoolean() && !config.RootElement.TryGetProperty("password", out _), "OBS control defaults off without password response");
+            using (var response = await client.PostAsync(root + "/overlay-obs-settings", new StringContent("{}", Encoding.UTF8, "application/json")))
+                Check(response.StatusCode == HttpStatusCode.Forbidden, "OBS control requires workspace UI header");
+            using (var request = new HttpRequestMessage(HttpMethod.Post, root + "/overlay-obs-settings"))
+            {
+                request.Headers.Add("X-AimMod-UI", "1"); request.Content = new StringContent("{\"password\":\"synthetic-password\",\"runStart\":\"Practice\"}", Encoding.UTF8, "application/json");
+                using var response = await client.SendAsync(request); var body = await response.Content.ReadAsStringAsync();
+                Check(response.IsSuccessStatusCode && body.Contains("\"hasPassword\":true") && !body.Contains("synthetic-password"), "OBS control saves without returning secret");
+            }
             var store = await client.GetStringAsync(root + "/overlay-scenes");
             using (var response = await client.PostAsync(root + "/overlay-scenes", new StringContent(store, Encoding.UTF8, "application/json")))
                 Check(response.StatusCode == HttpStatusCode.Forbidden, "saving requires the UI header");
@@ -255,6 +267,7 @@ static class OverlayScenesChecks
             // OBS: the same reads on the OBS listener, off until the OBS switch is on, never writable.
             using var setup = JsonDocument.Parse(await client.GetStringAsync(root + "/overlay-setup"));
             var obsBase = setup.RootElement.GetProperty("obsBase").GetString()!;
+            using (var response = await client.GetAsync(obsBase + "/overlay-obs-settings")) Check(!response.IsSuccessStatusCode, "OBS browser capability cannot read connection settings");
             Check(setup.RootElement.GetProperty("obsUrl").GetString() == obsBase + "/overlay?surface=obs" && setup.RootElement.GetProperty("tournamentUrl").GetString() == obsBase + "/tournament", "setup lists the OBS base and the earlier links");
             using (var response = await client.GetAsync(obsBase + "/scene?id=game")) Check(response.StatusCode == HttpStatusCode.OK && response.Content.Headers.ContentType?.MediaType == "text/html", "scene sources served on OBS");
             using (var response = await client.GetAsync(obsBase + "/overlay?surface=obs")) Check(response.StatusCode == HttpStatusCode.OK, "the earlier OBS link still works");
