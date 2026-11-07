@@ -155,3 +155,8 @@
 .ove-gear-add{display:flex;flex-direction:column;align-items:flex-start}
 .ove-gear-add .button{display:block}
 .ove-library>.ove-line-label,.ove-drawer>.ove-line-label{flex:none;height:18px;margin:0 0 6px;line-height:18px}
+.ove-bar .dropdown-trigger,.ove-bar-right .dropdown-trigger{height:30px;line-height:28px;font-size:12px}
+.ove-bar-right>.button,.ove-bar-right>.dropdown,.ove-bar-right>.segmented{margin-top:0;margin-bottom:0;align-self:center}
+.ove-bar-right>.dropdown>.dropdown-trigger{margin:0}
+.ove-sky,.ove-floor{background:#0f1714}
+.ove-body,.ove-library,.ove-center,.ove-inspector{height:640px}

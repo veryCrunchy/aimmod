@@ -19,9 +19,10 @@ test('Gameface: toasts do not rely on version-specific fixed containing blocks',
   for(const [name,text] of uiCss())assert.doesNotMatch(text,/position\s*:\s*fixed\b/i,name);
   for(const [name,text] of uiScripts())assert.doesNotMatch(text,/\.position\s*=\s*['"]fixed['"]/i,name);
 });
-test('Gameface: generated content uses only supported before and after pseudo-elements',()=>{
+test('Gameface: generated content uses single-colon before and after only',()=>{
+  // Cohtml 1.19 applies double-colon pseudo-element declarations to the element itself.
   for(const [name,text] of uiCss()){
-    for(const m of text.matchAll(/::([\w-]+)/g))assert.ok(['before','after'].includes(m[1]),name+': '+m[0]);
+    for(const m of text.matchAll(/::([\w-]+)/g))assert.fail(name+': use single-colon '+m[0].slice(1));
     assert.doesNotMatch(text,/:(?:first-line|first-letter|selection|placeholder|marker)\b/,name);
   }
 });
