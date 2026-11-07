@@ -8,6 +8,7 @@ param(
     [Parameter(Mandatory)][long]$ReleaseCounter,
     [string]$SteamDll,
     [string]$SteamConfig,
+    [string]$StateDirectory,
     [switch]$PackageOnly
 )
 $ErrorActionPreference = 'Stop'
@@ -26,7 +27,9 @@ try {
     Protect-ReleaseMetadata (Join-Path $stage 'aimmod-release.json') $ReleaseCounter
     if (-not $PackageOnly) {
         $service = Join-Path $stage 'files/ue4ss/Mods/AimModCore/service/AimMod.InGame.exe'
-        & $service --install --package $stage --game-dir $GameDir
+        $installArgs = @('--install', '--package', $stage, '--game-dir', $GameDir)
+        if ($StateDirectory) { $installArgs += @('--output', [IO.Path]::GetFullPath($StateDirectory)) }
+        & $service @installArgs
         if ($LASTEXITCODE -ne 0) { throw "Installation failed with exit code $LASTEXITCODE. Package retained for inspection." }
     }
     Write-Output $stage

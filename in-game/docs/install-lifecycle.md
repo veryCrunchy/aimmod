@@ -514,3 +514,11 @@ script preserves that verification. A locally assembled unsigned manifest
 alone cannot be installed by a signed-release service. The script retains its
 temporary package on failure. Do not copy changed binaries over a managed
 installation afterward: that invalidates the installed hashes again.
+For an isolated installation check, copy the game folder layout into a temporary
+folder and pass that copy as `-GameDir`. Set `-StateDirectory` to a separate
+writable temporary folder so the install receipt and repair launcher also stay
+isolated. Then run the packaged service with `--install-status --game-dir` and
+`--output` pointing to those same folders. A healthy installation exits with 0;
+modified or missing managed files produce a repair status. Test builds signed
+with a temporary key require that public key in their own isolated source copy;
+never replace the release trust keys in the checkout or an installed release.
