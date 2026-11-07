@@ -9,6 +9,9 @@ static class CsvHistoryChecks
  Check(CsvHistory.Parse(name.Replace(" - Challenge - "," - Challenge Start - "),content).Scenario=="Synthetic","Challenge filename variants");
  foreach(var bad in new[]{content.Replace("12.5","NaN"),content.Replace("12.5","Infinity"),content.Replace("Score:","Other:"),content.Replace("23:59:30.500","26:00:00"),content+"Score:,100\n"}){try{CsvHistory.Parse(name,bad);throw new Exception("Accepted malformed summary");}catch(FormatException){count++;}}
  try{CsvHistory.Parse("Synthetic.csv",content);throw new Exception("Accepted unknown timestamp");}catch(FormatException){count++;}
+ Check(CsvHistory.Parse(name,content+"Pause Duration:,10\n").Duration==49.5,"Paused time excluded from practice");
+ Check(CsvHistory.Parse(name,content.Replace("12.5","0")).Score==0,"Explicit zero score remains valid");
+ foreach(var pause in new[]{"-1","60"}){try{CsvHistory.Parse(name,content+"Pause Duration:,"+pause+"\n");throw new Exception("Accepted invalid pause");}catch(FormatException){count++;}}
  var folder=Path.Combine(Path.GetTempPath(),"aimmod-csv-test-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(folder);var input=Path.Combine(folder,"input");Directory.CreateDirectory(input);
  try{
   File.WriteAllText(Path.Combine(input,name),content);File.WriteAllText(Path.Combine(input,"invalid.csv"),content);
