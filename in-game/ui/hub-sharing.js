@@ -41,7 +41,7 @@
     panel.appendChild(node('h2','','AimMod Hub'));
     var linked=!!(status&&status.linked);
     panel.appendChild(node('p','subtle',linked?'What your linked account shares on aimmod.app.':'Link your account on the Account page to share your runs and live activity.'));
-    if(message)panel.appendChild(node('p',message==='Saved.'?'saved-note':'notice warn',message));
+    var saveState=node('p',message&&message!=='Saved.'?'notice warn':'saved-note',message||'Changes save automatically.');saveState.setAttribute('role','status');panel.appendChild(saveState);
     if(!value){var retryRow=node('div','actions'),retry=node('button','button primary','Try again');retry.type='button';retry.onclick=function(){load(panel);};retryRow.appendChild(retry);panel.appendChild(retryRow);return;}
     function toggle(key,title,description,part,states){
       var row=node('div','settings-row'),info=node('div','settings-info');info.appendChild(node('h3','',title));info.appendChild(node('p','subtle',description));
@@ -50,7 +50,7 @@
       row.appendChild(info);
       var on=value[key];row.appendChild(node('span','switch-state',on?'On':'Off'));
       var control=node('button','switch'+(on?' on':''),on?'On':'Off');control.type='button';control.setAttribute('role','switch');control.setAttribute('aria-checked',String(on));control.setAttribute('aria-label',title);control.appendChild(node('span','knob'));
-      control.onclick=function(){if(request)return;var patch={};patch[key]=!value[key];var controls=panel.querySelectorAll('button');for(var i=0;i<controls.length;i++)controls[i].disabled=true;send(patch,function(ok,data){if(ok)accept(data);draw(panel,ok?'Saved.':'Couldn’t save. Try again.');});};
+      control.onclick=function(){if(request)return;var patch={};patch[key]=!value[key];var controls=panel.querySelectorAll('button');for(var i=0;i<controls.length;i++)controls[i].disabled=true;saveState.textContent='Saving…';send(patch,function(ok,data){if(ok)accept(data);draw(panel,ok?'Saved.':'Couldn’t save. Try again.');});};
       row.appendChild(control);panel.appendChild(row);
     }
     toggle('hubLiveActivityEnabled','Show me on Live activity','Your scenario, live score and session progress while KovaaK’s runs. Turning this off removes you at once.','live',liveStates);

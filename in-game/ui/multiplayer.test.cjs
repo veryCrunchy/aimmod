@@ -17,7 +17,7 @@ function setup(){
   vm.runInContext(fs.readFileSync(path.join(__dirname,'multiplayer.js'),'utf8'),context);
   const api=window.AimModMultiplayer;
   return {api,container,requests,all:()=>walk(container),buttons:()=>walk(container).filter(e=>e.tag==='button'),text:()=>walk(container).map(e=>e.textContent||'').join('|'),
-    button:label=>walk(container).find(e=>e.tag==='button'&&e.textContent===label),last:()=>requests[requests.length-1],focused:()=>El.focused};
+    button:label=>walk(container).find(e=>e.tag==='button'&&e.textContent===label),last:()=>requests[requests.length-1],focused:()=>El.focused,timers};
 }
 const base={v:1,now:1000,transport:{kind:'steam',online:true},simulation:false,capabilities:{invite:true,friends:true,gameLoad:true,gameStart:true},self:{id:'p1',name:'Synthetic One'},joining:null,
   friends:{source:'steam',items:[{id:'f1',name:'Synthetic Friend',status:'aimmod',detail:'Playing KovaaK’s with AimMod',joinable:false},{id:'f2',name:'Lobby Friend',status:'aimmod-lobby',detail:'In an AimMod lobby',joinable:true}]},
@@ -255,7 +255,7 @@ test('first run shows the tour once: keys, privacy, Hub and Discord, then saves 
   s.requests[0].finish(200,view({prefs:{onboarded:false,hotkey:'F7',spectatePrivacy:'friends'},keys:{clip:'F8',taken:['F9'],conflicts:[]}}));
   assert.ok(s.text().includes('Play KovaaK’s together')&&s.text().includes('Step 1 of 4'));
   s.button('Next').onclick();assert.ok(s.text().includes('Your keys')&&s.text().includes('F9 (in use)'));
-  s.button('F6').onclick();assert.deepEqual(JSON.parse(s.last().body),{action:'prefs',prefs:{hotkey:'F6'}});
+  s.button('F6').onclick();assert.deepEqual(JSON.parse(s.last().body),{action:'prefs',prefs:{hotkey:'F6'}});s.last().finish(200,view({prefs:{onboarded:false,hotkey:'F6'}}));
   s.button('Next').onclick();s.button('Next').onclick();
   const ask=s.requests.find(r=>r.url==='/private/discord-settings');assert.ok(ask,'asks whether Discord presence exists');
   ask.finish(200,{settings:{discordPresenceEnabled:false,discordShowScore:true,discordShowPersonalBest:true,discordShowHubButton:true},status:{state:'off'}});
@@ -324,7 +324,7 @@ test('Look categories show compact tiles: equip on click, None takes it off, ite
   assert.ok(s.text().includes('Not on Meso')&&s.text().includes('1 more')&&s.text().includes('Update AimMod'));
   tileOf(s,'Ember').onclick();assert.deepEqual(JSON.parse(s.last().body),{action:'cosmetic-equip',id:'tint-ember'});
   s.last().finish(200,view());
-  tileOf(s,'None').onclick();assert.deepEqual(JSON.parse(s.last().body),{action:'cosmetic-remove',id:'tint-gold'});
+  tileOf(s,'None').onclick();assert.deepEqual(JSON.parse(s.last().body),{action:'cosmetic-remove',id:'tint-gold'});s.last().finish(200,view());
   category(s,'Head');assert.ok(tileOf(s,'Halo')&&!tileOf(s,'Scarf'),'accessories by slot');
   category(s,'Neck');assert.ok(tileOf(s,'Scarf'));
   category(s,'Weapon');tileOf(s,'Ice').onclick();assert.deepEqual(JSON.parse(s.last().body),{action:'cosmetic-equip',id:'finish-ice'});
@@ -478,9 +478,9 @@ test('names of only punctuation keep their characters, in the name and the circl
 test('leave during library and map requests permits fresh loads',()=>{
  const s=setup();s.api.enter(s.container);s.requests[0].finish(200,view({lobby:lobby()}));s.button('Edit').onclick();
  const old=s.requests.find(r=>r.url.endsWith('part=library'));s.api.leave();s.api.enter(s.container);s.last().finish(200,view({lobby:lobby()}));
- assert.equal(s.requests.filter(r=>r.url.endsWith('part=library')).length,2);old.finish(200,{available:false});
+ s.button('Edit').onclick();assert.equal(s.requests.filter(r=>r.url.endsWith('part=library')).length,2);old.finish(200,{available:false});
  s.api.leave();s.api.enter(s.container);s.last().finish(200,view());s.button('Map library').onclick();s.api.leave();s.api.enter(s.container);s.requests.filter(r=>r.url==='/private/multiplayer').at(-1).finish(200,view());
- assert.ok(s.requests.filter(r=>r.url.endsWith('part=maps')).length>=2);
+ s.button('Map library').onclick();assert.ok(s.requests.filter(r=>r.url.endsWith('part=maps')).length>=2);
 });
 test('Cosmetics failures retry and empty models have an explicit state',()=>{
  const s=setup();s.api.enter(s.container);s.requests[0].finish(200,view());s.button('Cosmetics').onclick();s.requests.find(r=>r.url.endsWith('part=looks')).finish(503,{});
@@ -493,4 +493,28 @@ test('live team controls send votes and host pause commands',()=>{
   s.requests[0].finish(200,view({lobby:lobby({settings:Object.assign({},settings,{mode:'cs'}),match})}));
   assert.ok(s.button('Vote to surrender')&&s.button('Tactical timeout')&&s.button('Vote to kick Synthetic Two'));
   s.button('Pause match').onclick();assert.deepEqual(JSON.parse(s.last().body),{action:'match-control',command:'pause'});
+});
+
+
+test('duplicate create is blocked and an older poll cannot replace its response',()=>{
+ const s=setup();s.api.enter(s.container);s.last().finish(200,view());
+ s.timers[s.timers.length-1]();const old=s.last();
+ const create=s.button('Create lobby');create.onclick();const post=s.last();create.onclick();assert.equal(s.last(),post);
+ post.finish(200,view({lobby:lobby()}));old.finish(200,view());assert.equal(s.api._state().view.lobby.id,'l1');
+});
+test('leaving clears stale invites and ignores outstanding responses',()=>{
+ const s=setup();s.api.enter(s.container);const old=s.last();s.api.leave();assert.equal(s.api._state().view,null);
+ s.api.enter(s.container);s.last().finish(200,view());old.finish(200,view({invites:[{id:'old'}]}));assert.equal(s.api._state().view.invites.length,0);
+});
+
+test('score-only polls preserve the match page and its controls',()=>{
+ const s=setup();const match={id:'m1',phase:'live',mode:'score-race',scenario:'Synthetic Scenario',timeLimit:60,round:1,totalRounds:1,startsAt:0,players:['p1','p2'],live:[{memberId:'p1',score:10,seconds:2,status:'playing'}],rounds:[],standings:[],rematch:[]};
+ s.api.enter(s.container);s.last().finish(200,view({lobby:lobby({match})}));
+ s.container.querySelector=selector=>s.all().find(e=>(' '+e.className+' ').includes(' '+selector.slice(1)+' '));
+ const old=s.container.querySelector('.mp-hud'),page=s.container.children[0],control=s.button('End match');
+ old.contains=n=>{while(n){if(n===old)return true;n=n.parentNode;}return false;};
+ old.parentNode.replaceChild=function(fresh,previous){this.children[this.children.indexOf(previous)]=fresh;fresh.parentNode=this;};
+ s.timers[s.timers.length-1]();const next=JSON.parse(JSON.stringify(match));next.live[0].score=25;
+ s.last().finish(200,view({lobby:lobby({match:next})}));
+ assert.equal(s.container.children[0],page);assert.equal(s.button('End match'),control);assert.notEqual(s.container.querySelector('.mp-hud'),old);assert.ok(s.text().includes('25'));
 });

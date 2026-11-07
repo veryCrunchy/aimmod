@@ -115,3 +115,5 @@
 .cs-item.owned{border-left:3px solid #27e4a1}.cs-item.off{background:#101714}
 .cs-item-key{color:#cfe0d8}.cs-item:focus{border-color:#8bf5ce}
 @media(max-height:760px){.cs-buy{width:820px;top:12%;max-height:78%}.cs-buy-group{padding:4px 6px}.cs-item{min-height:38px;margin-bottom:4px}.cs-buy-cat{margin-bottom:4px}.cs-feed{width:300px}.cs-kill{font-size:12px}.cs-me{bottom:12px}}
+.cs-buy-cols{display:block}
+.cs-buy-row{display:flex;flex-direction:row;align-items:flex-start}

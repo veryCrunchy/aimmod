@@ -34,3 +34,10 @@
 .tn-bracket{display:block}
 #tournaments{position:relative}
 .tn-toast{position:absolute;top:0;right:0;padding:10px 14px;border-radius:8px;background:#17201c;border:1px solid #2a3631;color:#eef5f1;z-index:40}
+
+#tournaments .tn-card{padding:24px;background:#121a17;border:1px solid #1f2b27;border-radius:8px}
+#tournaments .tn-card h2{font-size:20px;font-weight:700;line-height:28px}
+#tournaments .tn-top{display:block;margin-bottom:24px}
+#tournaments .tn-top>.actions{margin:12px 0 0}
+#tournaments .tn-bracket-wrap{overflow:auto}
+#tournaments .tn-row{padding:16px 0}
