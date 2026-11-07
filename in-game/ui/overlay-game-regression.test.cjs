@@ -1,0 +1,20 @@
+const {test}=require('node:test');
+const assert=require('node:assert/strict');
+const {makeWindow,load}=require('./overlay-test-dom.cjs');
+test('game surface renders Live stats and PB pace by polling without accessing EventSource',()=>{
+  const s=makeWindow(),w=s.window,host=w.document.createElement('main');host.id='scene';host.className='hidden';w.document.roots.push(host);
+  w.location.pathname='/cap/overlay';w.location.search='?surface=game';w.innerWidth=1920;w.innerHeight=1080;
+  const handlers={};w.engine={on:(key,fn)=>{handlers[key]=fn;}};
+  Object.defineProperty(w,'EventSource',{get(){throw new Error('Game surface must not use streaming');}});
+  load(w,['overlay-model.js','overlay-widgets.js']);const M=w.AimModOverlayModel,W=w.AimModOverlayWidgets;
+  load(w,['overlay.js']);
+  const feed=W.sample(1000);feed.enabled=true;feed.storeRevision=1;
+  s.requests.find(r=>r.url==='/cap/overlay-feed?surface=game').finish(200,feed);
+  s.requests.find(r=>r.url==='/cap/overlay-scenes').finish(200,M.defaultStore());
+  assert.equal(w.AimModLiveOverlay.surface,'game');assert.equal(host.className,'');
+  assert.equal(host.children.length,2);assert.match(host.textContent,/Score/);assert.match(host.textContent,/Personal best/i);
+  handlers.AimModVisibility(false);assert.equal(host.className,'hidden');
+  handlers.AimModVisibility(true);
+  s.requests.filter(r=>r.url==='/cap/overlay-feed?surface=game').at(-1).finish(200,feed);
+  assert.equal(host.className,'');assert.equal(host.children.length,2);
+});

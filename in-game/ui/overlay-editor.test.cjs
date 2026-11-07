@@ -3,6 +3,15 @@ const deq=(a,b,m)=>assert.deepStrictEqual(JSON.parse(JSON.stringify(a)),JSON.par
 const {makeWindow,load}=require('./overlay-test-dom.cjs');
 const settings={gameEnabled:false,obsEnabled:true,opacity:1,stats:{visible:true,x:1,y:100,width:560},versus:{visible:true,x:100,y:100,width:300}};
 const setupInfo={obsAvailable:true,obsBase:'http://127.0.0.1:1234/obs',obsUrl:'http://127.0.0.1:1234/obs/overlay?surface=obs',boardUrl:'http://127.0.0.1:1234/obs/board',tournamentUrl:'http://127.0.0.1:1234/obs/tournament'};
+test('assigned HUD warns when the master is off and enables it without changing OBS',()=>{
+  const s=setup();s.ready();assert.match(s.container.textContent,/In-game overlay is off/);
+  s.byId('ove-enable-game').onclick();const request=s.posts('overlay-settings').at(-1);deq(JSON.parse(request.body),{gameEnabled:true});
+  request.finish(200,{...settings,gameEnabled:true});assert.equal(s.byId('ove-enable-game'),null);assert.equal(s.api.state().settings.obsEnabled,true);
+});
+test('assigning another HUD scene also enables the master',()=>{
+  const s=setup();s.ready();s.byId('ove-scene-setup').onclick();s.byId('ove-use-game').onclick();
+  assert.equal(s.api.state().store.gameScene,'setup');deq(JSON.parse(s.posts('overlay-settings').at(-1).body),{gameEnabled:true});
+});
 function setup(){
   const w=makeWindow();const container=w.document.createElement('section');container.offsetWidth=1500;w.document.roots.push(container);
   load(w.window,['overlay-model.js','overlay-widgets.js','overlay-editor.js']);const M=w.window.AimModOverlayModel,api=w.window.AimModOverlayEditor;api.enter(container);

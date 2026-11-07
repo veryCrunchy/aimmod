@@ -20,7 +20,7 @@
   function get(path,timeout,done){
     var ticket=generation,x=new root.XMLHttpRequest(),finished=false;requests.push(x);x.open('GET',base()+'/'+path,true);x.timeout=timeout;
     function finish(ok,data){if(finished)return;finished=true;for(var i=0;i<requests.length;i++)if(requests[i]===x){requests.splice(i,1);break;}if(ticket!==generation||!visible)return;done(ok,data);}
-    x.onreadystatechange=function(){if(x.readyState!==4)return;if(x.status!==200){finish(false,null);return;}try{finish(true,JSON.parse(x.responseText));}catch(e){finish(false,null);}};
+    x.onreadystatechange=function(){if(x.readyState!==4)return;if(x.status!==200){finish(false,null);return;}var parsed;try{parsed=JSON.parse(x.responseText);}catch(e){finish(false,null);return;}finish(true,parsed);};
     x.onerror=x.ontimeout=function(){finish(false,null);};x.send(null);
   }
   function scene(){if(!store)return null;var id=sceneParam||(surface==='game'?store.gameScene:store.obsScene);if(!sceneParam&&feed){var ctx=feed.live&&feed.live.replay?'replay':M.context(feed);for(var i=0;i<store.scenes.length;i++)if(store.scenes[i].auto===ctx){id=store.scenes[i].id;break;}}return M.find(store,id)||(sceneParam?null:store.scenes[0]);}

@@ -127,6 +127,7 @@
   }
   function editor(){
     var sc=scene();
+    if(st.store.gameScene===sc.id&&st.settings&&!st.settings.gameEnabled){var off=add(container,el('div','ove-note warn'));add(off,el('span','','In-game overlay is off - '));var action=add(off,el('div','actions'));action.appendChild(button('Turn on',function(){saveLegacy({gameEnabled:true});},'compact primary','ove-enable-game'));}
     if(!checkpoint)checkpoint=M.copy(st.store);
     var bar=add(container,el('div','ove-bar'));var picker=add(bar,el('div','ove-scenes'));
     for(var i=0;i<st.store.scenes.length;i++)(function(s){var b=button(s.name,function(){st.scene=s.id;st.selected='';selection=[];st.panel='';st.rename=false;render();},'ove-scene'+(s.id===st.scene?' active':''),'ove-scene-'+s.id);
@@ -261,7 +262,7 @@
     var name=section(side,'');var input=el('input','ove-text');input.type='text';input.maxLength=48;input.value=sc.name;input.id='ove-scene-name';input.setAttribute('aria-label','Scene name');input.onchange=function(){var v=input.value.replace(/^\s+|\s+$/g,'');if(v){sc.name=v.slice(0,48);changed();}else input.value=sc.name;};
     var nb=add(name,el('div','ove-block'));add(nb,el('div','ove-line-label','Name'));nb.appendChild(input);
     var use=section(side,'Use this scene for');line(use,'OBS browser source',toggle(st.store.obsScene===sc.id,'Use for OBS',function(){st.store.obsScene=sc.id;changed();},'ove-use-obs'));
-    line(use,'In-game HUD',toggle(st.store.gameScene===sc.id,'Use in game',function(){st.store.gameScene=sc.id;changed();},'ove-use-game'));
+    line(use,'In-game HUD',toggle(st.store.gameScene===sc.id,'Use in game',function(){st.store.gameScene=sc.id;changed();if(st.settings&&!st.settings.gameEnabled)saveLegacy({gameEnabled:true});},'ove-use-game'));
     var th=section(side,'Theme');var list=add(th,el('div','ove-themes'));
     for(var i=0;i<M.THEMES.length;i++)(function(t){var b=button('',function(){sc.theme=M.cleanTheme({preset:t.key});changed();},'ove-theme'+(sc.theme.preset===t.key?' on':''),'ove-theme-'+t.key);var chip=add(b,el('span','ove-theme-chip'));chip.style.background=t.surface;var dot=add(chip,el('span','ove-theme-dot'));dot.style.background=t.accent;add(b,el('span','ove-theme-name',t.name));list.appendChild(b);})(M.THEMES[i]);
     var ac=add(th,el('div','ove-block'));add(ac,el('div','ove-line-label','Accent colour'));ac.appendChild(swatches(sc.theme.accent,M.ACCENTS,function(v){sc.theme.accent=v||M.theme(sc.theme.preset).accent;changed();},false,'Theme accent','ove-theme-accent'));

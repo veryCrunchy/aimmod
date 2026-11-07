@@ -225,6 +225,17 @@ static class OverlayScenesChecks
                 Check(!feed.RootElement.GetProperty("enabled").GetBoolean() && !feed.RootElement.TryGetProperty("kovaaks", out _), "the in-game surface is off until switched on, and then sends nothing");
             using (var motion = JsonDocument.Parse(await client.GetStringAsync(root + "/overlay-motion?surface=game&input=1")))
                 Check(motion.RootElement.GetProperty("input").ValueKind == JsonValueKind.Null, "motion off with its surface");
+            async Task SetSurface(bool enabled)
+            {
+                using var request = new HttpRequestMessage(HttpMethod.Post, root + "/overlay-settings"); request.Headers.Add("X-AimMod-UI", "1");
+                request.Content = new StringContent(enabled ? "{\"gameEnabled\":true,\"obsEnabled\":false}" : "{\"gameEnabled\":false}", Encoding.UTF8, "application/json");
+                using var response = await client.SendAsync(request); Check(response.IsSuccessStatusCode, "HUD master setting saves");
+            }
+            await SetSurface(true);
+            Check(new OverlaySettings(folder).Current.GameEnabled, "HUD master setting survives reload");
+            using (var enabledGame = JsonDocument.Parse(await client.GetStringAsync(root + "/overlay-feed?surface=game")))
+                Check(enabledGame.RootElement.GetProperty("enabled").GetBoolean(), "game feed enabled independently of OBS");
+            await SetSurface(false);
             var store = await client.GetStringAsync(root + "/overlay-scenes");
             using (var response = await client.PostAsync(root + "/overlay-scenes", new StringContent(store, Encoding.UTF8, "application/json")))
                 Check(response.StatusCode == HttpStatusCode.Forbidden, "saving requires the UI header");
