@@ -40,3 +40,22 @@ test('restricted markup strips network and executable attributes and styles',()=
   assert.equal(result.kids[0].style.color,'#ffffff');
   assert.equal(result.kids[0].kids[0].kids[0].text,'<img src=x>');
 });
+test('nested loops and conditionals keep inserted markup literal',()=>{
+  const data={board:{rows:[{name:'<img src=x>',ready:true},{name:'Second',ready:false}]}};
+  const source='{{#each board.rows}}<div>{{@index}} {{#if ready}}Ready {{name}}{{else}}Waiting{{/if}}</div>{{/each}}';
+  const result=M.markup(source,data);assert.equal(result.kids.length,2);
+  assert.equal(result.kids[0].kids[0].text,'0 Ready <img src=x>');assert.equal(result.kids[1].kids[0].text,'1 Waiting');
+  assert.equal(M.template('{{#each board.rows}}missing end',data),'');
+  assert.ok(M.template('{{#each rows}}{{this}}{{/each}}',{rows:Array(1000).fill('x')}).length<=32);
+});
+test('CSS allowlist accepts layout but rejects external resources and escaped property values',()=>{
+  const styles=M.css('display:flex;flex-direction:column;padding:12px;opacity:0.5;background-image:url(https://invalid.example);position:fixed;color:expression(x);width:999999px');
+  assert.equal(styles.display,'flex');assert.equal(styles.padding,'12px');assert.equal(styles.opacity,'0.5');assert.equal(Object.keys(styles).length,4);
+});
+test('portrait and 4K scene dimensions survive sharing and guide snapping',()=>{
+  const scene=M.cleanScene({id:'portrait',width:1080,height:1920,widgets:[{id:'a',type:'stat',x:80,y:1700}]});
+  const copy=M.decodeShare(M.encodeShare(scene));assert.equal(copy.height,1920);assert.equal(copy.widgets[0].y,1700);
+  const wide=M.cleanScene({id:'wide',width:3840,height:2160,widgets:[{id:'a',type:'stat',x:3000,y:1800}]});
+  assert.equal(wide.widgets[0].x,3000);
+  assert.equal(M.snap({x:1912,y:100,w:100,h:100},[],10,3840,2160).x,1920);
+});

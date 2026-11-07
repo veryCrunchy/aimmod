@@ -311,7 +311,7 @@
     if(o.caption)kids.push(styled(h('div','amw-note',safe(o.caption,160)),{color:env.theme.muted,textAlign:align}));return kids;
   };
   R.image=function(w,data,env){
-    var source=w.opts.path?M.value(data,w.opts.path):w.opts.url;var url=typeof source==='string'&&/^https:\/\/[^\s"'<>\\()]+$/.test(source)?source:'';
+    var source=w.opts.path?M.value(data,w.opts.path):w.opts.url;var url=typeof source==='string'&&(/^https:\/\/[^\s"'<>\\()]+$/.test(source)||/^overlay-avatar\/[0-9]{16,20}\.png(?:\?v=[0-9a-f]+)?$/.test(source))?source:'';
     if(!url)return [empty(env,'Set an https:// image address in the widget settings.')];
     return [styled(h('div','amw-image',''),{backgroundImage:'url('+url+')',backgroundSize:w.opts.fit==='cover'?'cover':'contain',height:Math.max(10,w.h-env.padY*2)+'px'})];
   };
