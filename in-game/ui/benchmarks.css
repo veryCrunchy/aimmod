@@ -53,3 +53,7 @@
 #benchmarks .benchmark-panel{border-color:#30433a;padding:20px}#benchmarks .benchmark-compact-row{min-height:64px}
 #benchmarks .benchmark-progress{height:6px;margin-top:8px}#benchmarks .benchmark-progress-fill{height:6px}
 #benchmarks .benchmark-expanded{padding:20px;border-left:3px solid #27e4a1}#benchmarks .benchmark-category-title{margin-bottom:16px}
+#benchmarks .benchmark-panel,#benchmarks .benchmark-category-content{background:#121a17;border-color:#1f2b27}
+#benchmarks .benchmark-rank-summary{background:#18231f;border-color:#1f2b27}
+#benchmarks .benchmark-col-0{white-space:normal;line-height:20px}
+#benchmarks .benchmark-category-title{margin-bottom:0}

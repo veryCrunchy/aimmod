@@ -29,7 +29,7 @@ test('initial period includes history older than the recent windows',()=>{
   assert.ok(s.all().some(e=>e.tag==='button'&&e.textContent==='All time'&&e.className.includes('primary')));
   assert.ok(s.all().some(e=>e.textContent.includes('Showing all recorded activity')));
   s.all().find(e=>e.tag==='button'&&e.textContent==='30 days').onclick();
-  assert.ok(s.all().some(e=>e.textContent==='0 runs in the last 30 days'));
+  assert.ok(s.all().some(e=>e.textContent==='No runs for this scenario in the last 30 days. Showing all recorded runs.'));
 });
 test('statistics renders literal scenario names, legitimate zero and unknown metrics without Intl',()=>{
   const s=surface();let selected;

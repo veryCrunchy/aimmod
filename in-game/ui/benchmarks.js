@@ -1,10 +1,10 @@
 (function(root){
   'use strict';
-  var container=null,request=null,generation=0,items=[],linked=false,query='',rankedOnly=true,onScenario=null;
+  var container=null,request=null,generation=0,items=[],linked=false,query='',rankedOnly=true,onScenario=null,listTimer=null;
   function el(tag,css,text){var n=root.document.createElement(tag);n.className=css||'';if(text!==undefined)n.textContent=text;return n;}
   function button(text,fn,css){var n=el('button',css||'button',text);n.type='button';n.onclick=fn;return n;}
   function clear(){while(container&&container.firstChild)container.removeChild(container.firstChild);}
-  function cancel(){generation++;if(request){request.abort();request=null;}}
+  function cancel(){generation++;if(listTimer){root.clearTimeout(listTimer);listTimer=null;}if(request){request.abort();request=null;}}
   function get(path,done){cancel();var ticket=generation,xhr=new root.XMLHttpRequest();request=xhr;var pathName=root.location.pathname;var prefix=pathName.slice(0,pathName.lastIndexOf('/'));xhr.open('GET',prefix+'/'+path,true);xhr.timeout=20000;var finished=false;
     function finish(ok,data){if(finished)return;finished=true;if(ticket!==generation||!container)return;request=null;done(ok,data);}
     xhr.onreadystatechange=function(){if(xhr.readyState!==4)return;if(xhr.status!==200){finish(false);return;}try{finish(true,JSON.parse(xhr.responseText));}catch(e){finish(false);}};
@@ -35,8 +35,8 @@
       var heading=el('div','benchmark-row benchmark-heading');heading.appendChild(el('span','benchmark-name','Benchmark'));heading.appendChild(el('span','benchmark-rank','Your rank'));heading.appendChild(el('span','benchmark-open',''));results.appendChild(heading);
       shown.forEach(function(item){var row=button('',function(){detail(item);},'benchmark-row benchmark-item'),name=el('span','benchmark-name');name.appendChild(el('strong','',title(item)));var meta=byline(item);if(meta)name.appendChild(el('span','benchmark-meta',meta));row.appendChild(name);rankLabel(row,item.rank,'benchmark-rank'+(item.rank?' is-ranked':''));row.appendChild(el('span','benchmark-open','View'));results.appendChild(row);});
     }
-    var timer=null;search.oninput=function(){if(timer)root.clearTimeout(timer);timer=root.setTimeout(function(){timer=null;if(query!==search.value){query=search.value;rows();}},150);};
-    search.onchange=function(){if(timer){root.clearTimeout(timer);timer=null;}query=search.value;rows();};rows();
+    search.oninput=function(){query=search.value;if(listTimer)root.clearTimeout(listTimer);listTimer=root.setTimeout(function(){listTimer=null;if(container===card.parentNode)rows();},150);};
+    search.onchange=function(){if(listTimer){root.clearTimeout(listTimer);listTimer=null;}query=search.value;rows();};rows();
   }
   var detailPage=null,categoryIndex=0,scenarioQuery='',openScenario=-1;
   function thresholdsFor(scenario){return (scenario.thresholds||[]).filter(function(t){return typeof t.score==='number'&&isFinite(t.score)&&t.score>=0;}).sort(function(a,b){return a.score-b.score;});}
@@ -71,7 +71,7 @@
       matches.forEach(function(scenario,index){
         var thresholds=thresholdsFor(scenario),next=nextFor(scenario,thresholds),isOpen=openScenario===index;
         var row=button('',function(){openScenario=isOpen?-1:index;drawBody();},'benchmark-compact-row benchmark-toggle'+(isOpen?' expanded':''));row.setAttribute('aria-expanded',String(isOpen));row.setAttribute('aria-label',scenario.name+' — show rank thresholds');
-        var name=el('span','benchmark-col-0',scenario.name);row.appendChild(name);row.appendChild(el('strong','benchmark-col-1',number(scenario.score)));rankLabel(row,scenario.rank,'benchmark-col-2');
+        var name=el('span','benchmark-col-0',scenario.name);row.appendChild(name);row.appendChild(el('strong','benchmark-col-1',scenario.score>0?number(scenario.score):'No score'));rankLabel(row,scenario.rank,'benchmark-col-2');
         var progress=el('span','benchmark-col-3');progress.appendChild(el('span','',next?number(next.score-scenario.score)+' to '+next.rank:thresholds.length?'Top target reached':'No thresholds'));
         if(next&&typeof scenario.score==='number'&&isFinite(scenario.score)&&next.score>0){var track=el('span','benchmark-progress'),fill=el('span','benchmark-progress-fill');fill.style.width=Math.max(0,Math.min(100,scenario.score/next.score*100))+'%';fill.style.background=tier({index:thresholds.indexOf(next)});track.setAttribute('role','progressbar');track.setAttribute('aria-label',scenario.name+' progress to '+next.rank);track.setAttribute('aria-valuemin','0');track.setAttribute('aria-valuemax',String(next.score));track.setAttribute('aria-valuenow',String(Math.max(0,scenario.score)));track.appendChild(fill);progress.appendChild(track);}row.appendChild(progress);row.appendChild(el('span','benchmark-col-4',isOpen?'-':'+'));panel.appendChild(row);
         if(!isOpen)return;
@@ -85,5 +85,5 @@
   }
   function detail(item){cancel();clear();actionsRow().appendChild(button('Back to benchmarks',list,'button quiet'));notice('Loading benchmark…');get('benchmark?id='+encodeURIComponent(item.id),function(ok,page){if(!ok||!page||!Array.isArray(page.categories)){clear();actionsRow().appendChild(button('Back to benchmarks',list,'button quiet'));notice('Couldn’t load this benchmark. Try again.');actionsRow().appendChild(button('Try again',function(){detail(item);},'button primary'));return;}detailPage=page;categoryIndex=0;scenarioQuery='';openScenario=-1;drawDetail();});}
   function load(){clear();notice('Loading benchmarks…');get('benchmarks',function(ok,data){if(!ok||!data||!Array.isArray(data.items)){clear();failure('Could not load benchmarks','AimMod couldn’t reach AimMod Hub or its local service. Check your connection and try again.',load);return;}linked=!!data.linked;items=data.items.filter(function(x){return x&&typeof x.id==='number'&&x.id>0&&typeof x.name==='string';});list();});}
-  root.AimModBenchmarks={enter:function(target,selectScenario){cancel();onScenario=typeof selectScenario==='function'?selectScenario:null;container=target;if(container)load();},resize:function(){if(container&&detailPage)drawDetail();},back:function(){if(container&&detailPage)list();},leave:function(){cancel();container=null;detailPage=null;}};
+  root.AimModBenchmarks={enter:function(target,selectScenario){cancel();onScenario=typeof selectScenario==='function'?selectScenario:null;container=target;if(container){if(detailPage)drawDetail();else load();}},resize:function(){if(container&&detailPage)drawDetail();},back:function(){if(container&&detailPage)list();},leave:function(){cancel();container=null;}};
 })(window);

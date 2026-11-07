@@ -34,6 +34,7 @@ test('empty scenario text stays literal and unavailable scope is disabled',()=>{
 test('drill actions pass search queries without pretending to select exact scenarios',()=>{
  const c=load(),root=dom(c),queries=[];const input=Array.from({length:40},(_,i)=>({id:'drill-'+i,normalizedScenario:'synthetic static',timestampMs:Date.UTC(2026,8,1)+i*100000,duration_secs:60,score:100+i*.2,accuracy:90,kills:3,damage_done:2,stats_panel:{scenario_type:'StaticClicking'}}));
  c.AimModCoaching.render(root,{coachingHistory:input},()=>{throw Error('must use drill search')},query=>queries.push(query));
+ const more=css(root,'coach-more-toggle')[0];if(more)more.onclick();
  const drills=css(root,'coach-drill');assert.ok(drills.length>0);drills[0].onclick();assert.equal(typeof queries[0],'string');assert.ok(queries[0].length>0);
 });
 
@@ -73,4 +74,10 @@ test('next block names a scenario and a measured target, with only two advice ca
  const lead=css(root,'coach-summary')[0];assert.match(lead.textContent,/3 runs on (Small|Large)/);assert.match(lead.textContent,/Aim for [\d,]+ score or higher/);
  assert.ok(css(root,'coach-primary').length+css(root,'coach-more').length<=2);assert.ok(button(root,'Got it'));assert.ok(button(root,'Not for me'));
  assert.ok(css(root,'coach-spark').every(n=>n.attrs['aria-label'].includes('oldest to newest')));
+});
+test('unchanged coaching updates preserve the mounted controls',()=>{
+ const c=load(),root=dom(c),state={coachingHistory:runs(),selectedScenario:'small'};
+ c.AimModCoaching.render(root,state);const before=root.children[0];
+ c.AimModCoaching.render(root,JSON.parse(JSON.stringify(state)));assert.equal(root.children[0],before);
+ c.AimModCoaching.render(root,{...state,selectedScenario:'large'});assert.notEqual(root.children[0],before);
 });
