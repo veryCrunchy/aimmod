@@ -19,6 +19,8 @@ static class ReplayKeyboardChecks
         keys.Clear(); Poll(2); keys.Add(0x25); keys.Add(0x27); Poll(2); Check(commands.Count==before,"Opposite arrows do not issue conflicting seeks");
         keys.Clear(); Poll(2); keys.Add(0x20); keys.Add(0x1B); Poll(2); Check(commands.Count==before+1 && commands[^1].Action=="close","Escape wins over simultaneous transport commands");
         Poll(2); Check(commands.Count==before+1,"Held Escape cannot repeat");
+        keys.Clear(); Poll(2); keys.Add(0xDB); Poll(2); Check(commands[^1].Action=="flick-previous","Previous flick key");
+        keys.Clear(); Poll(2); keys.Add(0xDD); Poll(2); Check(commands[^1].Action=="flick-next","Next flick key");
         var now=DateTime.UtcNow;
         string Ack(bool active=true,string id="synthetic",long revision=4)=>$"{{\"state\":\"ready\",\"mode\":\"main\",\"active\":{active.ToString().ToLowerInvariant()},\"replayId\":\"{id}\",\"revision\":{revision}}}";
         Check(ReplayKeyboard.IsAcknowledged(Ack(),now,now,"synthetic",4),"Active current renderer accepted");

@@ -54,7 +54,7 @@ static partial class MatchScenario
     public static bool IsGeneratedName(string fileName) => FilePattern().IsMatch(fileName);
 
     // Match scenarios never run as challenges, so nothing can reach KovaaK's leaderboards.
-    public static string SafeMode(string scenario, string mode) => scenario.StartsWith(Prefix, StringComparison.Ordinal) ? "freeplay" : mode;
+    public static string SafeMode(string scenario, string mode) => (scenario.StartsWith(Prefix, StringComparison.Ordinal) || PracticeDrills.IsDrill(scenario)) ? "freeplay" : mode;
     static readonly CultureInfo Invariant = CultureInfo.InvariantCulture;
 
     // Anything that changes what is played means a generated scenario.
@@ -525,8 +525,11 @@ static partial class MatchScenario
 // Writes match scenarios into the game's Scenarios folder. Only files AimMod
 // generated (listed in its own manifest, unchanged since) are ever replaced or
 // removed; a user's scenario with the same name is never overwritten.
-sealed class MatchScenarioStore(string scenariosFolder, string manifestPath, int keep = 5)
+sealed class MatchScenarioStore(string scenariosFolder, string manifestPath, int keep = 5, bool drills = false)
 {
+    string Prefix => drills ? PracticeDrills.Prefix : MatchScenario.Prefix;
+    string Marker => drills ? PracticeDrills.Marker : MatchScenario.Marker;
+    bool Generated(string file) => drills ? System.Text.RegularExpressions.Regex.IsMatch(file, @"^AimMod Drill - (static|micro|tracking|reactive) - [0-9a-f]{8}\.sce$") : MatchScenario.IsGeneratedName(file);
     sealed record Entry(string File, string Hash, long Written);
     readonly object gate = new();
 
@@ -545,7 +548,7 @@ sealed class MatchScenarioStore(string scenariosFolder, string manifestPath, int
     {
         lock (gate)
         {
-            if (!name.StartsWith(MatchScenario.Prefix, StringComparison.Ordinal) || name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0) return (false, "invalid-name");
+            if (!name.StartsWith(Prefix, StringComparison.Ordinal) || name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0) return (false, "invalid-name");
             Directory.CreateDirectory(scenariosFolder);
             var file = name + ".sce";
             var path = Path.Combine(scenariosFolder, file);
@@ -560,7 +563,7 @@ sealed class MatchScenarioStore(string scenariosFolder, string manifestPath, int
             AtomicFile.WriteText(path, text);
             Touch(entries, file, hash, now);
             // Keep the last few; remove older ones only if they are still exactly what we wrote.
-            foreach (var old in entries.OrderByDescending(e => e.Written).Skip(keep).ToArray())
+            foreach (var old in entries.Where(e => Generated(e.File)).OrderByDescending(e => e.Written).Skip(keep).ToArray())
             {
                 var oldPath = Path.Combine(scenariosFolder, old.File);
                 try { if (File.Exists(oldPath) && MatchScenario.Hash(File.ReadAllText(oldPath)) == old.Hash) File.Delete(oldPath); }
@@ -586,10 +589,10 @@ sealed class MatchScenarioStore(string scenariosFolder, string manifestPath, int
             var keep = keepName is null ? null : keepName + ".sce";
             var removed = 0;
             var written = Read();
-            foreach (var path in Directory.EnumerateFiles(scenariosFolder, MatchScenario.Prefix + "*.sce").Take(500).ToArray())
+            foreach (var path in Directory.EnumerateFiles(scenariosFolder, Prefix + "*.sce").Take(500).ToArray())
             {
                 var file = Path.GetFileName(path);
-                if (file == keep || !MatchScenario.IsGeneratedName(file)) continue;
+                if (file == keep || !Generated(file)) continue;
                 // Ours: still exactly what this store wrote; or, never written by it, it carries the marker.
                 var entry = written.LastOrDefault(e => e.File == file);
                 if (entry is not null ? !Unchanged(path, entry.Hash) : !Marked(path)) continue;
@@ -606,7 +609,7 @@ sealed class MatchScenarioStore(string scenariosFolder, string manifestPath, int
         try { return new FileInfo(path).Length <= 32L << 20 && MatchScenario.Hash(File.ReadAllText(path)) == hash; }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return false; }
     }
-    static bool Marked(string path)
+    bool Marked(string path)
     {
         try
         {
@@ -615,7 +618,7 @@ sealed class MatchScenarioStore(string scenariosFolder, string manifestPath, int
             for (var i = 0; i < 400 && reader.ReadLine() is { } line; i++)
             {
                 if (line.StartsWith('[')) return false;
-                if (line.StartsWith("Description=" + MatchScenario.Marker, StringComparison.Ordinal)) return true;
+                if (line.StartsWith("Description=" + Marker, StringComparison.Ordinal)) return true;
             }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }

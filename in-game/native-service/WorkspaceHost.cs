@@ -14,6 +14,7 @@ sealed class WorkspaceHost : IAsyncDisposable
     readonly GameCommands gameCommands;
     readonly CancellationTokenSource startLoop = new();
     ReplayCatalog? replayCatalog;
+    PracticeDrillHost? drills;
     readonly ReplayKeyboard keyboard;
     readonly RendererAcknowledgement renderer;
     readonly OverlaySettings overlaySettings;
@@ -151,6 +152,9 @@ sealed class WorkspaceHost : IAsyncDisposable
         var html = reader.ReadToEnd();
         var replays = new ReplayCatalog(output);
         replayCatalog = replays;
+        drills = new(lobby.Library, new Multiplayer.CoreGameControl(output), output);
+        drills.Map(app, prefix, replays);
+        app.MapGet(prefix + "/practice-drills.js", () => Results.Stream(typeof(WorkspaceHost).Assembly.GetManifestResourceStream("AimMod.PracticeDrillsScript")!, "application/javascript"));
         var library = new ReplayLibrary(replays, output);
         var inbox = new ReplayInbox(output, replays);
         app.MapGet(prefix + "/ui", () => Results.Content(html, "text/html", Encoding.UTF8));
@@ -362,6 +366,7 @@ sealed class WorkspaceHost : IAsyncDisposable
                             playback.Load(ready, compareWith is not null && compareWith.Scenario == ready.Scenario ? compareWith : null);
                         }
                         else autoLoad.Tick();
+                        drills?.Tick();
                     } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException) { }
                 }
             } catch (OperationCanceledException) { }

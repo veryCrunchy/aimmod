@@ -112,8 +112,8 @@ sealed class ReplayKeyboard(NativeReplayPlayback playback, string output) : IAsy
 
 sealed class ReplayKeyboardEdges
 {
-    static readonly int[] Keys = [0x20, 0x25, 0x27, 0x1B];
-    readonly bool[] previous = new bool[4];
+    static readonly int[] Keys = [0x20, 0x25, 0x27, 0x1B, 0xDB, 0xDD];
+    readonly bool[] previous = new bool[6];
     long session;
     bool primed;
     internal void Reset() { primed = false; session = 0; Array.Clear(previous); }
@@ -129,6 +129,7 @@ sealed class ReplayKeyboardEdges
         next.CopyTo(previous, 0);
         if (!ready) return; // Held keys on entry/focus regain are only baselined.
         if (pressed[3]) { send("close", null); Reset(); return; }
+        if (pressed[4] != pressed[5]) send(pressed[5] ? "flick-next" : "flick-previous", null);
         if (pressed[0]) send("toggle", null);
         if (pressed[1] != pressed[2]) send("seek-relative", (pressed[2] ? 1 : -1) * (shift ? 1 : 5));
     }

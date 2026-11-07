@@ -24,6 +24,7 @@ sealed class NativeReplayPlayback : IAsyncDisposable
     NativeReplay? replay;
     // Optional second run on the same timeline (ghost), or a live view.
     NativeReplay? compare;
+    FlickPath[] flickPaths = [];
     LivePoseFeed? live;
     bool playing, visible;
     double position, speed = 1;
@@ -63,7 +64,10 @@ sealed class NativeReplayPlayback : IAsyncDisposable
     {
         if (value.Frames.Count < 2) throw new ArgumentException("Replay has no frames.");
         if (compareWith is not null && (compareWith.Frames.Count < 2 || compareWith.Scenario != value.Scenario)) throw new ArgumentException("Comparison replay must be of the same scenario.");
+        var paths = PracticeReplay.Build(value);
         lock (gate) {
+            flickPaths = paths;
+            AtomicFile.WriteText(Path.Combine(Path.GetDirectoryName(path)!, "replay-flicks.tsv"), PracticeReplay.Encode(value.Id, value.Duration, paths));
             try { AtomicFile.WriteText(Path.Combine(Path.GetDirectoryName(path)!, "replay-kills.tsv"), KillTimeline(value)); }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
             keyboardSession++; keyboardRevision = revision + 1; replay = value; compare = compareWith; live = null; position = 0; speed = 1; playing = false; visible = true; anchor = Stopwatch.GetTimestamp(); revision++; }
@@ -96,6 +100,14 @@ sealed class NativeReplayPlayback : IAsyncDisposable
             var now = Time;
             switch (action)
             {
+                case "flick-next":
+                case "flick-previous":
+                    var selected = action == "flick-next" ? flickPaths.FirstOrDefault(f => f.Time > now + .001) : flickPaths.LastOrDefault(f => f.Time < now - .001);
+                    if (selected is null) return false;
+                    position = selected.Time; playing = false; break;
+                case "flick-seek":
+                    if (value is not double index || index != Math.Truncate(index) || index < 0 || index >= flickPaths.Length) return false;
+                    position = flickPaths[(int)index].Time; playing = false; break;
                 case "play": position = now >= replay.Frames[^1].T ? 0 : now; playing = true; break;
                 case "pause": position = now; playing = false; break;
                 case "toggle": position = now >= replay.Frames[^1].T ? 0 : now; playing = !playing; break;
@@ -283,7 +295,7 @@ sealed class NativeReplayPlayback : IAsyncDisposable
             lastCommand = text;
             var cells = text.TrimEnd('\r', '\n').Split('\t');
             if (cells.Length is < 2 or > 3 || cells[0].Length is < 1 or > 100 || cells[0].Any(c => !char.IsAsciiLetterOrDigit(c) && c != '-' && c != '_')) return;
-            if (cells[1] is not ("toggle" or "seek" or "seek-relative" or "speed-next" or "close")) return;
+            if (cells[1] is not ("toggle" or "seek" or "seek-relative" or "speed-next" or "close" or "flick-next" or "flick-previous" or "flick-seek")) return;
             double? value = cells.Length == 3 && double.TryParse(cells[2], NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed) ? parsed : null;
             Command(cells[1], value);
         } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
