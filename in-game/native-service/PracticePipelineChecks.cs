@@ -24,6 +24,11 @@ static class PracticePipelineChecks
                 Check(!pipeline.Tick(now.AddSeconds(1)),"backfill is throttled");
                 Check(pipeline.Tick(now.AddSeconds(11))&&pipeline.Snapshot().Length==2,"one older replay per interval");
                 var sample = pipeline.Snapshot()[0];
+                Check(PracticeGuidance.DrillTarget([]) is null, "no replay means no drill target");
+                var target = PracticeGuidance.DrillTarget([
+                    sample with { Id="steady-replay", Tracking=sample.Tracking with { TrackedSeconds=10, MeanAbsErrorDeg=.5 } },
+                    sample with { Id="weak-replay", Tracking=sample.Tracking with { TrackedSeconds=10, MeanAbsErrorDeg=2 } }]);
+                Check(target?.ReplayId == "weak-replay", "drill target keeps the measured replay identity");
                 var repeats = Enumerable.Range(0,6).Select(i => sample with { Id="repeat"+i, RecordedAt=now.AddMinutes(i-6), Flicks=sample.Flicks with { Count=20, MeanCorrections=i<3?1:2, MeanVerificationMs=i<3?100:150, MeanEfficiency=.8 } }).Reverse().ToArray();
                 Check(JsonSerializer.Serialize(PracticeGuidance.Build(repeats,now),PracticePipeline.Json).Contains("Take a short break"),"sustained same-scenario fatigue");
                 Check(!JsonSerializer.Serialize(PracticeGuidance.Build(repeats.Select((r,i)=>r with { Scenario="Scenario"+i }).ToArray(),now),PracticePipeline.Json).Contains("Take a short break"),"unrelated scenarios are not fatigue evidence");

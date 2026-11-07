@@ -38,3 +38,9 @@ Keep page-title, scenario-contextbar, account-shortcut, lifecycle-banner and rep
 Lifecycle GET supplies dismissedNotices. POST lifecycle/dismiss accepts a single key, update:<version> or game:<build>; the service persists it independently of the browser port. Existing lifecycle/action dismiss handles completed installation results. Repair prompts cannot be dismissed. Release notes and install controls remain in Settings. A failed dismissal keeps the item visible and offers a retry message.
 
 Navigation keeps native Tab/Enter behavior and supports Up/Down/Home/End focus movement. Escape closes the inbox before handling deeper page navigation. At 720px height the navigation compacts to 30px rows; the footer and page body remain independently reachable.
+
+## Popup and positioning compatibility
+
+Use the shared dropdown for every choice list. Native select, datalist and range, date or colour inputs require browser chrome that the embedded view cannot render. Long lists include a search field and keyboard navigation.
+
+Gameface supports `::before` and `::after`; other pseudo-elements are outside this UI's supported subset. Fixed positioning arrived in Gameface 1.56 and received subsequent layout fixes. Use absolute positioning inside an explicit relative container for contextual notices, and test scrolling and clipping at 720p. See the [CSS properties table](https://docs.coherent-labs.com/cpp-gameface/content_development/supported_features_tables/cssproperties/), [selector table](https://docs.coherent-labs.com/cpp-gameface/content_development/supported_features_tables/cssselectors/) and [feature changelog](https://docs.coherent-labs.com/cpp-gameface/changelog/feature/).

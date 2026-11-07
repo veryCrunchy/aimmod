@@ -41,3 +41,4 @@
 #run-details .run-score{padding-left:20px;border-left:1px solid #30433a}#run-details .run-kpis{flex-wrap:wrap}
 #run-details .run-panel{border-color:#30433a;margin-bottom:20px}#run-details .run-table{overflow-x:auto}#run-details .run-row{min-width:600px}
 @media(max-width:1000px){#run-details .run-header{display:block}#run-details .run-score{padding:12px 0 0;border:0;text-align:left}#run-details .run-kpis>.metric{min-width:150px}}
+.run-kpis.practice-kpis>.metric{flex:none;width:23%;margin:0 1% 12px}

@@ -17,6 +17,8 @@
 .ove-tool-group .dropdown{min-width:130px}
 .ove-layer-row{padding:6px 0;border-bottom:1px solid #30433a}
 .ove-layer-row>.button{margin-right:4px}
+.ove-layer-icon.button{width:30px;min-width:30px;padding:4px;justify-content:center}
+.ove-layer-icon canvas{display:block;width:20px;height:20px}
 .ove-lib-add{display:flex;align-items:center;justify-content:center}
 .ove-bar-right .segmented{margin-right:8px}
 .ove-seg .button{height:28px;line-height:28px;padding:0 10px;font-size:12px}

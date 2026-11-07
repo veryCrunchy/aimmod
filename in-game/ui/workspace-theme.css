@@ -85,3 +85,11 @@
 .replay-bulk{display:flex;align-items:center;flex-wrap:wrap;margin:0 0 12px}
 .replay-bulk>*{margin-right:8px;margin-bottom:4px}
 @media(max-width:1400px){.replay-library .replay-card-inner{flex-wrap:wrap}.replay-library .replay-actions{width:100%;justify-content:flex-end}.replay-library .replay-stat{min-width:76px;margin-right:8px}}
+.practice-summary{padding:20px}
+.practice-summary h2{font-size:18px;margin-bottom:12px}
+.practice-summary p{margin-bottom:10px;line-height:1.5}
+.practice-weakness{padding:12px 16px;margin:16px 0;background:#173b2f;border-left:3px solid #27e4a1;border-radius:6px}
+.practice-weakness p{margin:0 0 8px;line-height:1.5}
+#home-pbs>h2{padding:20px;font-size:18px}
+#home-pbs>.subtle{padding:0 20px 20px}
+#overview #home-pbs .next-item{padding:16px 20px}

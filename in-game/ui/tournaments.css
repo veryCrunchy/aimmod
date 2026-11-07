@@ -32,4 +32,5 @@
 .tn-row-name{font-weight:600}
 .tn-bracket-wrap{overflow-x:auto;margin:6px 0 10px 0}
 .tn-bracket{display:block}
-.tn-toast{position:fixed;bottom:18px;right:18px;padding:10px 14px;border-radius:8px;background:#17201c;border:1px solid #2a3631;color:#eef5f1}
+#tournaments{position:relative}
+.tn-toast{position:absolute;top:0;right:0;padding:10px 14px;border-radius:8px;background:#17201c;border:1px solid #2a3631;color:#eef5f1;z-index:40}

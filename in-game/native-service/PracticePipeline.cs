@@ -8,6 +8,7 @@ sealed record PracticePoint(double Time, double? Horizontal, double? Vertical, d
 sealed record PracticeRun(int Version, string Id, string Scenario, DateTimeOffset RecordedAt, long SourceSize, long SourceStamp,
     FlickReport Flicks, TrackingReport Tracking, PracticePoint[] Timeline);
 sealed record PracticeCell(string Direction, string Amplitude, int Count, int Runs, double ErrorPercent);
+sealed record PracticeDrillTarget(string ReplayId, string Scenario, string Weakness);
 
 // One idle-time worker owns analysis and disk writes. HTTP handlers only read snapshots.
 sealed class PracticePipeline : IDisposable
@@ -131,6 +132,16 @@ sealed class PracticePipeline : IDisposable
 
 static class PracticeGuidance
 {
+    internal static PracticeDrillTarget? DrillTarget(PracticeRun[] runs)
+    {
+        var flick = runs.Take(30).SelectMany(r => Map([r]).Where(c => c.Count >= 5)
+            .Select(c => new { Run = r, Cell = c })).OrderByDescending(x => Math.Abs(x.Cell.ErrorPercent)).FirstOrDefault();
+        if (flick is not null) return new(flick.Run.Id, flick.Run.Scenario,
+            $"{flick.Cell.Direction}, {flick.Cell.Amplitude} degree flicks. Practise cleaner first stops.");
+        var tracking = runs.Take(30).Where(r => r.Tracking.TrackedSeconds >= 5 && double.IsFinite(r.Tracking.MeanAbsErrorDeg))
+            .OrderByDescending(r => r.Tracking.MeanAbsErrorDeg).FirstOrDefault();
+        return tracking is null ? null : new(tracking.Id, tracking.Scenario, "Tracking control. Practise matching the target's speed through turns.");
+    }
     internal static string Bin(double d) => d < 5 ? "1-5" : d < 15 ? "5-15" : d < 30 ? "15-30" : d < 60 ? "30-60" : "60+";
     internal static PracticeCell[] Map(IEnumerable<PracticeRun> runs) => runs.SelectMany(r => r.Flicks.Flicks.Select(f => (r.Id, Flick: f)))
         .GroupBy(x => (x.Flick.Sector, Bin(x.Flick.Distance))).Select(g => new PracticeCell(Angles.SectorNames[g.Key.Sector], g.Key.Item2, g.Count(), g.Select(x => x.Id).Distinct().Count(), (g.Average(x => x.Flick.PrimaryEndRatio)-1)*100)).ToArray();
@@ -172,7 +183,7 @@ static class PracticeGuidance
             else if(low.Length >= 2 && high.Length == 0) sensitivity = "Repeated undershoot appears across multiple ranges or directions. Try a slightly higher sensitivity in practice, then compare the same scenarios.";
             else sensitivity = "Direction and distance show mixed results. Keep sensitivity and practise the weaker direction first.";
         }
-        return new { status = runs.Length == 0 ? "pending" : "ready", runs = runs.Length, map, readiness, fatigue, sensitivity };
+        return new { status = runs.Length == 0 ? "pending" : "ready", runs = runs.Length, map, readiness, fatigue, sensitivity, drill = DrillTarget(runs) };
     }
 }
 

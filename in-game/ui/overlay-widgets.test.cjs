@@ -87,3 +87,12 @@ test('formatting groups digits without Intl and never shows negative zero',()=>{
   const {W}=setup();const F=W.format;assert.equal(F.number(1234567.891,2),'1,234,567.89');assert.equal(F.number(-0.0001,2),'0.00');assert.equal(F.number(null),'—');assert.equal(F.signed(2.5,1),'+2.5');assert.equal(F.signed(0,1),'0.0');
   assert.equal(F.clock(75.9),'1:15');assert.equal(F.span(3720),'1h 02m');assert.equal(F.span(59),'59s');assert.equal(F.span(600),'10m');assert.equal(F.millis(284),'284 ms');assert.equal(F.safe('a\u0001b\u0085c',10),'abc');assert.equal(F.safe('abcdefghijk',5),'abcd…');
 });
+
+test('auto-height widgets remain inside the scene when their content grows',()=>{
+  const {M,W,host}=setup(),sc=scene(M,[M.widget('pb-pace','pace',1400,930,{w:400})]);
+  W.render(host,sc,W.sample(NOW),{all:true});
+  Object.defineProperty(host.children[0],'offsetHeight',{value:240,configurable:true});
+  W.render(host,sc,W.sample(NOW),{all:true});
+  assert.equal(host.children[0].style.top,'840px');
+  assert.equal(sc.widgets[0].y,930,'stored placement is retained');
+});

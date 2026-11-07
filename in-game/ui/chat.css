@@ -21,7 +21,7 @@
 .chat-input.team .chat-input-label{color:#27e4a1}
 .chat-draft{color:#eef5f1;white-space:pre;overflow:hidden}
 .chat-caret{color:#27e4a1;margin-left:1px}
-.chat-hint{margin-top:3px;font-size:11px;color:#9fb4aa}
+.chat-hint{margin-top:3px;padding:4px 8px;border-radius:3px;background:rgba(11,17,16,.85);font-size:11px;color:#dcebe3}
 .chat-clash{margin-top:3px;font-size:12px;color:#f6c46a}
 .chat-radio{width:300px;margin-bottom:6px;padding:8px 10px;border:1px solid #2c4a3d;border-top:3px solid #27e4a1;border-radius:8px;background:rgba(11,17,16,.95);pointer-events:auto}
 .chat-radio-head{font-size:12px;font-weight:700;letter-spacing:.6px;color:#27e4a1;margin-bottom:6px}

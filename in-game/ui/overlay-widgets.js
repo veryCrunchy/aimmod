@@ -360,7 +360,9 @@
       if(!options.all&&!M.condition(data,w.opts.condition))continue;
       var copyEnv={theme:env.theme,now:env.now,dpr:env.dpr,motion:env.motion,image:env.image,doc:doc,width:0,padX:0,padY:0},f=frame(w,data,copyEnv);if(!f)continue;
       f.key='w:'+w.id+':'+w.type;if(options.only){f.attrs.style.left='0px';f.attrs.style.top='0px';}if(options.decorate)options.decorate(f,w);list.push(f);}
-    patch(doc,container,list);return list.length;
+    patch(doc,container,list);
+    if(!options.only){var children=container.childNodes||container.children;for(var j=0;j<children.length;j++){var item=children[j];for(var k=0;k<scene.widgets.length;k++){var widget=scene.widgets[k];if(item.amKey==='w:'+widget.id+':'+widget.type&&M.entry(widget.type).auto){var measured=item.offsetHeight||widget.h;item.style.top=Math.max(0,Math.min(widget.y,scene.height-measured))+'px';break;}}}}
+    return list.length;
   }
   function needsMotion(scene,ctx){var out={path:false,input:false};if(!scene)return out;for(var i=0;i<scene.widgets.length;i++){var w=scene.widgets[i];if(ctx&&!M.shownIn(w,ctx))continue;if(!w.visible)continue;if(w.type==='mouse-path')out.path=true;if(w.type==='input')out.input=true;}return out;}
   // ---- sample data (synthetic: no real players, gear or scores) ----

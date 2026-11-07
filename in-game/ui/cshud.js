@@ -73,8 +73,12 @@
     mid.appendChild(node('span','cs-clock-round',(c.phase==='warmup'?'Practice':'Round '+c.round+' of '+c.rounds)+(typeof c.tAlive==='number'?' · T '+c.tAlive+' · CT '+c.ctAlive:'')));
     var ct=node('div','cs-score ct'+(c.side==='CT'?' mine':''));ct.appendChild(node('span','cs-points',c.ctScore));ct.appendChild(node('span','cs-team','CT'));
     top.appendChild(t);top.appendChild(mid);top.appendChild(ct);group.appendChild(top);
-    if(c.afk)group.appendChild(node('div','cs-controls','A bot is playing your slot. Move or fire to return.'));
-    if(c.phase==='warmup')group.appendChild(node('div','cs-controls','Free buys · Type /ready in chat to begin'));
+    if(c.afk||c.phase==='warmup'){
+      var hints=node('div','cs-controls');
+      if(c.afk)hints.appendChild(node('div','','A bot is playing your slot. Move or fire to return.'));
+      if(c.phase==='warmup')hints.appendChild(node('div','','Free buys · Type /ready in chat to begin'));
+      target.appendChild(hints);
+    }
     // Bomb sites on a compass under the strip (90 degrees either side; behind clamps to an edge), and
     // the site letter (and callout) while you stand in one.
     if(c.sites&&c.sites.length&&!c.buyOpen){

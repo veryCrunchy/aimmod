@@ -181,6 +181,10 @@ test('match flow states label the HUD and explain returning control',()=>{
   const s=setup();
   for(const [state,label] of [[{phase:'warmup'},'Warmup'],[{paused:true},'Host pause'],[{timeout:true},'Tactical timeout'],[{afk:true},'Move or fire to return']]){
     s.hud.render(s.root,Object.assign({},base,{buyOpen:false},state),()=>{});assert.ok(s.text(s.root).includes(label));
+    if(state.afk||state.phase==='warmup'){
+      const group=s.walk(s.root).find(n=>n.className==='cs-top-group');
+      assert.ok(!s.walk(group).some(n=>n.className==='cs-controls'),'edge hints stay outside the centre-scaled clock group');
+    }
   }
 });
 test('buy categories form six independent cells while ownership blocks repeat buys',()=>{
@@ -188,4 +192,11 @@ test('buy categories form six independent cells while ownership blocks repeat bu
   const categories=s.walk(s.root).find(n=>n.className==='cs-buy-cols');assert.equal(categories.children.length,6);
   const owned=s.walk(s.root).find(n=>n.className==='cs-item owned');owned.onclick();assert.deepEqual(calls,[]);
   assert.ok(categories.children.every(n=>n.className==='cs-buy-group'));
+});
+test('warmup and return-control hints share one edge container',()=>{
+  const s=setup();s.hud.render(s.root,Object.assign({},base,{phase:'warmup',afk:true,buyOpen:false}),()=>{});
+  const hints=s.walk(s.root).filter(n=>n.className==='cs-controls');
+  assert.equal(hints.length,1);
+  assert.ok(s.text(hints[0]).includes('Move or fire to return'));
+  assert.ok(s.text(hints[0]).includes('/ready'));
 });
