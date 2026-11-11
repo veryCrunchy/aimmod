@@ -232,7 +232,71 @@ fn ensure_missing_dir_retry(app: AppHandle) {
         });
 }
 
+fn unix_now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// Re-anchors the run window on the stats CSV (end = when it appeared,
+/// length = its duration). Bridge tracking can start well before the real
+/// challenge (a restart, or a recovery start while idling), and its end is
+/// derived as start + duration, so both ends drift early. The replay's mouse
+/// path, frames and video are all cut to this window, so it must be right.
+fn align_run_window_to_csv(
+    snapshot: &mut crate::bridge::BridgeRunSnapshot,
+    csv_end_unix_ms: u64,
+    csv_duration_secs: f64,
+    scenario: &str,
+) {
+    const TOLERANCE_MS: u64 = 1_500;
+    if !csv_duration_secs.is_finite() || csv_duration_secs <= 0.0 || csv_end_unix_ms == 0 {
+        return;
+    }
+    let Some(tracked_start) = snapshot.started_at_unix_ms else {
+        return;
+    };
+    let tracked_end = snapshot.ended_at_unix_ms.unwrap_or(tracked_start);
+    let duration_ms = (csv_duration_secs * 1000.0).round() as u64;
+    let end = csv_end_unix_ms;
+    let mut start = end.saturating_sub(duration_ms);
+    // Challenge time excludes pauses, so a pause inside the run pushes the
+    // wall-clock start earlier by its length.
+    let paused_inside: u64 = snapshot
+        .pause_windows
+        .iter()
+        .map(|w| w.ended_at_unix_ms.min(end).saturating_sub(w.started_at_unix_ms.max(start)))
+        .sum();
+    start = start.saturating_sub(paused_inside);
+
+    let start_too_early = tracked_start + TOLERANCE_MS < start;
+    let end_too_early = tracked_end + TOLERANCE_MS < end;
+    if !start_too_early && !end_too_early {
+        return;
+    }
+
+    let shift_ms = start as i64 - tracked_start as i64;
+    log::info!(
+        "file_watcher: re-anchored run window for {} to the stats CSV: start {:+}ms, end {:+}ms",
+        scenario,
+        shift_ms,
+        end as i64 - tracked_end as i64
+    );
+    snapshot.started_at_unix_ms = Some(start);
+    snapshot.ended_at_unix_ms = Some(end);
+    if let Some(bridge_ts) = snapshot.started_at_bridge_ts_ms {
+        snapshot.started_at_bridge_ts_ms = Some((bridge_ts as i64 + shift_ms).max(0) as u64);
+    }
+    snapshot
+        .pause_windows
+        .retain(|w| w.ended_at_unix_ms > start && w.started_at_unix_ms < end);
+}
+
 fn process_stats_csv(app: AppHandle, path: PathBuf) {
+    // KovaaK's writes the stats CSV the moment a run ends, so detection time is
+    // the most reliable run end AimMod has.
+    let csv_detected_unix_ms = unix_now_ms();
     // Give KovaaK's a brief window to finish flushing the CSV before parsing.
     std::thread::sleep(Duration::from_millis(500));
     match parse_csv(&path) {
@@ -255,7 +319,10 @@ fn process_stats_csv(app: AppHandle, path: PathBuf) {
                     result.scenario
                 );
             }
-            let run_snapshot = crate::bridge::take_run_snapshot();
+            let mut run_snapshot = crate::bridge::take_run_snapshot();
+            if let Some(snapshot) = run_snapshot.as_mut() {
+                align_run_window_to_csv(snapshot, csv_detected_unix_ms, result.duration_secs, &result.scenario);
+            }
             if let Some(snapshot) = run_snapshot.as_ref() {
                 let tick_keyframes = snapshot
                     .tick_stream_v1
