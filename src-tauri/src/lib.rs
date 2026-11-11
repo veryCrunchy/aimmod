@@ -2414,6 +2414,8 @@ fn clear_log_buffer() {
     logger::clear_buffer();
 }
 
+/// Receives log lines from the web frontend (src/log.ts) so page errors land
+/// in aimmod.log next to backend logs.
 #[tauri::command]
 async fn search_scenarios(
     query: String,
@@ -2621,6 +2623,7 @@ pub fn run() {
             get_overlay_origin,
             get_log_buffer,
             clear_log_buffer,
+            frontend_log,
             get_settings,
             save_settings,
             reset_settings,

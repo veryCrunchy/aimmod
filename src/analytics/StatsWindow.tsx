@@ -9,6 +9,7 @@ import { LeaderboardBrowser, ScenarioLeaderboardPanel } from "./LeaderboardBrows
 import { DebugTab } from "./DebugTab";
 import { HubBrowserPanel } from "./HubBrowser";
 import { OsuWorkspace } from "../osu/OsuWorkspace";
+import { ErrorBoundary } from "../ErrorBoundary";
 import { MousePathViewer } from "./MousePathViewer";
 import type {
   ReplayPayloadData,
@@ -4307,8 +4308,8 @@ function ReplayTab({
     const cards: Array<{ label: string; value: string; sub?: string; accent: string }> = [
       {
         label: "Episodes",
-        value: summary.episode_count.toLocaleString(),
-        sub: `${summary.path_change_count} path breaks · ${summary.target_switch_count} switches`,
+        value: (summary.episode_count ?? 0).toLocaleString(),
+        sub: `${summary.path_change_count ?? 0} path breaks · ${summary.target_switch_count ?? 0} switches`,
         accent: "#00b4ff",
       },
     ];
@@ -4781,16 +4782,18 @@ function ReplayTab({
                   <span style={{ color: "#00f5a0", fontWeight: 700 }}>{fmtScore(selectedRecord.score)}</span>{" "}
                   pts · {formatDateTime(selectedRecord.timestamp)}
                 </SectionTitle>
-                <MousePathViewer
-                  rawPositions={replayPayloadView?.positions ?? replayPayload.positions}
-                  metricPoints={replayPayloadView?.metrics ?? replayPayload.metrics}
-                  screenFrames={replayPayloadView?.frames ?? replayPayload.frames ?? []}
-                  hitTimestampsMs={replayHitTimestamps}
-                  segmentLabel={selectedContextRow?.label ?? null}
-                  segmentWindowLabel={selectedContextRow ? formatTelemetryWindowLabel(selectedContextRow.startMs, selectedContextRow.endMs) : null}
-                  timelineMarkers={replayTimelineMarkers}
-                  timelineWindows={replayTimelineWindows}
-                />
+                <ErrorBoundary name="replay_viewer">
+                  <MousePathViewer
+                    rawPositions={replayPayloadView?.positions ?? replayPayload.positions}
+                    metricPoints={replayPayloadView?.metrics ?? replayPayload.metrics}
+                    screenFrames={replayPayloadView?.frames ?? replayPayload.frames ?? []}
+                    hitTimestampsMs={replayHitTimestamps}
+                    segmentLabel={selectedContextRow?.label ?? null}
+                    segmentWindowLabel={selectedContextRow ? formatTelemetryWindowLabel(selectedContextRow.startMs, selectedContextRow.endMs) : null}
+                    timelineMarkers={replayTimelineMarkers}
+                    timelineWindows={replayTimelineWindows}
+                  />
+                </ErrorBoundary>
               </div>
 
               {runChartData.length > 1 && hasRunTimelineSignal && (
@@ -5174,16 +5177,18 @@ function ReplayTab({
                 <span style={{ color: "#00f5a0", fontWeight: 700 }}>{fmtScore(selectedRecord.score)}</span>{" "}
                 pts · {formatDateTime(selectedRecord.timestamp)}
               </SectionTitle>
-              <MousePathViewer
-                rawPositions={replayPayloadView?.positions ?? replayPayload.positions}
-                metricPoints={replayPayloadView?.metrics ?? replayPayload.metrics}
-                screenFrames={replayPayloadView?.frames ?? replayPayload.frames ?? []}
-                hitTimestampsMs={replayHitTimestamps}
-                segmentLabel={selectedContextRow?.label ?? null}
-                segmentWindowLabel={selectedContextRow ? formatTelemetryWindowLabel(selectedContextRow.startMs, selectedContextRow.endMs) : null}
-                timelineMarkers={replayTimelineMarkers}
-                timelineWindows={replayTimelineWindows}
-              />
+              <ErrorBoundary name="replay_viewer">
+                <MousePathViewer
+                  rawPositions={replayPayloadView?.positions ?? replayPayload.positions}
+                  metricPoints={replayPayloadView?.metrics ?? replayPayload.metrics}
+                  screenFrames={replayPayloadView?.frames ?? replayPayload.frames ?? []}
+                  hitTimestampsMs={replayHitTimestamps}
+                  segmentLabel={selectedContextRow?.label ?? null}
+                  segmentWindowLabel={selectedContextRow ? formatTelemetryWindowLabel(selectedContextRow.startMs, selectedContextRow.endMs) : null}
+                  timelineMarkers={replayTimelineMarkers}
+                  timelineWindows={replayTimelineWindows}
+                />
+              </ErrorBoundary>
             </div>
           </>
         )
