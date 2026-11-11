@@ -285,16 +285,64 @@ static auto replay_read_actor_transforms(
     return has_any;
 }
 
-static auto replay_collect_map_context(ReplayContext& context) -> void {
-    std::vector<RC::Unreal::UObject*> candidates{};
-    RC::Unreal::UObjectGlobals::FindAllOf(STR("MetaGameState"), candidates);
+// FindAllOf walks every UObject. Replay samples run at up to 60Hz, so the
+// object lists are cached and refreshed on a slower cadence; each sample still
+// reads live values from the cached objects (validated before use).
+struct ReplayFindAllCache {
+    std::vector<RC::Unreal::UObject*> objects{};
+    uint64_t refreshed_ms = 0;
+};
+
+static auto replay_find_all_cached(
+    ReplayFindAllCache& cache,
+    const wchar_t* primary_class,
+    const wchar_t* secondary_class,
+    uint64_t max_age_ms
+) -> const std::vector<RC::Unreal::UObject*>& {
+    const uint64_t now = GetTickCount64();
+    if (cache.refreshed_ms != 0 && now - cache.refreshed_ms < max_age_ms) {
+        return cache.objects;
+    }
+    cache.objects.clear();
+    RC::Unreal::UObjectGlobals::FindAllOf(primary_class, cache.objects);
     std::vector<RC::Unreal::UObject*> alt{};
-    RC::Unreal::UObjectGlobals::FindAllOf(STR("KovGameState_C"), alt);
+    RC::Unreal::UObjectGlobals::FindAllOf(secondary_class, alt);
     for (auto* obj : alt) {
         if (obj) {
-            candidates.emplace_back(obj);
+            cache.objects.emplace_back(obj);
         }
     }
+    cache.refreshed_ms = now;
+    return cache.objects;
+}
+
+static auto replay_collect_map_context(ReplayContext& context) -> void {
+    // The game state only changes on map load.
+    static ReplayFindAllCache game_state_cache{};
+    const std::vector<RC::Unreal::UObject*> candidates =
+        replay_find_all_cached(game_state_cache, STR("MetaGameState"), STR("KovGameState_C"), 2000);
+
+    // Map name and texture scale only change with the game state, so the
+    // result is reused until the game-state list refreshes (every 2s).
+    struct CachedMapContext {
+        uint64_t generation = 0;
+        bool has_map_name = false;
+        std::string map_name{};
+        bool has_map_scale = false;
+        float map_scale = 0.0f;
+    };
+    static CachedMapContext cached_map{};
+    if (cached_map.generation != 0 && cached_map.generation == game_state_cache.refreshed_ms) {
+        if (cached_map.has_map_name) {
+            context.map_name = cached_map.map_name;
+        }
+        if (cached_map.has_map_scale) {
+            context.map_scale = cached_map.map_scale;
+        }
+        return;
+    }
+    cached_map = CachedMapContext{};
+    cached_map.generation = game_state_cache.refreshed_ms;
 
     RC::Unreal::UObject* best = nullptr;
     int best_score = std::numeric_limits<int>::min();
@@ -327,6 +375,8 @@ static auto replay_collect_map_context(ReplayContext& context) -> void {
     std::string map_name{};
     if (replay_read_string_property(best, "currentmapname", map_name)) {
         context.map_name = map_name;
+        cached_map.has_map_name = true;
+        cached_map.map_name = map_name;
     }
 
     auto* owner_class = best->GetClassPrivate();
@@ -358,6 +408,8 @@ static auto replay_collect_map_context(ReplayContext& context) -> void {
         }
         if (std::isfinite(value) && value >= 0.0f) {
             context.map_scale = value;
+            cached_map.has_map_scale = true;
+            cached_map.map_scale = value;
         }
         break;
     }
@@ -366,14 +418,36 @@ static auto replay_collect_map_context(ReplayContext& context) -> void {
 static auto replay_collect_entity_actor_refs(std::vector<ReplayEntityActorRef>& out_refs) -> void {
     out_refs.clear();
 
-    std::vector<RC::Unreal::UObject*> candidates{};
-    RC::Unreal::UObjectGlobals::FindAllOf(STR("MetaCharacter"), candidates);
-    std::vector<RC::Unreal::UObject*> alt{};
-    RC::Unreal::UObjectGlobals::FindAllOf(STR("FPSCharacter_C"), alt);
-    for (auto* obj : alt) {
-        if (obj) {
-            candidates.emplace_back(obj);
+    // Bots spawn and despawn during a run; 250ms keeps new ones prompt.
+    static ReplayFindAllCache character_cache{};
+    const std::vector<RC::Unreal::UObject*> candidates =
+        replay_find_all_cached(character_cache, STR("MetaCharacter"), STR("FPSCharacter_C"), 250);
+
+    // Identity fields (name, profile, controller presence) only change when
+    // the candidate list does, so they are cached per actor and rebuilt with
+    // it; transforms are still read live every sample.
+    struct CachedEntityInfo {
+        bool usable = false;
+        std::string id{};
+        std::string profile{};
+        bool is_player = false;
+        bool is_bot = false;
+    };
+    static std::unordered_map<RC::Unreal::UObject*, CachedEntityInfo> entity_info_cache{};
+    static uint64_t entity_info_generation = 0;
+    if (entity_info_generation != character_cache.refreshed_ms) {
+        // Keep identities for actors still present; only new actors pay the
+        // name/property lookups. Rebuilding every entry on each refresh made
+        // replay sampling stall the mod for seconds with many characters.
+        std::unordered_set<RC::Unreal::UObject*> present(candidates.begin(), candidates.end());
+        for (auto it = entity_info_cache.begin(); it != entity_info_cache.end();) {
+            if (present.count(it->first) == 0) {
+                it = entity_info_cache.erase(it);
+            } else {
+                ++it;
+            }
         }
+        entity_info_generation = character_cache.refreshed_ms;
     }
 
     std::unordered_set<std::string> seen_ids{};
@@ -383,36 +457,40 @@ static auto replay_collect_entity_actor_refs(std::vector<ReplayEntityActorRef>& 
             continue;
         }
 
-        const auto full_name = obj->GetFullName();
-        if (replay_is_rejected_runtime_object_name(full_name)) {
+        auto cached = entity_info_cache.find(obj);
+        if (cached == entity_info_cache.end()) {
+            CachedEntityInfo info{};
+            const auto full_name = obj->GetFullName();
+            if (!replay_is_rejected_runtime_object_name(full_name)) {
+                info.id = utf8_from_wide(replay_object_path_from_full_name(full_name));
+                info.usable = !info.id.empty();
+            }
+            if (info.usable) {
+                std::string profile{};
+                if (replay_read_string_property(obj, "characterprofilename", profile)) {
+                    info.profile = profile;
+                }
+                bool has_player = false;
+                bool has_ai = false;
+                info.is_player =
+                    replay_read_object_presence_property(obj, "myplayercontroller", has_player) && has_player;
+                info.is_bot = replay_read_object_presence_property(obj, "myaicontroller", has_ai) && has_ai;
+            }
+            cached = entity_info_cache.emplace(obj, std::move(info)).first;
+        }
+        const CachedEntityInfo& info = cached->second;
+        if (!info.usable) {
             continue;
         }
-
-        const auto object_path = replay_object_path_from_full_name(full_name);
-        const auto id = utf8_from_wide(object_path);
-        if (id.empty()) {
-            continue;
-        }
-        if (!seen_ids.insert(id).second) {
+        if (!seen_ids.insert(info.id).second) {
             continue;
         }
 
         ReplayEntity entity{};
-        entity.id = id;
-
-        std::string profile{};
-        if (replay_read_string_property(obj, "characterprofilename", profile)) {
-            entity.profile = profile;
-        }
-
-        bool has_player = false;
-        bool has_ai = false;
-        if (replay_read_object_presence_property(obj, "myplayercontroller", has_player) && has_player) {
-            entity.is_player = true;
-        }
-        if (replay_read_object_presence_property(obj, "myaicontroller", has_ai) && has_ai) {
-            entity.is_bot = true;
-        }
+        entity.id = info.id;
+        entity.profile = info.profile;
+        entity.is_player = info.is_player;
+        entity.is_bot = info.is_bot;
 
         (void)replay_read_actor_transforms(obj, entity);
 

@@ -28,6 +28,7 @@
 #include <fstream>
 #include <initializer_list>
 #include <limits>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <string_view>
@@ -175,6 +176,43 @@ void runtime_log_line(const char* line) {
         STR("[kmod-prod] {}\n"),
         string_type_from_utf8(line)
     );
+}
+
+// Logs a comma-separated name list, split into chunks so long lists stay readable.
+void log_name_list(const char* label, const std::string& names) {
+    constexpr size_t k_chunk = 900;
+    if (names.empty()) {
+        runtime_log_line((std::string(label) + ": (none)").c_str());
+        return;
+    }
+    size_t start = 0;
+    uint32_t part = 1;
+    while (start < names.size()) {
+        size_t end = names.size();
+        if (end - start > k_chunk) {
+            const auto comma = names.rfind(',', start + k_chunk);
+            end = (comma != std::string::npos && comma > start) ? comma : start + k_chunk;
+        }
+        std::string line = label;
+        if (start > 0 || end < names.size()) {
+            line += " [" + std::to_string(part) + "]";
+        }
+        line += ": ";
+        line.append(names, start, end - start);
+        runtime_log_line(line.c_str());
+        start = (end < names.size() && names[end] == ',') ? end + 1 : end;
+        ++part;
+    }
+}
+
+// user_mgmt kill switch: env AIMMOD_DISABLE_USER_MGMT=1, or a file named
+// "aimmod_disable_user_mgmt" next to the game exe (Binaries\Win64).
+bool user_mgmt_disabled_by_switch() {
+    if (env_flag_enabled("AIMMOD_DISABLE_USER_MGMT")) {
+        return true;
+    }
+    const auto flag_path = game_bin_dir() + L"aimmod_disable_user_mgmt";
+    return GetFileAttributesW(flag_path.c_str()) != INVALID_FILE_ATTRIBUTES;
 }
 
 void events_log_line(const char* line) {
@@ -573,7 +611,11 @@ public:
 
         verbose_logs_ = false;
         http_trace_enabled_ = env_flag_enabled("AIMMOD_HTTP_TRACE");
+        user_mgmt_enabled_ = !user_mgmt_disabled_by_switch();
         s_instance_ = this;
+        runtime_log_line(user_mgmt_enabled_
+            ? "[user_mgmt] enabled"
+            : "[user_mgmt] DISABLED by switch (AIMMOD_DISABLE_USER_MGMT or aimmod_disable_user_mgmt file)");
 
         if (kovaaks::RustBridge::startup()) {
             rust_ready_ = true;
@@ -732,10 +774,94 @@ public:
             }
             return;
         }
+        LARGE_INTEGER update_start{};
+        QueryPerformanceCounter(&update_start);
         on_update_impl_safe();
+        note_update_cost(update_start, now_ms);
     }
 
 private:
+    // Logs the mod's own update cost every 30s so CPU regressions are visible.
+    void note_update_cost(const LARGE_INTEGER& start, uint64_t now_ms) {
+        LARGE_INTEGER end{};
+        LARGE_INTEGER freq{};
+        QueryPerformanceCounter(&end);
+        QueryPerformanceFrequency(&freq);
+        if (freq.QuadPart <= 0) {
+            return;
+        }
+        const uint64_t us = static_cast<uint64_t>(
+            (end.QuadPart - start.QuadPart) * 1000000 / freq.QuadPart);
+        update_cost_total_us_ += us;
+        update_cost_max_us_ = (std::max)(update_cost_max_us_, us);
+        ++update_cost_calls_;
+        if (update_cost_window_start_ms_ == 0) {
+            update_cost_window_start_ms_ = now_ms;
+            return;
+        }
+        const uint64_t window_ms = now_ms - update_cost_window_start_ms_;
+        if (window_ms < 30000) {
+            return;
+        }
+        std::array<char, 200> line{};
+        std::snprintf(
+            line.data(),
+            line.size(),
+            "[perf] update busy=%.1f%% of one core calls=%llu avg_us=%llu max_us=%llu in_challenge=%d",
+            static_cast<double>(update_cost_total_us_) / 10.0 / static_cast<double>(window_ms),
+            static_cast<unsigned long long>(update_cost_calls_),
+            static_cast<unsigned long long>(update_cost_total_us_ / (std::max<uint64_t>)(1, update_cost_calls_)),
+            static_cast<unsigned long long>(update_cost_max_us_),
+            static_cast<int>(last_is_in_challenge_)
+        );
+        runtime_log_line(line.data());
+        // ms of work per second, per section: targets, receiver, pulls,
+        // meta+scenario_mgr, scenario_state, state/emit, overlay.
+        std::array<char, 400> sections{};
+        const double ms_per_tick = 1000.0 / static_cast<double>(freq.QuadPart);
+        const double per_second = 1000.0 / static_cast<double>(window_ms);
+        auto sec = [&](size_t i) { return perf_section_ticks_[i] * ms_per_tick * per_second; };
+        std::snprintf(
+            sections.data(),
+            sections.size(),
+            "[perf] ms/s targets=%.1f receiver=%.1f pulls=%.1f meta_scenario=%.1f scenario_state=%.1f state_emit=%.1f overlay=%.1f lifecycle_shots=%.1f replay_playback=%.1f replay_capture=%.1f",
+            sec(0), sec(1), sec(2), sec(3), sec(4), sec(5), sec(6), sec(7), sec(8), sec(9)
+        );
+        runtime_log_line(sections.data());
+        for (auto& ticks : perf_section_ticks_) {
+            ticks = 0;
+        }
+        update_cost_window_start_ms_ = now_ms;
+        update_cost_total_us_ = 0;
+        update_cost_max_us_ = 0;
+        update_cost_calls_ = 0;
+    }
+
+    // Section timings inside on_update_impl (QPC ticks), reported with [perf].
+    static constexpr size_t k_perf_sections = 10;
+    int64_t perf_lap_last_qpc_{0};
+    int64_t perf_section_ticks_[k_perf_sections]{};
+
+    void perf_lap_begin() {
+        LARGE_INTEGER t{};
+        QueryPerformanceCounter(&t);
+        perf_lap_last_qpc_ = t.QuadPart;
+    }
+
+    void perf_lap(size_t section) {
+        LARGE_INTEGER t{};
+        QueryPerformanceCounter(&t);
+        if (perf_lap_last_qpc_ != 0 && section < k_perf_sections) {
+            perf_section_ticks_[section] += t.QuadPart - perf_lap_last_qpc_;
+        }
+        perf_lap_last_qpc_ = t.QuadPart;
+    }
+
+    uint64_t update_cost_window_start_ms_{0};
+    uint64_t update_cost_total_us_{0};
+    uint64_t update_cost_max_us_{0};
+    uint64_t update_cost_calls_{0};
+
     void emit_bridge_ready_banner() {
         kovaaks::RustBridge::emit_json("{\"ev\":\"ue4ss_mod_loaded\"}");
         kovaaks::RustBridge::emit_json("{\"ev\":\"ue4ss_mode\",\"mode\":\"production_stripped\"}");
@@ -1208,7 +1334,7 @@ private:
     }
 
     void maybe_emit_user_management_snapshot_safe(uint64_t now_ms, bool force) {
-        if (now_ms < user_management_fault_backoff_until_ms_) {
+        if (!user_mgmt_enabled_ || now_ms < user_management_fault_backoff_until_ms_) {
             return;
         }
 #if defined(_MSC_VER)
@@ -1423,9 +1549,16 @@ private:
         EmitTagScope hook_scope(*this, "receiver_hook", "non_ui_live_hook");
 
         if (call_ctx.Context && is_likely_valid_object_ptr(call_ctx.Context)) {
-            const auto context_name = call_ctx.Context->GetFullName();
-            if (!is_rejected_runtime_object_name(context_name)
-                && context_name.find(STR("PerformanceIndicatorsStateReceiver")) != RC::StringType::npos) {
+            // This hook fires on the game thread for every metric update; the
+            // receiver object is stable within a run, so classify it once.
+            if (call_ctx.Context != hook_context_last_) {
+                const auto context_name = call_ctx.Context->GetFullName();
+                hook_context_last_ = call_ctx.Context;
+                hook_context_is_receiver_ =
+                    !is_rejected_runtime_object_name(context_name)
+                    && context_name.find(STR("PerformanceIndicatorsStateReceiver")) != RC::StringType::npos;
+            }
+            if (hook_context_is_receiver_) {
                 live_metric_receiver_hint_ = call_ctx.Context;
                 live_metric_receiver_hint_ms_ = now;
                 state_receiver_instance_ = call_ctx.Context;
@@ -1627,7 +1760,9 @@ private:
     }
 
     void register_live_metric_hooks() {
-        auto bind = [&](RC::Unreal::UFunction* fn, LiveMetricHookKind kind) {
+        std::string newly_registered{};
+        uint32_t new_count = 0;
+        auto bind = [&](RC::Unreal::UFunction* fn, LiveMetricHookKind kind, const char* name) {
             if (!fn || !is_likely_valid_object_ptr(fn)) {
                 return;
             }
@@ -1648,54 +1783,71 @@ private:
                 reinterpret_cast<void*>(static_cast<uintptr_t>(kind))
             );
             live_metric_hook_bindings_.emplace_back(fn, callback_id);
+            if (!newly_registered.empty()) {
+                newly_registered += ',';
+            }
+            newly_registered += name;
+            ++new_count;
         };
 
-        bind(targets_.receive_seconds, LiveMetricHookKind::Seconds);
-        bind(targets_.receive_seconds_single, LiveMetricHookKind::Seconds);
-        bind(targets_.receive_seconds_value_else, LiveMetricHookKind::Seconds);
-        bind(targets_.receive_seconds_value_or, LiveMetricHookKind::Seconds);
-        bind(targets_.receive_kills, LiveMetricHookKind::Kills);
-        bind(targets_.receive_kills_single, LiveMetricHookKind::Kills);
-        bind(targets_.receive_kills_value_else, LiveMetricHookKind::Kills);
-        bind(targets_.receive_kills_value_or, LiveMetricHookKind::Kills);
-        bind(targets_.receive_score, LiveMetricHookKind::Score);
-        bind(targets_.receive_score_single, LiveMetricHookKind::Score);
-        bind(targets_.receive_score_value_else, LiveMetricHookKind::Score);
-        bind(targets_.receive_score_value_or, LiveMetricHookKind::Score);
-        bind(targets_.receive_accuracy, LiveMetricHookKind::Accuracy);
-        bind(targets_.receive_accuracy_single, LiveMetricHookKind::Accuracy);
-        bind(targets_.receive_accuracy_value_else, LiveMetricHookKind::Accuracy);
-        bind(targets_.receive_accuracy_value_or, LiveMetricHookKind::Accuracy);
-        bind(targets_.receive_shots_fired, LiveMetricHookKind::ShotsFired);
-        bind(targets_.receive_shots_fired_single, LiveMetricHookKind::ShotsFired);
-        bind(targets_.receive_shots_fired_value_else, LiveMetricHookKind::ShotsFired);
-        bind(targets_.receive_shots_fired_value_or, LiveMetricHookKind::ShotsFired);
-        bind(targets_.receive_shots_hit, LiveMetricHookKind::ShotsHit);
-        bind(targets_.receive_shots_hit_single, LiveMetricHookKind::ShotsHit);
-        bind(targets_.receive_shots_hit_value_else, LiveMetricHookKind::ShotsHit);
-        bind(targets_.receive_shots_hit_value_or, LiveMetricHookKind::ShotsHit);
-        bind(targets_.receive_score_per_minute, LiveMetricHookKind::ScorePerMinute);
-        bind(targets_.receive_score_per_minute_value_else, LiveMetricHookKind::ScorePerMinute);
-        bind(targets_.receive_score_per_minute_value_or, LiveMetricHookKind::ScorePerMinute);
-        bind(targets_.receive_kills_per_second, LiveMetricHookKind::KillsPerSecond);
-        bind(targets_.receive_kills_per_second_value_else, LiveMetricHookKind::KillsPerSecond);
-        bind(targets_.receive_kills_per_second_value_or, LiveMetricHookKind::KillsPerSecond);
-        bind(targets_.receive_damage_done, LiveMetricHookKind::DamageDone);
-        bind(targets_.receive_damage_done_value_else, LiveMetricHookKind::DamageDone);
-        bind(targets_.receive_damage_possible, LiveMetricHookKind::DamagePossible);
-        bind(targets_.receive_damage_possible_value_else, LiveMetricHookKind::DamagePossible);
-        bind(targets_.receive_damage_efficiency, LiveMetricHookKind::DamageEfficiency);
-        bind(targets_.receive_damage_efficiency_value_else, LiveMetricHookKind::DamageEfficiency);
-        bind(targets_.receive_challenge_average_fps, LiveMetricHookKind::ChallengeAverageFps);
-        bind(targets_.receive_challenge_average_fps_single, LiveMetricHookKind::ChallengeAverageFps);
-        bind(targets_.receive_challenge_average_fps_value_else, LiveMetricHookKind::ChallengeAverageFps);
-        bind(targets_.receive_challenge_average_fps_value_or, LiveMetricHookKind::ChallengeAverageFps);
-        bind(targets_.receive_challenge_tick_count, LiveMetricHookKind::ChallengeTickCount);
-        bind(targets_.receive_challenge_tick_count_single, LiveMetricHookKind::ChallengeTickCount);
-        bind(targets_.receive_challenge_tick_count_value_else, LiveMetricHookKind::ChallengeTickCount);
-        bind(targets_.receive_challenge_tick_count_value_or, LiveMetricHookKind::ChallengeTickCount);
+        bind(targets_.receive_seconds, LiveMetricHookKind::Seconds, "receive_seconds");
+        bind(targets_.receive_seconds_single, LiveMetricHookKind::Seconds, "receive_seconds_single");
+        bind(targets_.receive_seconds_value_else, LiveMetricHookKind::Seconds, "receive_seconds_value_else");
+        bind(targets_.receive_seconds_value_or, LiveMetricHookKind::Seconds, "receive_seconds_value_or");
+        bind(targets_.receive_kills, LiveMetricHookKind::Kills, "receive_kills");
+        bind(targets_.receive_kills_single, LiveMetricHookKind::Kills, "receive_kills_single");
+        bind(targets_.receive_kills_value_else, LiveMetricHookKind::Kills, "receive_kills_value_else");
+        bind(targets_.receive_kills_value_or, LiveMetricHookKind::Kills, "receive_kills_value_or");
+        bind(targets_.receive_score, LiveMetricHookKind::Score, "receive_score");
+        bind(targets_.receive_score_single, LiveMetricHookKind::Score, "receive_score_single");
+        bind(targets_.receive_score_value_else, LiveMetricHookKind::Score, "receive_score_value_else");
+        bind(targets_.receive_score_value_or, LiveMetricHookKind::Score, "receive_score_value_or");
+        bind(targets_.receive_accuracy, LiveMetricHookKind::Accuracy, "receive_accuracy");
+        bind(targets_.receive_accuracy_single, LiveMetricHookKind::Accuracy, "receive_accuracy_single");
+        bind(targets_.receive_accuracy_value_else, LiveMetricHookKind::Accuracy, "receive_accuracy_value_else");
+        bind(targets_.receive_accuracy_value_or, LiveMetricHookKind::Accuracy, "receive_accuracy_value_or");
+        bind(targets_.receive_shots_fired, LiveMetricHookKind::ShotsFired, "receive_shots_fired");
+        bind(targets_.receive_shots_fired_single, LiveMetricHookKind::ShotsFired, "receive_shots_fired_single");
+        bind(targets_.receive_shots_fired_value_else, LiveMetricHookKind::ShotsFired, "receive_shots_fired_value_else");
+        bind(targets_.receive_shots_fired_value_or, LiveMetricHookKind::ShotsFired, "receive_shots_fired_value_or");
+        bind(targets_.receive_shots_hit, LiveMetricHookKind::ShotsHit, "receive_shots_hit");
+        bind(targets_.receive_shots_hit_single, LiveMetricHookKind::ShotsHit, "receive_shots_hit_single");
+        bind(targets_.receive_shots_hit_value_else, LiveMetricHookKind::ShotsHit, "receive_shots_hit_value_else");
+        bind(targets_.receive_shots_hit_value_or, LiveMetricHookKind::ShotsHit, "receive_shots_hit_value_or");
+        bind(targets_.receive_score_per_minute, LiveMetricHookKind::ScorePerMinute, "receive_score_per_minute");
+        bind(targets_.receive_score_per_minute_value_else, LiveMetricHookKind::ScorePerMinute, "receive_score_per_minute_value_else");
+        bind(targets_.receive_score_per_minute_value_or, LiveMetricHookKind::ScorePerMinute, "receive_score_per_minute_value_or");
+        bind(targets_.receive_kills_per_second, LiveMetricHookKind::KillsPerSecond, "receive_kills_per_second");
+        bind(targets_.receive_kills_per_second_value_else, LiveMetricHookKind::KillsPerSecond, "receive_kills_per_second_value_else");
+        bind(targets_.receive_kills_per_second_value_or, LiveMetricHookKind::KillsPerSecond, "receive_kills_per_second_value_or");
+        bind(targets_.receive_damage_done, LiveMetricHookKind::DamageDone, "receive_damage_done");
+        bind(targets_.receive_damage_done_value_else, LiveMetricHookKind::DamageDone, "receive_damage_done_value_else");
+        bind(targets_.receive_damage_possible, LiveMetricHookKind::DamagePossible, "receive_damage_possible");
+        bind(targets_.receive_damage_possible_value_else, LiveMetricHookKind::DamagePossible, "receive_damage_possible_value_else");
+        bind(targets_.receive_damage_efficiency, LiveMetricHookKind::DamageEfficiency, "receive_damage_efficiency");
+        bind(targets_.receive_damage_efficiency_value_else, LiveMetricHookKind::DamageEfficiency, "receive_damage_efficiency_value_else");
+        bind(targets_.receive_challenge_average_fps, LiveMetricHookKind::ChallengeAverageFps, "receive_challenge_average_fps");
+        bind(targets_.receive_challenge_average_fps_single, LiveMetricHookKind::ChallengeAverageFps, "receive_challenge_average_fps_single");
+        bind(targets_.receive_challenge_average_fps_value_else, LiveMetricHookKind::ChallengeAverageFps, "receive_challenge_average_fps_value_else");
+        bind(targets_.receive_challenge_average_fps_value_or, LiveMetricHookKind::ChallengeAverageFps, "receive_challenge_average_fps_value_or");
+        bind(targets_.receive_challenge_tick_count, LiveMetricHookKind::ChallengeTickCount, "receive_challenge_tick_count");
+        bind(targets_.receive_challenge_tick_count_single, LiveMetricHookKind::ChallengeTickCount, "receive_challenge_tick_count_single");
+        bind(targets_.receive_challenge_tick_count_value_else, LiveMetricHookKind::ChallengeTickCount, "receive_challenge_tick_count_value_else");
+        bind(targets_.receive_challenge_tick_count_value_or, LiveMetricHookKind::ChallengeTickCount, "receive_challenge_tick_count_value_or");
 
         live_metric_hooks_registered_ = !live_metric_hook_bindings_.empty();
+        if (new_count > 0) {
+            std::array<char, 128> summary{};
+            std::snprintf(
+                summary.data(),
+                summary.size(),
+                "[hooks] live_metric registered new=%u total=%u",
+                static_cast<unsigned int>(new_count),
+                static_cast<unsigned int>(live_metric_hook_bindings_.size())
+            );
+            runtime_log_line(summary.data());
+            log_name_list("[hooks] live_metric new", newly_registered);
+        }
     }
 
     void unregister_live_metric_hooks() {
@@ -2055,7 +2207,9 @@ private:
         response_contents = truncate_http_trace_field(std::move(response_contents), 2048);
 
         if (fn == targets_.sa_http_invoke_success) {
-            handle_user_management_http_response(call_ctx.Context, true, 200, response_contents, GetTickCount64());
+            if (user_mgmt_enabled_) {
+                handle_user_management_http_response(call_ctx.Context, true, 200, response_contents, GetTickCount64());
+            }
             emit_http_trace_response(it->second, "success", 200, response_contents);
             pending_http_trace_requests_.erase(it);
             return;
@@ -2064,13 +2218,15 @@ private:
         if (fn == targets_.sa_http_invoke_error) {
             int32_t response_code = 0;
             read_i32_property_named(fn, params, "httpresultcode", response_code);
-            handle_user_management_http_response(
-                call_ctx.Context,
-                false,
-                response_code,
-                response_contents,
-                GetTickCount64()
-            );
+            if (user_mgmt_enabled_) {
+                handle_user_management_http_response(
+                    call_ctx.Context,
+                    false,
+                    response_code,
+                    response_contents,
+                    GetTickCount64()
+                );
+            }
             emit_http_trace_response(it->second, "error", response_code, response_contents);
             pending_http_trace_requests_.erase(it);
         }
@@ -2092,7 +2248,9 @@ private:
     }
 
     void register_http_trace_hooks() {
-        auto bind = [&](RC::Unreal::UFunction* fn) {
+        std::string newly_registered{};
+        uint32_t new_count = 0;
+        auto bind = [&](RC::Unreal::UFunction* fn, const char* name) {
             if (!fn || !is_likely_valid_object_ptr(fn)) {
                 return;
             }
@@ -2114,14 +2272,33 @@ private:
                 this
             );
             http_trace_hook_bindings_.emplace_back(fn, callback_id);
+            if (!newly_registered.empty()) {
+                newly_registered += ',';
+            }
+            newly_registered += name;
+            ++new_count;
         };
 
         if (http_trace_enabled_) {
-            bind(targets_.send_sa_http_request);
+            bind(targets_.send_sa_http_request, "send_sa_http_request");
         }
-        bind(targets_.sa_http_invoke_success);
-        bind(targets_.sa_http_invoke_error);
+        bind(targets_.sa_http_invoke_success, "sa_http_invoke_success");
+        bind(targets_.sa_http_invoke_error, "sa_http_invoke_error");
         http_trace_hooks_registered_ = !http_trace_hook_bindings_.empty();
+        if (new_count > 0) {
+            std::array<char, 160> summary{};
+            std::snprintf(
+                summary.data(),
+                summary.size(),
+                "[hooks] http_trace registered new=%u total=%u trace_enabled=%u user_mgmt=%u",
+                static_cast<unsigned int>(new_count),
+                static_cast<unsigned int>(http_trace_hook_bindings_.size()),
+                http_trace_enabled_ ? 1u : 0u,
+                user_mgmt_enabled_ ? 1u : 0u
+            );
+            runtime_log_line(summary.data());
+            log_name_list("[hooks] http_trace new", newly_registered);
+        }
     }
 
     void unregister_http_trace_hooks() {
@@ -2143,7 +2320,16 @@ private:
         if (now < next_poll_ms_) {
             return;
         }
-        next_poll_ms_ = now + 4; // ~250Hz — tighter shot-detect window reduces replay timestamp lag
+        // ~250Hz during a challenge (tighter shot-detect window reduces replay
+        // timestamp lag); ~60Hz otherwise, which still catches start edges fast.
+        const bool challenge_hot =
+            lifecycle_active_
+            || last_is_in_challenge_ == 1
+            || pending_lifecycle_end_ms_ != 0
+            || (last_true_start_transition_ms_ > 0
+                && safe_elapsed_ms(now, last_true_start_transition_ms_) < 1500);
+        next_poll_ms_ = now + (challenge_hot ? 4 : 16);
+        perf_lap_begin();
 
         const bool expected_live_stream =
             lifecycle_active_
@@ -2177,7 +2363,9 @@ private:
         maybe_emit_user_management_snapshot_safe(now, false);
 
         resolve_targets(false);
+        perf_lap(0);
         auto* receiver = resolve_state_receiver_instance(now);
+        perf_lap(1);
         int32_t iv = 0;
         float fv = 0.0f;
         int32_t current_kills_total = -1;
@@ -2347,6 +2535,7 @@ private:
             }
         };
         pull_receiver_metrics(receiver);
+        perf_lap(2);
 
         auto pull_bool_state = [&](RC::Unreal::UObject* source,
                                    const char* ev,
@@ -2474,6 +2663,7 @@ private:
             }
         }
 
+        perf_lap(3);
         scenario_state_receiver = resolve_scenario_state_receiver_instance(now);
         const bool should_refresh_paused_state =
             scenario_state_receiver
@@ -2514,6 +2704,7 @@ private:
             && current_score_total > (last_score_total_ + 0.0001f);
         const bool timer_implies_challenge =
             std::isfinite(current_time_remaining) && current_time_remaining > 0.25f;
+        perf_lap(4);
         const bool replay_active = kmod_replay::replay_ingame_playback_is_active();
         const bool recent_runtime_progress =
             safe_elapsed_ms(now, last_runtime_progress_ms_) < 1200;
@@ -2899,7 +3090,9 @@ private:
             current_challenge_tick_count,
             current_time_remaining
         );
+        perf_lap(5);
         in_game_overlay_tick(now);
+        perf_lap(6);
 
         update_lifecycle_events(
             now,
@@ -3131,7 +3324,9 @@ private:
             }
         }
 
+        perf_lap(7);
         (void)replay_playback_tick_safe(now);
+        perf_lap(8);
 
         {
             const bool replay_effective_active_now =
@@ -3179,6 +3374,7 @@ private:
                 (void)replay_tick_safe(now, replay_input);
             }
         }
+        perf_lap(9);
         last_bridge_connected_ = bridge_connected;
 
         const bool has_state_signal =
@@ -3601,6 +3797,11 @@ private:
     bool user_management_build_tag_sent_{false};
     uint64_t user_management_fault_backoff_until_ms_{0};
     uint32_t user_management_fault_count_{0};
+    bool user_mgmt_enabled_{true};
+    RC::Unreal::UObject* hook_context_last_{nullptr};
+    bool hook_context_is_receiver_{false};
+    std::string last_resolve_log_found_{};
+    std::string last_resolve_log_rejected_{};
 
     // Keep user identity and friend resolution isolated from the core bridge loop.
     #include "kmod/user_management.inl"
@@ -3608,7 +3809,7 @@ private:
     static inline KovaaksBridgeModProduction* s_instance_{nullptr};
 
     void maybe_emit_user_management_build_tag() {
-        if (user_management_build_tag_sent_ || !kovaaks::RustBridge::is_connected()) {
+        if (!user_mgmt_enabled_ || user_management_build_tag_sent_ || !kovaaks::RustBridge::is_connected()) {
             return;
         }
         user_management_build_tag_sent_ = true;
@@ -3853,103 +4054,145 @@ private:
             return;
         }
 
-        auto resolve_fn = [](const wchar_t* path) -> RC::Unreal::UFunction* {
+        // Track what each lookup produced so the log shows found / missing / rejected targets.
+        std::string resolved_names{};
+        std::string missing_names{};
+        std::string rejected_names{};
+        uint32_t resolved_count = 0;
+        uint32_t missing_count = 0;
+        uint32_t rejected_count = 0;
+        auto append_name = [](std::string& list, const char* name) {
+            if (!list.empty()) {
+                list += ',';
+            }
+            list += name;
+        };
+        auto resolve_tracked = [&](const char* name, const wchar_t* path) -> RC::Unreal::UFunction* {
             auto* fn = RC::Unreal::UObjectGlobals::StaticFindObject<RC::Unreal::UFunction*>(
                 nullptr, nullptr, path
             );
-            if (fn && is_likely_valid_object_ptr(fn)
+            if (!fn) {
+                append_name(missing_names, name);
+                ++missing_count;
+                return nullptr;
+            }
+            if (is_likely_valid_object_ptr(fn)
                 && !is_rejected_runtime_function_name(fn->GetFullName())) {
+                append_name(resolved_names, name);
+                ++resolved_count;
                 return fn;
             }
+            append_name(rejected_names, name);
+            ++rejected_count;
             return nullptr;
         };
 
-        targets_.send_sa_http_request = resolve_fn(STR("/Script/GameSkillsTrainer.Send_SAHttpRequest:Send_SAHttpRequest"));
-        targets_.sa_http_invoke_success = resolve_fn(STR("/Script/GameSkillsTrainer.Send_SAHttpRequest:Invoke_Success"));
-        targets_.sa_http_invoke_error = resolve_fn(STR("/Script/GameSkillsTrainer.Send_SAHttpRequest:Invoke_Error"));
-        targets_.get_kills_value_else = resolve_fn(STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Get_Kills_ValueElse"));
-        targets_.get_kills_value_or = resolve_fn(STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Get_Kills_ValueOr"));
-        targets_.receive_kills_value_else = resolve_fn(STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_Kills_ValueElse"));
-        targets_.receive_kills_value_or = resolve_fn(STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_Kills_ValueOr"));
-        targets_.receive_kills_single = resolve_fn(STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_Kills_Single"));
-        targets_.receive_kills = resolve_fn(STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_Kills"));
-        targets_.get_score_value_else = resolve_fn(STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Get_Score_ValueElse"));
-        targets_.get_score_value_or = resolve_fn(STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Get_Score_ValueOr"));
-        targets_.receive_score_value_else = resolve_fn(STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_Score_ValueElse"));
-        targets_.receive_score_value_or = resolve_fn(STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_Score_ValueOr"));
-        targets_.receive_score_single = resolve_fn(STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_Score_Single"));
-        targets_.receive_score = resolve_fn(STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_Score"));
-        targets_.get_accuracy_value_else = resolve_fn(STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Get_Accuracy_ValueElse"));
-        targets_.get_accuracy_value_or = resolve_fn(STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Get_Accuracy_ValueOr"));
-        targets_.receive_accuracy_value_else = resolve_fn(STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_Accuracy_ValueElse"));
-        targets_.receive_accuracy_value_or = resolve_fn(STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_Accuracy_ValueOr"));
-        targets_.receive_accuracy_single = resolve_fn(STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_Accuracy_Single"));
-        targets_.receive_accuracy = resolve_fn(STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_Accuracy"));
-        targets_.get_shots_fired_value_else = resolve_fn(STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Get_ShotsFired_ValueElse"));
-        targets_.get_shots_fired_value_or = resolve_fn(STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Get_ShotsFired_ValueOr"));
-        targets_.receive_shots_fired_value_else = resolve_fn(STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_ShotsFired_ValueElse"));
-        targets_.receive_shots_fired_value_or = resolve_fn(STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_ShotsFired_ValueOr"));
-        targets_.receive_shots_fired_single = resolve_fn(STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_ShotsFired_Single"));
-        targets_.receive_shots_fired = resolve_fn(STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_ShotsFired"));
-        targets_.get_shots_hit_value_else = resolve_fn(STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Get_ShotsHit_ValueElse"));
-        targets_.get_shots_hit_value_or = resolve_fn(STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Get_ShotsHit_ValueOr"));
-        targets_.receive_shots_hit_value_else = resolve_fn(STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_ShotsHit_ValueElse"));
-        targets_.receive_shots_hit_value_or = resolve_fn(STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_ShotsHit_ValueOr"));
-        targets_.receive_shots_hit_single = resolve_fn(STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_ShotsHit_Single"));
-        targets_.receive_shots_hit = resolve_fn(STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_ShotsHit"));
-        targets_.get_seconds_value_else = resolve_fn(STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Get_Seconds_ValueElse"));
-        targets_.get_seconds_value_or = resolve_fn(STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Get_Seconds_ValueOr"));
-        targets_.receive_seconds_value_else = resolve_fn(STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_Seconds_ValueElse"));
-        targets_.receive_seconds_value_or = resolve_fn(STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_Seconds_ValueOr"));
-        targets_.receive_seconds_single = resolve_fn(STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_Seconds_Single"));
-        targets_.receive_seconds = resolve_fn(STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_Seconds"));
-        targets_.get_score_per_minute_value_else = resolve_fn(STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Get_ScorePerMinute_ValueElse"));
-        targets_.get_score_per_minute_value_or = resolve_fn(STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Get_ScorePerMinute_ValueOr"));
-        targets_.receive_score_per_minute_value_else = resolve_fn(STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_ScorePerMinute_ValueElse"));
-        targets_.receive_score_per_minute_value_or = resolve_fn(STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_ScorePerMinute_ValueOr"));
-        targets_.receive_score_per_minute = resolve_fn(STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_ScorePerMinute"));
-        targets_.get_kills_per_second_value_else = resolve_fn(STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Get_KillsPerSecond_ValueElse"));
-        targets_.get_kills_per_second_value_or = resolve_fn(STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Get_KillsPerSecond_ValueOr"));
-        targets_.receive_kills_per_second_value_else = resolve_fn(STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_KillsPerSecond_ValueElse"));
-        targets_.receive_kills_per_second_value_or = resolve_fn(STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_KillsPerSecond_ValueOr"));
-        targets_.receive_kills_per_second = resolve_fn(STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_KillsPerSecond"));
-        targets_.get_damage_done_value_else = resolve_fn(STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Get_DamageDone_ValueElse"));
-        targets_.get_damage_done_value_or = resolve_fn(STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Get_DamageDone_ValueOr"));
-        targets_.receive_damage_done_value_else = resolve_fn(STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_DamageDone_ValueElse"));
-        targets_.receive_damage_done = resolve_fn(STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_DamageDone"));
-        targets_.get_damage_possible_value_else = resolve_fn(STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Get_DamagePossible_ValueElse"));
-        targets_.get_damage_possible_value_or = resolve_fn(STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Get_DamagePossible_ValueOr"));
-        targets_.receive_damage_possible_value_else = resolve_fn(STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_DamagePossible_ValueElse"));
-        targets_.receive_damage_possible = resolve_fn(STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_DamagePossible"));
-        targets_.get_damage_efficiency_value_else = resolve_fn(STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Get_DamageEfficiency_ValueElse"));
-        targets_.get_damage_efficiency_value_or = resolve_fn(STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Get_DamageEfficiency_ValueOr"));
-        targets_.receive_damage_efficiency_value_else = resolve_fn(STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_DamageEfficiency_ValueElse"));
-        targets_.receive_damage_efficiency = resolve_fn(STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_DamageEfficiency"));
-        targets_.get_challenge_average_fps_value_else = resolve_fn(STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Get_ChallengeAverageFPS_ValueElse"));
-        targets_.get_challenge_average_fps_value_or = resolve_fn(STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Get_ChallengeAverageFPS_ValueOr"));
-        targets_.receive_challenge_average_fps_value_else = resolve_fn(STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_ChallengeAverageFPS_ValueElse"));
-        targets_.receive_challenge_average_fps_value_or = resolve_fn(STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_ChallengeAverageFPS_ValueOr"));
-        targets_.receive_challenge_average_fps_single = resolve_fn(STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_ChallengeAverageFPS_Single"));
-        targets_.receive_challenge_average_fps = resolve_fn(STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_ChallengeAverageFPS"));
-        targets_.get_challenge_tick_count_value_else = resolve_fn(STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Get_ChallengeTickCount_ValueElse"));
-        targets_.get_challenge_tick_count_value_or = resolve_fn(STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Get_ChallengeTickCount_ValueOr"));
-        targets_.receive_challenge_tick_count_value_else = resolve_fn(STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_ChallengeTickCount_ValueElse"));
-        targets_.receive_challenge_tick_count_value_or = resolve_fn(STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_ChallengeTickCount_ValueOr"));
-        targets_.receive_challenge_tick_count_single = resolve_fn(STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_ChallengeTickCount_Single"));
-        targets_.receive_challenge_tick_count = resolve_fn(STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_ChallengeTickCount"));
-        targets_.scenario_state_get_is_paused_value_or = resolve_fn(STR("/Script/KovaaKFramework.ScenarioStateReceiver:Get_IsPaused_ValueOr"));
-        targets_.scenario_state_get_is_paused_value_else = resolve_fn(STR("/Script/KovaaKFramework.ScenarioStateReceiver:Get_IsPaused_ValueElse"));
-        targets_.scenario_state_receive_is_paused = resolve_fn(STR("/Script/KovaaKFramework.ScenarioStateReceiver:Receive_IsPaused"));
-        targets_.scenario_state_receive_is_paused_single = resolve_fn(STR("/Script/KovaaKFramework.ScenarioStateReceiver:Receive_IsPaused_Single"));
-        targets_.scenario_state_receive_is_paused_value_else = resolve_fn(STR("/Script/KovaaKFramework.ScenarioStateReceiver:Receive_IsPaused_ValueElse"));
-        targets_.scenario_state_receive_is_paused_value_or = resolve_fn(STR("/Script/KovaaKFramework.ScenarioStateReceiver:Receive_IsPaused_ValueOr"));
-        targets_.meta_get_in_trainer = resolve_fn(STR("/Script/GameSkillsTrainer.GTheMetaGameInstance:GetInTrainer"));
-        targets_.scenario_get_challenge_time_remaining = resolve_fn(STR("/Script/GameSkillsTrainer.ScenarioManager:GetChallengeTimeRemaining"));
-        targets_.scenario_get_challenge_queue_time_remaining = resolve_fn(STR("/Script/GameSkillsTrainer.ScenarioManager:GetChallengeQueueTimeRemaining"));
-        targets_.scenario_is_in_challenge = resolve_fn(STR("/Script/GameSkillsTrainer.ScenarioManager:IsInChallenge"));
-        targets_.scenario_is_in_scenario = resolve_fn(STR("/Script/GameSkillsTrainer.ScenarioManager:IsInScenario"));
-        targets_.scenario_is_in_scenario_editor = resolve_fn(STR("/Script/GameSkillsTrainer.ScenarioManager:IsInScenarioEditor"));
-        targets_.scenario_is_currently_in_benchmark = resolve_fn(STR("/Script/GameSkillsTrainer.ScenarioManager:IsCurrentlyInBenchmark"));
+        targets_.send_sa_http_request = resolve_tracked("send_sa_http_request", STR("/Script/GameSkillsTrainer.Send_SAHttpRequest:Send_SAHttpRequest"));
+        targets_.sa_http_invoke_success = resolve_tracked("sa_http_invoke_success", STR("/Script/GameSkillsTrainer.Send_SAHttpRequest:Invoke_Success"));
+        targets_.sa_http_invoke_error = resolve_tracked("sa_http_invoke_error", STR("/Script/GameSkillsTrainer.Send_SAHttpRequest:Invoke_Error"));
+        targets_.get_kills_value_else = resolve_tracked("get_kills_value_else", STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Get_Kills_ValueElse"));
+        targets_.get_kills_value_or = resolve_tracked("get_kills_value_or", STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Get_Kills_ValueOr"));
+        targets_.receive_kills_value_else = resolve_tracked("receive_kills_value_else", STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_Kills_ValueElse"));
+        targets_.receive_kills_value_or = resolve_tracked("receive_kills_value_or", STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_Kills_ValueOr"));
+        targets_.receive_kills_single = resolve_tracked("receive_kills_single", STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_Kills_Single"));
+        targets_.receive_kills = resolve_tracked("receive_kills", STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_Kills"));
+        targets_.get_score_value_else = resolve_tracked("get_score_value_else", STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Get_Score_ValueElse"));
+        targets_.get_score_value_or = resolve_tracked("get_score_value_or", STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Get_Score_ValueOr"));
+        targets_.receive_score_value_else = resolve_tracked("receive_score_value_else", STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_Score_ValueElse"));
+        targets_.receive_score_value_or = resolve_tracked("receive_score_value_or", STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_Score_ValueOr"));
+        targets_.receive_score_single = resolve_tracked("receive_score_single", STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_Score_Single"));
+        targets_.receive_score = resolve_tracked("receive_score", STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_Score"));
+        targets_.get_accuracy_value_else = resolve_tracked("get_accuracy_value_else", STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Get_Accuracy_ValueElse"));
+        targets_.get_accuracy_value_or = resolve_tracked("get_accuracy_value_or", STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Get_Accuracy_ValueOr"));
+        targets_.receive_accuracy_value_else = resolve_tracked("receive_accuracy_value_else", STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_Accuracy_ValueElse"));
+        targets_.receive_accuracy_value_or = resolve_tracked("receive_accuracy_value_or", STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_Accuracy_ValueOr"));
+        targets_.receive_accuracy_single = resolve_tracked("receive_accuracy_single", STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_Accuracy_Single"));
+        targets_.receive_accuracy = resolve_tracked("receive_accuracy", STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_Accuracy"));
+        targets_.get_shots_fired_value_else = resolve_tracked("get_shots_fired_value_else", STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Get_ShotsFired_ValueElse"));
+        targets_.get_shots_fired_value_or = resolve_tracked("get_shots_fired_value_or", STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Get_ShotsFired_ValueOr"));
+        targets_.receive_shots_fired_value_else = resolve_tracked("receive_shots_fired_value_else", STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_ShotsFired_ValueElse"));
+        targets_.receive_shots_fired_value_or = resolve_tracked("receive_shots_fired_value_or", STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_ShotsFired_ValueOr"));
+        targets_.receive_shots_fired_single = resolve_tracked("receive_shots_fired_single", STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_ShotsFired_Single"));
+        targets_.receive_shots_fired = resolve_tracked("receive_shots_fired", STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_ShotsFired"));
+        targets_.get_shots_hit_value_else = resolve_tracked("get_shots_hit_value_else", STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Get_ShotsHit_ValueElse"));
+        targets_.get_shots_hit_value_or = resolve_tracked("get_shots_hit_value_or", STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Get_ShotsHit_ValueOr"));
+        targets_.receive_shots_hit_value_else = resolve_tracked("receive_shots_hit_value_else", STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_ShotsHit_ValueElse"));
+        targets_.receive_shots_hit_value_or = resolve_tracked("receive_shots_hit_value_or", STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_ShotsHit_ValueOr"));
+        targets_.receive_shots_hit_single = resolve_tracked("receive_shots_hit_single", STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_ShotsHit_Single"));
+        targets_.receive_shots_hit = resolve_tracked("receive_shots_hit", STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_ShotsHit"));
+        targets_.get_seconds_value_else = resolve_tracked("get_seconds_value_else", STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Get_Seconds_ValueElse"));
+        targets_.get_seconds_value_or = resolve_tracked("get_seconds_value_or", STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Get_Seconds_ValueOr"));
+        targets_.receive_seconds_value_else = resolve_tracked("receive_seconds_value_else", STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_Seconds_ValueElse"));
+        targets_.receive_seconds_value_or = resolve_tracked("receive_seconds_value_or", STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_Seconds_ValueOr"));
+        targets_.receive_seconds_single = resolve_tracked("receive_seconds_single", STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_Seconds_Single"));
+        targets_.receive_seconds = resolve_tracked("receive_seconds", STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_Seconds"));
+        targets_.get_score_per_minute_value_else = resolve_tracked("get_score_per_minute_value_else", STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Get_ScorePerMinute_ValueElse"));
+        targets_.get_score_per_minute_value_or = resolve_tracked("get_score_per_minute_value_or", STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Get_ScorePerMinute_ValueOr"));
+        targets_.receive_score_per_minute_value_else = resolve_tracked("receive_score_per_minute_value_else", STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_ScorePerMinute_ValueElse"));
+        targets_.receive_score_per_minute_value_or = resolve_tracked("receive_score_per_minute_value_or", STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_ScorePerMinute_ValueOr"));
+        targets_.receive_score_per_minute = resolve_tracked("receive_score_per_minute", STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_ScorePerMinute"));
+        targets_.get_kills_per_second_value_else = resolve_tracked("get_kills_per_second_value_else", STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Get_KillsPerSecond_ValueElse"));
+        targets_.get_kills_per_second_value_or = resolve_tracked("get_kills_per_second_value_or", STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Get_KillsPerSecond_ValueOr"));
+        targets_.receive_kills_per_second_value_else = resolve_tracked("receive_kills_per_second_value_else", STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_KillsPerSecond_ValueElse"));
+        targets_.receive_kills_per_second_value_or = resolve_tracked("receive_kills_per_second_value_or", STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_KillsPerSecond_ValueOr"));
+        targets_.receive_kills_per_second = resolve_tracked("receive_kills_per_second", STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_KillsPerSecond"));
+        targets_.get_damage_done_value_else = resolve_tracked("get_damage_done_value_else", STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Get_DamageDone_ValueElse"));
+        targets_.get_damage_done_value_or = resolve_tracked("get_damage_done_value_or", STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Get_DamageDone_ValueOr"));
+        targets_.receive_damage_done_value_else = resolve_tracked("receive_damage_done_value_else", STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_DamageDone_ValueElse"));
+        targets_.receive_damage_done = resolve_tracked("receive_damage_done", STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_DamageDone"));
+        targets_.get_damage_possible_value_else = resolve_tracked("get_damage_possible_value_else", STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Get_DamagePossible_ValueElse"));
+        targets_.get_damage_possible_value_or = resolve_tracked("get_damage_possible_value_or", STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Get_DamagePossible_ValueOr"));
+        targets_.receive_damage_possible_value_else = resolve_tracked("receive_damage_possible_value_else", STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_DamagePossible_ValueElse"));
+        targets_.receive_damage_possible = resolve_tracked("receive_damage_possible", STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_DamagePossible"));
+        targets_.get_damage_efficiency_value_else = resolve_tracked("get_damage_efficiency_value_else", STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Get_DamageEfficiency_ValueElse"));
+        targets_.get_damage_efficiency_value_or = resolve_tracked("get_damage_efficiency_value_or", STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Get_DamageEfficiency_ValueOr"));
+        targets_.receive_damage_efficiency_value_else = resolve_tracked("receive_damage_efficiency_value_else", STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_DamageEfficiency_ValueElse"));
+        targets_.receive_damage_efficiency = resolve_tracked("receive_damage_efficiency", STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_DamageEfficiency"));
+        targets_.get_challenge_average_fps_value_else = resolve_tracked("get_challenge_average_fps_value_else", STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Get_ChallengeAverageFPS_ValueElse"));
+        targets_.get_challenge_average_fps_value_or = resolve_tracked("get_challenge_average_fps_value_or", STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Get_ChallengeAverageFPS_ValueOr"));
+        targets_.receive_challenge_average_fps_value_else = resolve_tracked("receive_challenge_average_fps_value_else", STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_ChallengeAverageFPS_ValueElse"));
+        targets_.receive_challenge_average_fps_value_or = resolve_tracked("receive_challenge_average_fps_value_or", STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_ChallengeAverageFPS_ValueOr"));
+        targets_.receive_challenge_average_fps_single = resolve_tracked("receive_challenge_average_fps_single", STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_ChallengeAverageFPS_Single"));
+        targets_.receive_challenge_average_fps = resolve_tracked("receive_challenge_average_fps", STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_ChallengeAverageFPS"));
+        targets_.get_challenge_tick_count_value_else = resolve_tracked("get_challenge_tick_count_value_else", STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Get_ChallengeTickCount_ValueElse"));
+        targets_.get_challenge_tick_count_value_or = resolve_tracked("get_challenge_tick_count_value_or", STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Get_ChallengeTickCount_ValueOr"));
+        targets_.receive_challenge_tick_count_value_else = resolve_tracked("receive_challenge_tick_count_value_else", STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_ChallengeTickCount_ValueElse"));
+        targets_.receive_challenge_tick_count_value_or = resolve_tracked("receive_challenge_tick_count_value_or", STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_ChallengeTickCount_ValueOr"));
+        targets_.receive_challenge_tick_count_single = resolve_tracked("receive_challenge_tick_count_single", STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_ChallengeTickCount_Single"));
+        targets_.receive_challenge_tick_count = resolve_tracked("receive_challenge_tick_count", STR("/Script/KovaaKFramework.PerformanceIndicatorsStateReceiver:Receive_ChallengeTickCount"));
+        targets_.scenario_state_get_is_paused_value_or = resolve_tracked("scenario_state_get_is_paused_value_or", STR("/Script/KovaaKFramework.ScenarioStateReceiver:Get_IsPaused_ValueOr"));
+        targets_.scenario_state_get_is_paused_value_else = resolve_tracked("scenario_state_get_is_paused_value_else", STR("/Script/KovaaKFramework.ScenarioStateReceiver:Get_IsPaused_ValueElse"));
+        targets_.scenario_state_receive_is_paused = resolve_tracked("scenario_state_receive_is_paused", STR("/Script/KovaaKFramework.ScenarioStateReceiver:Receive_IsPaused"));
+        targets_.scenario_state_receive_is_paused_single = resolve_tracked("scenario_state_receive_is_paused_single", STR("/Script/KovaaKFramework.ScenarioStateReceiver:Receive_IsPaused_Single"));
+        targets_.scenario_state_receive_is_paused_value_else = resolve_tracked("scenario_state_receive_is_paused_value_else", STR("/Script/KovaaKFramework.ScenarioStateReceiver:Receive_IsPaused_ValueElse"));
+        targets_.scenario_state_receive_is_paused_value_or = resolve_tracked("scenario_state_receive_is_paused_value_or", STR("/Script/KovaaKFramework.ScenarioStateReceiver:Receive_IsPaused_ValueOr"));
+        targets_.meta_get_in_trainer = resolve_tracked("meta_get_in_trainer", STR("/Script/GameSkillsTrainer.GTheMetaGameInstance:GetInTrainer"));
+        targets_.scenario_get_challenge_time_remaining = resolve_tracked("scenario_get_challenge_time_remaining", STR("/Script/GameSkillsTrainer.ScenarioManager:GetChallengeTimeRemaining"));
+        targets_.scenario_get_challenge_queue_time_remaining = resolve_tracked("scenario_get_challenge_queue_time_remaining", STR("/Script/GameSkillsTrainer.ScenarioManager:GetChallengeQueueTimeRemaining"));
+        targets_.scenario_is_in_challenge = resolve_tracked("scenario_is_in_challenge", STR("/Script/GameSkillsTrainer.ScenarioManager:IsInChallenge"));
+        targets_.scenario_is_in_scenario = resolve_tracked("scenario_is_in_scenario", STR("/Script/GameSkillsTrainer.ScenarioManager:IsInScenario"));
+        targets_.scenario_is_in_scenario_editor = resolve_tracked("scenario_is_in_scenario_editor", STR("/Script/GameSkillsTrainer.ScenarioManager:IsInScenarioEditor"));
+        targets_.scenario_is_currently_in_benchmark = resolve_tracked("scenario_is_currently_in_benchmark", STR("/Script/GameSkillsTrainer.ScenarioManager:IsCurrentlyInBenchmark"));
+        // Log only when the resolved set changes (this runs every 100-2000ms).
+        if (force || resolved_names != last_resolve_log_found_ || rejected_names != last_resolve_log_rejected_) {
+            last_resolve_log_found_ = resolved_names;
+            last_resolve_log_rejected_ = rejected_names;
+            std::array<char, 160> summary{};
+            std::snprintf(
+                summary.data(),
+                summary.size(),
+                "[resolve] targets found=%u missing=%u rejected=%u force=%u",
+                static_cast<unsigned int>(resolved_count),
+                static_cast<unsigned int>(missing_count),
+                static_cast<unsigned int>(rejected_count),
+                force ? 1u : 0u
+            );
+            runtime_log_line(summary.data());
+            log_name_list("[resolve] found", resolved_names);
+            log_name_list("[resolve] missing", missing_names);
+            log_name_list("[resolve] rejected", rejected_names);
+        }
+
         register_live_metric_hooks();
         register_http_trace_hooks();
 
@@ -4038,12 +4281,35 @@ private:
         return nullptr;
     }
 
-    NumericInvokeResult invoke_numeric_ufunction(RC::Unreal::UObject* receiver, RC::Unreal::UFunction* fn) {
-        NumericInvokeResult result{};
-        auto* caller = resolve_receive_caller(receiver, fn);
-        if (!caller || !fn || !is_likely_valid_object_ptr(fn)) {
-            return result;
+    // Per-UFunction call metadata. Walking a function's parameters (with a
+    // GetName string conversion per property) and building its full name for
+    // the reject check ran on every call, and stat pulls make dozens of calls
+    // per update. UFunctions never change after load, so compute it once.
+    struct UFunctionCallPlan {
+        bool rejected{false};
+        int32_t param_size{0};
+        RC::Unreal::FNumericProperty* output_numeric{nullptr};
+        RC::Unreal::FBoolProperty* output_bool{nullptr};
+        std::vector<RC::Unreal::FObjectPropertyBase*> world_context_props{};
+        std::vector<RC::Unreal::FNumericProperty*> value_if_null_props{};
+    };
+
+    // Hook callbacks on the game thread can invoke functions too, so the cache
+    // is shared under a mutex; plans are immutable once stored.
+    std::mutex call_plan_mutex_{};
+    std::unordered_map<RC::Unreal::UFunction*, std::shared_ptr<const UFunctionCallPlan>> call_plans_{};
+
+    std::shared_ptr<const UFunctionCallPlan> call_plan_for(RC::Unreal::UFunction* fn) {
+        {
+            std::lock_guard<std::mutex> guard(call_plan_mutex_);
+            const auto it = call_plans_.find(fn);
+            if (it != call_plans_.end()) {
+                return it->second;
+            }
         }
+
+        auto plan = std::make_shared<UFunctionCallPlan>();
+        plan->rejected = is_rejected_runtime_function_name(fn->GetFullName());
 
         int32_t param_size = static_cast<int32_t>(fn->GetParmsSize());
         if (param_size <= 0 || param_size > 0x10000) {
@@ -4052,11 +4318,10 @@ private:
         if (param_size <= 0 || param_size > 0x10000) {
             param_size = 0x200;
         }
-        std::vector<uint8_t> params(static_cast<size_t>(param_size), 0);
+        plan->param_size = param_size;
 
-        RC::Unreal::FNumericProperty* output_numeric = nullptr;
-        int output_priority = -1;
-
+        int numeric_priority = -1;
+        int bool_priority = -1;
         for (RC::Unreal::FProperty* property : enumerate_properties(fn)) {
             if (!property || !is_likely_valid_object_ptr(property)) {
                 continue;
@@ -4065,17 +4330,12 @@ private:
                 continue;
             }
             const auto normalized_name = normalize_ascii(property->GetName());
-
             const bool is_out = property_has_any_flags(property, RC::Unreal::CPF_OutParm)
                 || property_has_any_flags(property, RC::Unreal::CPF_ReturnParm);
             const bool has_output_name = (normalized_name == "outvalue" || normalized_name == "returnvalue");
 
             if (is_out || has_output_name) {
-                auto* numeric = RC::Unreal::CastField<RC::Unreal::FNumericProperty>(property);
-                if (!numeric || !is_likely_valid_object_ptr(numeric)) {
-                    continue;
-                }
-                int priority = 0;
+                int priority = 1;
                 if (normalized_name == "outvalue") {
                     priority = 5;
                 } else if (normalized_name == "returnvalue") {
@@ -4084,51 +4344,92 @@ private:
                     priority = 3;
                 } else if (property_has_any_flags(property, RC::Unreal::CPF_OutParm)) {
                     priority = 2;
-                } else {
-                    priority = 1;
                 }
-                if (!output_numeric || priority > output_priority) {
-                    output_numeric = numeric;
-                    output_priority = priority;
+                auto* numeric = RC::Unreal::CastField<RC::Unreal::FNumericProperty>(property);
+                if (numeric && is_likely_valid_object_ptr(numeric) && priority > numeric_priority) {
+                    plan->output_numeric = numeric;
+                    numeric_priority = priority;
+                }
+                auto* boolean = RC::Unreal::CastField<RC::Unreal::FBoolProperty>(property);
+                if (boolean && is_likely_valid_object_ptr(boolean) && priority > bool_priority) {
+                    plan->output_bool = boolean;
+                    bool_priority = priority;
                 }
                 continue;
             }
 
             if (auto* object_property = RC::Unreal::CastField<RC::Unreal::FObjectPropertyBase>(property)) {
                 if (normalized_name.find("worldcontextobject") != std::string::npos) {
-                    void* value_ptr = safe_property_value_ptr(property, params.data());
-                    if (value_ptr && is_likely_readable_region(value_ptr, sizeof(void*))) {
-                        RC::Unreal::UObject* context_object = nullptr;
-                        if (meta_game_instance_ && is_likely_valid_object_ptr(meta_game_instance_)) {
-                            context_object = meta_game_instance_;
-                        } else if (receiver && is_likely_valid_object_ptr(receiver)) {
-                            context_object = receiver;
-                        } else {
-                            context_object = caller;
-                        }
-                        object_property->SetObjectPropertyValue(value_ptr, context_object);
-                    }
+                    plan->world_context_props.push_back(object_property);
                 }
                 continue;
             }
 
             if (auto* numeric_property = RC::Unreal::CastField<RC::Unreal::FNumericProperty>(property)) {
                 if (normalized_name.find("valueifnull") != std::string::npos) {
-                    void* value_ptr = safe_property_value_ptr(property, params.data());
-                    if (!value_ptr || !is_likely_readable_region(value_ptr, sizeof(double))) {
-                        continue;
-                    }
-                    if (numeric_property->IsFloatingPoint()) {
-                        numeric_property->SetFloatingPointPropertyValue(value_ptr, -1.0);
-                    } else {
-                        numeric_property->SetIntPropertyValue(value_ptr, static_cast<int64_t>(-1));
-                    }
+                    plan->value_if_null_props.push_back(numeric_property);
                 }
             }
         }
 
-        if (!output_numeric || !is_likely_valid_object_ptr(output_numeric)) {
+        std::shared_ptr<const UFunctionCallPlan> stored = plan;
+        std::lock_guard<std::mutex> guard(call_plan_mutex_);
+        call_plans_.emplace(fn, stored);
+        return stored;
+    }
+
+    bool is_rejected_function_cached(RC::Unreal::UFunction* fn) {
+        return call_plan_for(fn)->rejected;
+    }
+
+    // Fills the world-context inputs, as the old per-call property walk did.
+    void apply_world_context_params(
+        const UFunctionCallPlan& plan,
+        std::vector<uint8_t>& params,
+        RC::Unreal::UObject* receiver,
+        RC::Unreal::UObject* caller
+    ) {
+        for (auto* object_property : plan.world_context_props) {
+            void* value_ptr = safe_property_value_ptr(object_property, params.data());
+            if (!value_ptr || !is_likely_readable_region(value_ptr, sizeof(void*))) {
+                continue;
+            }
+            RC::Unreal::UObject* context_object = nullptr;
+            if (meta_game_instance_ && is_likely_valid_object_ptr(meta_game_instance_)) {
+                context_object = meta_game_instance_;
+            } else if (receiver && is_likely_valid_object_ptr(receiver)) {
+                context_object = receiver;
+            } else {
+                context_object = caller;
+            }
+            object_property->SetObjectPropertyValue(value_ptr, context_object);
+        }
+    }
+
+    NumericInvokeResult invoke_numeric_ufunction(RC::Unreal::UObject* receiver, RC::Unreal::UFunction* fn) {
+        NumericInvokeResult result{};
+        auto* caller = resolve_receive_caller(receiver, fn);
+        if (!caller || !fn || !is_likely_valid_object_ptr(fn)) {
             return result;
+        }
+        const auto plan = call_plan_for(fn);
+        auto* output_numeric = plan->output_numeric;
+        if (!output_numeric) {
+            return result;
+        }
+
+        std::vector<uint8_t> params(static_cast<size_t>(plan->param_size), 0);
+        apply_world_context_params(*plan, params, receiver, caller);
+        for (auto* numeric_property : plan->value_if_null_props) {
+            void* value_ptr = safe_property_value_ptr(numeric_property, params.data());
+            if (!value_ptr || !is_likely_readable_region(value_ptr, sizeof(double))) {
+                continue;
+            }
+            if (numeric_property->IsFloatingPoint()) {
+                numeric_property->SetFloatingPointPropertyValue(value_ptr, -1.0);
+            } else {
+                numeric_property->SetIntPropertyValue(value_ptr, static_cast<int64_t>(-1));
+            }
         }
 
         if (!safe_process_event_call(caller, fn, params.data())) {
@@ -4164,78 +4465,14 @@ private:
         if (!caller || !fn || !is_likely_valid_object_ptr(fn)) {
             return result;
         }
-
-        int32_t param_size = static_cast<int32_t>(fn->GetParmsSize());
-        if (param_size <= 0 || param_size > 0x10000) {
-            param_size = fn->GetPropertiesSize();
-        }
-        if (param_size <= 0 || param_size > 0x10000) {
-            param_size = 0x200;
-        }
-        std::vector<uint8_t> params(static_cast<size_t>(param_size), 0);
-
-        RC::Unreal::FBoolProperty* output_bool = nullptr;
-        int output_priority = -1;
-
-        for (RC::Unreal::FProperty* property : enumerate_properties(fn)) {
-            if (!property || !is_likely_valid_object_ptr(property)) {
-                continue;
-            }
-            if (!property_has_any_flags(property, RC::Unreal::CPF_Parm)) {
-                continue;
-            }
-            const auto normalized_name = normalize_ascii(property->GetName());
-
-            const bool is_out = property_has_any_flags(property, RC::Unreal::CPF_OutParm)
-                || property_has_any_flags(property, RC::Unreal::CPF_ReturnParm);
-            const bool has_output_name = (normalized_name == "outvalue" || normalized_name == "returnvalue");
-
-            if (is_out || has_output_name) {
-                auto* bool_property = RC::Unreal::CastField<RC::Unreal::FBoolProperty>(property);
-                if (!bool_property || !is_likely_valid_object_ptr(bool_property)) {
-                    continue;
-                }
-                int priority = 0;
-                if (normalized_name == "outvalue") {
-                    priority = 5;
-                } else if (normalized_name == "returnvalue") {
-                    priority = 4;
-                } else if (property_has_any_flags(property, RC::Unreal::CPF_ReturnParm)) {
-                    priority = 3;
-                } else if (property_has_any_flags(property, RC::Unreal::CPF_OutParm)) {
-                    priority = 2;
-                } else {
-                    priority = 1;
-                }
-                if (!output_bool || priority > output_priority) {
-                    output_bool = bool_property;
-                    output_priority = priority;
-                }
-                continue;
-            }
-
-            if (auto* object_property = RC::Unreal::CastField<RC::Unreal::FObjectPropertyBase>(property)) {
-                if (normalized_name.find("worldcontextobject") != std::string::npos) {
-                    void* value_ptr = safe_property_value_ptr(property, params.data());
-                    if (value_ptr && is_likely_readable_region(value_ptr, sizeof(void*))) {
-                        RC::Unreal::UObject* context_object = nullptr;
-                        if (meta_game_instance_ && is_likely_valid_object_ptr(meta_game_instance_)) {
-                            context_object = meta_game_instance_;
-                        } else if (receiver && is_likely_valid_object_ptr(receiver)) {
-                            context_object = receiver;
-                        } else {
-                            context_object = caller;
-                        }
-                        object_property->SetObjectPropertyValue(value_ptr, context_object);
-                    }
-                }
-                continue;
-            }
-        }
-
-        if (!output_bool || !is_likely_valid_object_ptr(output_bool)) {
+        const auto plan = call_plan_for(fn);
+        auto* output_bool = plan->output_bool;
+        if (!output_bool) {
             return result;
         }
+
+        std::vector<uint8_t> params(static_cast<size_t>(plan->param_size), 0);
+        apply_world_context_params(*plan, params, receiver, caller);
 
         if (!safe_process_event_call(caller, fn, params.data())) {
             return result;
@@ -4255,7 +4492,7 @@ private:
             if (!fn || !is_likely_valid_object_ptr(fn)) {
                 continue;
             }
-            if (is_rejected_runtime_function_name(fn->GetFullName())) {
+            if (is_rejected_function_cached(fn)) {
                 continue;
             }
             const auto result = invoke_numeric_ufunction(receiver, fn);
@@ -4280,7 +4517,7 @@ private:
             if (!fn || !is_likely_valid_object_ptr(fn)) {
                 continue;
             }
-            if (is_rejected_runtime_function_name(fn->GetFullName())) {
+            if (is_rejected_function_cached(fn)) {
                 continue;
             }
             const auto result = invoke_numeric_ufunction(receiver, fn);
@@ -4305,7 +4542,7 @@ private:
             if (!fn || !is_likely_valid_object_ptr(fn)) {
                 continue;
             }
-            if (is_rejected_runtime_function_name(fn->GetFullName())) {
+            if (is_rejected_function_cached(fn)) {
                 continue;
             }
             const auto result = invoke_bool_ufunction(receiver, fn);
@@ -4514,9 +4751,12 @@ private:
             prefer_live_activity
             && (last_runtime_progress_ms_ == 0
                 || safe_elapsed_ms(now, last_runtime_progress_ms_) > 250);
+        // FindAllOf walks every UObject, so rescan quickly only right after a
+        // start transition. A flowing receiver rarely changes; a stalled one
+        // gets a faster retry, and live hooks hand us the receiver directly.
         const uint64_t receiver_resolve_interval_ms =
             prefer_live_activity
-                ? ((fast_start_window || live_progress_stale) ? 35ULL : 50ULL)
+                ? (fast_start_window ? 35ULL : (live_progress_stale ? 250ULL : 500ULL))
                 : 1000ULL;
         next_receiver_resolve_ms_ = now + receiver_resolve_interval_ms;
 
