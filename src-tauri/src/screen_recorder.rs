@@ -154,6 +154,9 @@ static REPLAY_CAPTURE_FRAMING: AtomicU8 = AtomicU8::new(ReplayCaptureFraming::Cr
 static REPLAY_CAPTURE_QUALITY: AtomicU8 = AtomicU8::new(ReplayCaptureQuality::Balanced as u8);
 static NEXT_ENCODER_WORKER: AtomicU64 = AtomicU64::new(0);
 static DROPPED_FRAMES_DUE_TO_BACKPRESSURE: AtomicU64 = AtomicU64::new(0);
+/// True while the current session is recorded by the FTHR engine instead of
+/// the JPEG capture loop.
+static USING_FTHR: AtomicBool = AtomicBool::new(false);
 static FRAMES: Lazy<Mutex<Vec<ScreenFrame>>> = Lazy::new(|| Mutex::new(Vec::new()));
 static COMPLETED_FRAMES: Lazy<Mutex<VecDeque<CompletedFrameCapture>>> =
     Lazy::new(|| Mutex::new(VecDeque::new()));
@@ -211,6 +214,16 @@ pub fn set_replay_capture_quality(quality: &str) {
     REPLAY_CAPTURE_QUALITY.store(next as u8, Ordering::SeqCst);
 }
 
+/// Bits per pixel per frame for FTHR's H.264 encoder at the current quality
+/// (about 1.5x what HEVC needed for the same look).
+pub(crate) fn replay_capture_video_bits_per_pixel() -> f64 {
+    match replay_capture_quality() {
+        ReplayCaptureQuality::Balanced => 0.15,
+        ReplayCaptureQuality::High => 0.24,
+        ReplayCaptureQuality::Ultra => 0.36,
+    }
+}
+
 fn replay_capture_quality() -> ReplayCaptureQuality {
     match REPLAY_CAPTURE_QUALITY.load(Ordering::SeqCst) {
         value if value == ReplayCaptureQuality::High as u8 => ReplayCaptureQuality::High,
@@ -246,6 +259,15 @@ pub fn start(session_start: Instant) {
     PAUSED.store(false, Ordering::SeqCst);
     RECORDING.store(true, Ordering::SeqCst);
 
+    // FTHR records HEVC video when its engine is ready; otherwise fall back to
+    // the JPEG capture loop for this session.
+    let use_fthr = crate::fthr_recorder::session_started(session_start);
+    USING_FTHR.store(use_fthr, Ordering::SeqCst);
+    if use_fthr {
+        log::info!("Screen recorder started (gen {generation}, backend=fthr)");
+        return;
+    }
+
     #[cfg(target_os = "windows")]
     start_capture_backend(generation);
 }
@@ -254,6 +276,9 @@ pub fn start(session_start: Instant) {
 pub fn stop() {
     PAUSED.store(false, Ordering::SeqCst);
     if RECORDING.swap(false, Ordering::SeqCst) {
+        if USING_FTHR.swap(false, Ordering::SeqCst) {
+            crate::fthr_recorder::session_stopped();
+        }
         stop_capture_backend();
         finish_encoder_worker();
         let captured_frames = queue_completed_frames(unix_now_ms(), "stop");
@@ -331,7 +356,7 @@ fn start_capture_backend(generation: u64) {
 }
 
 #[cfg(target_os = "windows")]
-fn resolve_capture_window_hwnds() -> Vec<HWND> {
+pub(crate) fn resolve_capture_window_hwnds() -> Vec<HWND> {
     let bridge_pid = crate::bridge::current_game_pid();
     let tracked = crate::window_tracker::get_game_hwnd();
     let foreground = unsafe { GetForegroundWindow() };
@@ -1013,7 +1038,7 @@ fn encode_pending_frame(frame: PendingFrame) -> Option<ScreenFrame> {
     })
 }
 
-fn compute_capture_rect(bounds: &RegionRect) -> RegionRect {
+pub(crate) fn compute_capture_rect(bounds: &RegionRect) -> RegionRect {
     match replay_capture_framing() {
         ReplayCaptureFraming::Fullscreen => *bounds,
         ReplayCaptureFraming::Cropped => {

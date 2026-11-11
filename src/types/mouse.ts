@@ -193,15 +193,37 @@ export interface BridgeTickStreamV1 {
   deltas: unknown[];
 }
 
+/** One continuous stretch of the replay timeline and where it sits in the video. */
+export interface ReplayVideoSegment {
+  /** Replay-timeline start, same ms domain as positions and frames. */
+  replay_start_ms: number;
+  /** Offset into the video file. */
+  video_start_ms: number;
+  duration_ms: number;
+}
+
+/** FTHR-recorded replay video (HEVC MP4 stored next to the replay). */
+export interface ReplayVideo {
+  file_name: string;
+  /** Absolute file path; load it with `convertFileSrc`. */
+  path: string;
+  codec: string;
+  width: number;
+  height: number;
+  segments: ReplayVideoSegment[];
+}
+
 export interface ReplayData {
   positions: RawPositionPoint[];
   metrics: MetricPoint[];
   frames?: ScreenFrame[];
   run_snapshot?: BridgeRunSnapshot | null;
+  video?: ReplayVideo | null;
 }
 
 export interface ReplayPayloadData {
   positions: RawPositionPoint[];
   metrics: MetricPoint[];
   frames?: ScreenFrame[];
+  video?: ReplayVideo | null;
 }

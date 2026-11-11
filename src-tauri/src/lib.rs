@@ -383,6 +383,7 @@ mod bridge;
 mod coaching;
 mod discord_rpc;
 mod file_watcher;
+mod fthr_recorder;
 mod hub_api;
 mod hub_live_activity;
 mod hub_sync;
@@ -2414,6 +2415,20 @@ fn clear_log_buffer() {
     logger::clear_buffer();
 }
 
+/// Receives log lines from the web frontend (src/log.ts) so page errors land
+/// in aimmod.log next to backend logs.
+#[tauri::command]
+fn frontend_log(level: String, target: String, message: String) {
+    let target = format!("frontend::{}", target.chars().take(64).collect::<String>());
+    let message: String = message.chars().take(8000).collect();
+    match level.as_str() {
+        "ERROR" => log::error!(target: "frontend", "[{target}] {message}"),
+        "WARN" => log::warn!(target: "frontend", "[{target}] {message}"),
+        "DEBUG" | "TRACE" => log::debug!(target: "frontend", "[{target}] {message}"),
+        _ => log::info!(target: "frontend", "[{target}] {message}"),
+    }
+}
+
 #[tauri::command]
 async fn search_scenarios(
     query: String,
@@ -2621,6 +2636,7 @@ pub fn run() {
             get_overlay_origin,
             get_log_buffer,
             clear_log_buffer,
+            frontend_log,
             get_settings,
             save_settings,
             reset_settings,
@@ -2796,6 +2812,9 @@ pub fn run() {
             screen_recorder::set_replay_capture_width(loaded.replay_capture_width);
             screen_recorder::set_replay_capture_framing(&loaded.replay_capture_framing);
             screen_recorder::set_replay_capture_quality(&loaded.replay_capture_quality);
+            if let Some(videos_dir) = replay_store::replay_videos_dir(&app.handle()) {
+                fthr_recorder::init(&app.handle(), videos_dir);
+            }
             replay_store::maybe_install_ffmpeg_for_replay_media(app.handle().clone(), loaded.clone());
             replay_store::apply_replay_retention(&app.handle(), Some(loaded.replay_keep_count as usize), None);
 

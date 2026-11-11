@@ -2246,6 +2246,11 @@ mod imp {
             return;
         }
 
+        // Read before taking run_capture_state (lock order: never session inside run).
+        let session_active_now = bridge_session_state()
+            .lock()
+            .map(|state| state.session_active)
+            .unwrap_or(false);
         let Ok(mut state) = run_capture_state().lock() else {
             return;
         };
@@ -2283,11 +2288,7 @@ mod imp {
                     state.tick_stream_v1.context = Some(ctx.clone());
                 }
 
-                let session_active = bridge_session_state()
-                    .lock()
-                    .map(|state| state.session_active)
-                    .unwrap_or(false);
-                if !session_active {
+                if !session_active_now {
                     return;
                 }
 
@@ -2315,11 +2316,7 @@ mod imp {
                     state.tick_stream_v1.deltas.drain(0..trim);
                 }
 
-                let session_active = bridge_session_state()
-                    .lock()
-                    .map(|state| state.session_active)
-                    .unwrap_or(false);
-                if !session_active {
+                if !session_active_now {
                     return;
                 }
 
@@ -2492,15 +2489,28 @@ mod imp {
     }
 
     pub fn take_run_snapshot() -> Option<super::BridgeRunSnapshot> {
-        let Ok(mut state) = run_capture_state().lock() else {
-            return None;
-        };
-
-        if !run_capture_has_data(&state) {
+        // Lock order: run_capture_state is released before bridge_session_state
+        // is taken. end_session_tracking takes them the other way round, and
+        // holding both here deadlocked the bridge when a stats CSV landed at the
+        // same moment as challenge_end.
+        let (snapshot, clear_finalize_pending) = take_run_snapshot_from_capture();
+        if clear_finalize_pending {
             if let Ok(mut session_state) = bridge_session_state().lock() {
                 session_state.persistence_finalize_pending = false;
             }
-            return None;
+        }
+        snapshot
+    }
+
+    /// Takes the run snapshot under run_capture_state only. Returns whether the
+    /// caller should clear the session's pending-finalize flag.
+    fn take_run_snapshot_from_capture() -> (Option<super::BridgeRunSnapshot>, bool) {
+        let Ok(mut state) = run_capture_state().lock() else {
+            return (None, false);
+        };
+
+        if !run_capture_has_data(&state) {
+            return (None, true);
         }
 
         let duration_secs = finite_non_negative(state.metrics.duration_secs)
@@ -2599,10 +2609,7 @@ mod imp {
         };
 
         *state = RunCaptureState::default();
-        if let Ok(mut session_state) = bridge_session_state().lock() {
-            session_state.persistence_finalize_pending = false;
-        }
-        Some(snapshot)
+        (Some(snapshot), true)
     }
 
     fn bridge_compat_state() -> &'static Mutex<BridgeCompatState> {
@@ -2985,13 +2992,16 @@ mod imp {
 
     fn end_session_tracking(app: &AppHandle, reason: &str, challenge_active: bool) {
         let run_time_hint = authoritative_run_time_hint();
+        // Read run progress before taking bridge_session_state; nesting
+        // run_capture_state inside it deadlocks against take_run_snapshot.
+        let run_has_progress = run_capture_has_progress_for_end_guard();
         let (should_debounce, elapsed_ms, has_progress) = {
             let state = bridge_session_state().lock().unwrap();
             let (elapsed_ms, has_progress, should_debounce) =
                 if let Some(started_at) = state.session_started_at {
                     let elapsed = started_at.elapsed();
                     let elapsed_ms = elapsed.as_millis() as u64;
-                    let has_progress = run_capture_has_progress_for_end_guard();
+                    let has_progress = run_has_progress;
                     let should_debounce = state.session_active
                         && should_guard_early_session_end(reason)
                         && elapsed < EARLY_SESSION_END_GUARD

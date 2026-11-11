@@ -8,8 +8,11 @@ use crate::{
     replay_store::ReplayData,
 };
 
+// snake_case: the frontend (StatsWindow, coaching engine) reads these as
+// episode_count, avg_reaction_time_ms, ...; camelCase left them undefined and
+// crashed the session stats view.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub struct SessionTargetResponseSnapshot {
     pub episode_count: u32,
     pub path_change_count: u32,

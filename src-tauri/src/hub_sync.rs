@@ -1651,12 +1651,18 @@ async fn upload_mouse_path_for_session(app: &AppHandle, session_id: &str) -> any
         });
     let (positions, hit_timestamps_ms, playback_offset_ms) =
         canonicalize_mouse_path_timeline(replay.positions, hit_timestamps_ms, target_duration_ms);
-    let video_offset_ms = replay
-        .frames
-        .iter()
-        .map(|frame| frame.timestamp_ms)
-        .min()
-        .unwrap_or(0);
+    // Where the uploaded video starts on the replay timeline. An FTHR video is
+    // exported from its first segment, which starts later than 0 when the
+    // clip doesn't cover the start of the run.
+    let video_offset_ms = match replay.video.as_ref().and_then(|v| v.segments.first()) {
+        Some(segment) => segment.replay_start_ms,
+        None => replay
+            .frames
+            .iter()
+            .map(|frame| frame.timestamp_ms)
+            .min()
+            .unwrap_or(0),
+    };
     let points = positions
         .into_iter()
         .take(8000)

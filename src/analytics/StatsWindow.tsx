@@ -9,9 +9,11 @@ import { LeaderboardBrowser, ScenarioLeaderboardPanel } from "./LeaderboardBrows
 import { DebugTab } from "./DebugTab";
 import { HubBrowserPanel } from "./HubBrowser";
 import { OsuWorkspace } from "../osu/OsuWorkspace";
+import { ErrorBoundary } from "../ErrorBoundary";
 import { MousePathViewer } from "./MousePathViewer";
 import type {
   ReplayPayloadData,
+  ReplayVideo,
   BridgeRunSnapshot,
   BridgeRunTimelinePoint,
   BridgeShotTelemetryEvent,
@@ -721,6 +723,22 @@ function isAccuracyScenario(scenarioType: string | null | undefined): boolean {
 
 function rangesOverlap(startA: number, endA: number, startB: number, endB: number): boolean {
   return startA <= endB && endA >= startB;
+}
+
+/** Trims video segments to a replay-time range, shifting each one's video offset to match. */
+function sliceVideoToRange(video: ReplayVideo | null, startMs: number, endMs: number): ReplayVideo | null {
+  if (!video) return null;
+  const segments = video.segments.flatMap((segment) => {
+    const start = Math.max(segment.replay_start_ms, startMs);
+    const end = Math.min(segment.replay_start_ms + segment.duration_ms, endMs);
+    if (end <= start) return [];
+    return [{
+      replay_start_ms: start,
+      video_start_ms: segment.video_start_ms + (start - segment.replay_start_ms),
+      duration_ms: end - start,
+    }];
+  });
+  return segments.length > 0 ? { ...video, segments } : null;
 }
 
 function sliceRowsToRange<T extends { timestamp_ms: number }>(rows: T[], startMs: number, endMs: number): T[] {
@@ -4258,6 +4276,7 @@ function ReplayTab({
       positions,
       metrics,
       frames,
+      video: sliceVideoToRange(replayPayload.video ?? null, replaySelectionRange.startMs, replaySelectionRange.endMs),
     };
   }, [replayPayload, replaySelectionRange]);
   const replayTimelineMarkers = useMemo(() => {
@@ -4307,8 +4326,8 @@ function ReplayTab({
     const cards: Array<{ label: string; value: string; sub?: string; accent: string }> = [
       {
         label: "Episodes",
-        value: summary.episode_count.toLocaleString(),
-        sub: `${summary.path_change_count} path breaks · ${summary.target_switch_count} switches`,
+        value: (summary.episode_count ?? 0).toLocaleString(),
+        sub: `${summary.path_change_count ?? 0} path breaks · ${summary.target_switch_count ?? 0} switches`,
         accent: "#00b4ff",
       },
     ];
@@ -4781,16 +4800,19 @@ function ReplayTab({
                   <span style={{ color: "#00f5a0", fontWeight: 700 }}>{fmtScore(selectedRecord.score)}</span>{" "}
                   pts · {formatDateTime(selectedRecord.timestamp)}
                 </SectionTitle>
-                <MousePathViewer
-                  rawPositions={replayPayloadView?.positions ?? replayPayload.positions}
-                  metricPoints={replayPayloadView?.metrics ?? replayPayload.metrics}
-                  screenFrames={replayPayloadView?.frames ?? replayPayload.frames ?? []}
-                  hitTimestampsMs={replayHitTimestamps}
-                  segmentLabel={selectedContextRow?.label ?? null}
-                  segmentWindowLabel={selectedContextRow ? formatTelemetryWindowLabel(selectedContextRow.startMs, selectedContextRow.endMs) : null}
-                  timelineMarkers={replayTimelineMarkers}
-                  timelineWindows={replayTimelineWindows}
-                />
+                <ErrorBoundary name="replay_viewer">
+                  <MousePathViewer
+                    rawPositions={replayPayloadView?.positions ?? replayPayload.positions}
+                    metricPoints={replayPayloadView?.metrics ?? replayPayload.metrics}
+                    screenFrames={replayPayloadView?.frames ?? replayPayload.frames ?? []}
+                    screenVideo={(replayPayloadView ?? replayPayload).video ?? null}
+                    hitTimestampsMs={replayHitTimestamps}
+                    segmentLabel={selectedContextRow?.label ?? null}
+                    segmentWindowLabel={selectedContextRow ? formatTelemetryWindowLabel(selectedContextRow.startMs, selectedContextRow.endMs) : null}
+                    timelineMarkers={replayTimelineMarkers}
+                    timelineWindows={replayTimelineWindows}
+                  />
+                </ErrorBoundary>
               </div>
 
               {runChartData.length > 1 && hasRunTimelineSignal && (
@@ -5156,7 +5178,7 @@ function ReplayTab({
                 </div>
               )}
 
-              {(replayPayload?.frames?.length ?? 0) === 0 && (
+              {(replayPayload?.frames?.length ?? 0) === 0 && !replayPayload?.video && (
                 <div style={{ ...CHART_STYLE, color: "rgba(255,255,255,0.52)", fontSize: 12, lineHeight: 1.6 }}>
                   No video frames were saved for this replay.
                 </div>
@@ -5174,16 +5196,19 @@ function ReplayTab({
                 <span style={{ color: "#00f5a0", fontWeight: 700 }}>{fmtScore(selectedRecord.score)}</span>{" "}
                 pts · {formatDateTime(selectedRecord.timestamp)}
               </SectionTitle>
-              <MousePathViewer
-                rawPositions={replayPayloadView?.positions ?? replayPayload.positions}
-                metricPoints={replayPayloadView?.metrics ?? replayPayload.metrics}
-                screenFrames={replayPayloadView?.frames ?? replayPayload.frames ?? []}
-                hitTimestampsMs={replayHitTimestamps}
-                segmentLabel={selectedContextRow?.label ?? null}
-                segmentWindowLabel={selectedContextRow ? formatTelemetryWindowLabel(selectedContextRow.startMs, selectedContextRow.endMs) : null}
-                timelineMarkers={replayTimelineMarkers}
-                timelineWindows={replayTimelineWindows}
-              />
+              <ErrorBoundary name="replay_viewer">
+                <MousePathViewer
+                  rawPositions={replayPayloadView?.positions ?? replayPayload.positions}
+                  metricPoints={replayPayloadView?.metrics ?? replayPayload.metrics}
+                  screenFrames={replayPayloadView?.frames ?? replayPayload.frames ?? []}
+                  screenVideo={(replayPayloadView ?? replayPayload).video ?? null}
+                  hitTimestampsMs={replayHitTimestamps}
+                  segmentLabel={selectedContextRow?.label ?? null}
+                  segmentWindowLabel={selectedContextRow ? formatTelemetryWindowLabel(selectedContextRow.startMs, selectedContextRow.endMs) : null}
+                  timelineMarkers={replayTimelineMarkers}
+                  timelineWindows={replayTimelineWindows}
+                />
+              </ErrorBoundary>
             </div>
           </>
         )
@@ -7783,7 +7808,8 @@ function HubOverviewPanel({
                   )}
                 </div>
                 <div style={{ fontSize: 10, color: C.textFaint }}>
-                  {record.replay_frames_count} frames · {record.replay_positions_count} mouse samples
+                  {/* FTHR video replays store no JPEG frames, so show "video" instead of "0 frames". */}
+                  {record.replay_frames_count > 0 ? `${record.replay_frames_count} frames` : "video"} · {record.replay_positions_count} mouse samples
                 </div>
               </div>
             ))}
