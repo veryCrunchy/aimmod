@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { convertFileSrc, isTauri } from "@tauri-apps/api/core";
 import { C, accentAlpha } from "../design/tokens";
-import type { MetricPoint, RawPositionPoint, ScreenFrame } from "../types/mouse";
+import { logError } from "../log";
+import type { MetricPoint, RawPositionPoint, ReplayVideo, ScreenFrame } from "../types/mouse";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -416,6 +418,24 @@ function drawPath(
 // ─── Component ────────────────────────────────────────────────────────────────
 
 /** Binary-search nearest recording frame for the given playback time. */
+/** Maps an absolute replay-timeline ms onto the video file, in seconds. */
+function videoTimeForReplayMs(video: ReplayVideo, replayMs: number): number | null {
+  const segments = video.segments;
+  if (segments.length === 0) return null;
+  for (const segment of segments) {
+    const end = segment.replay_start_ms + segment.duration_ms;
+    if (replayMs < segment.replay_start_ms) {
+      // In a gap before this segment: hold its first frame.
+      return segment.video_start_ms / 1000;
+    }
+    if (replayMs <= end) {
+      return (segment.video_start_ms + (replayMs - segment.replay_start_ms)) / 1000;
+    }
+  }
+  const last = segments[segments.length - 1];
+  return (last.video_start_ms + last.duration_ms) / 1000;
+}
+
 function nearestFrameIdx(frames: ScreenFrame[], ms: number): number {
   if (!frames.length) return 0;
   let lo = 0, hi = frames.length - 1;
@@ -454,6 +474,8 @@ interface Props {
   rawPositions: RawPositionPoint[];
   metricPoints: MetricPoint[];
   screenFrames: ScreenFrame[];
+  /** FTHR video; used instead of `screenFrames` when present. */
+  screenVideo?: ReplayVideo | null;
   hitTimestampsMs?: number[];
   segmentLabel?: string | null;
   segmentWindowLabel?: string | null;
@@ -476,6 +498,7 @@ export function MousePathViewer({
   rawPositions,
   metricPoints,
   screenFrames,
+  screenVideo = null,
   hitTimestampsMs = [],
   segmentLabel,
   segmentWindowLabel,
@@ -484,6 +507,15 @@ export function MousePathViewer({
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animRef   = useRef<number | null>(null);
+  const videoRef  = useRef<HTMLVideoElement>(null);
+  const [videoError, setVideoError] = useState(false);
+
+  const video = screenVideo && screenVideo.path && screenVideo.segments.length > 0 ? screenVideo : null;
+  const videoSrc = useMemo(
+    () => (video && isTauri() ? convertFileSrc(video.path) : null),
+    [video],
+  );
+  useEffect(() => setVideoError(false), [videoSrc]);
 
   const replayStartMs = useMemo(() => {
     let start = Number.POSITIVE_INFINITY;
@@ -495,6 +527,12 @@ export function MousePathViewer({
     }
     return Number.isFinite(start) ? start : 0;
   }, [rawPositions, screenFrames]);
+
+  const videoEndMs = useMemo(() => {
+    if (!video) return 0;
+    const last = video.segments[video.segments.length - 1];
+    return Math.max(0, last.replay_start_ms + last.duration_ms - replayStartMs);
+  }, [video, replayStartMs]);
 
   const positions = useMemo(
     () => rawPositions.map((point) => ({
@@ -525,7 +563,8 @@ export function MousePathViewer({
   const [bgOpacity,    setBgOpacity]    = useState(0.5);
   const [viewportW,    setViewportW]    = useState(960);
 
-  const hasVideo = frames.length > 0;
+  const playableVideo = Boolean(videoSrc) && !videoError;
+  const hasVideo = frames.length > 0 || playableVideo;
 
   const lastPositionMs = positions.length > 0
     ? positions[positions.length - 1].timestamp_ms
@@ -533,7 +572,7 @@ export function MousePathViewer({
   const lastFrameMs = frames.length > 0
     ? frames[frames.length - 1].timestamp_ms
     : 0;
-  const durationMs = Math.max(lastPositionMs, lastFrameMs);
+  const durationMs = Math.max(lastPositionMs, lastFrameMs, videoEndMs);
   const denseHitStream = useMemo(
     () => shouldClusterHitIndicators(normalizedHitTimestamps, durationMs),
     [durationMs, normalizedHitTimestamps],
@@ -568,9 +607,26 @@ export function MousePathViewer({
     [durationMs, replayStartMs, timelineWindows],
   );
 
+  // Keep the video on the replay clock: seek while paused or scrubbing, and
+  // let it play natively (correcting drift) while the replay plays.
+  useEffect(() => {
+    const element = videoRef.current;
+    if (!element || !video || !playableVideo) return;
+    const target = videoTimeForReplayMs(video, playbackMs + replayStartMs);
+    if (target === null) return;
+    if (!isPlaying || showFull) {
+      if (!element.paused) element.pause();
+      if (Math.abs(element.currentTime - target) > 0.02) element.currentTime = target;
+      return;
+    }
+    if (element.playbackRate !== speed) element.playbackRate = speed;
+    if (Math.abs(element.currentTime - target) > 0.25) element.currentTime = target;
+    if (element.paused) void element.play().catch(() => undefined);
+  }, [video, playableVideo, playbackMs, replayStartMs, isPlaying, showFull, speed]);
+
   // Nearest game recording frame for the current playback position
   const currentFrameSrc = useMemo<string | null>(() => {
-    if (!hasVideo || showFull) return null;
+    if (frames.length === 0 || playableVideo || showFull) return null;
     const idx = nearestFrameIdx(frames, playbackMs);
     return `data:image/jpeg;base64,${frames[idx].jpeg_b64}`;
   }, [frames, playbackMs, showFull, hasVideo]);
@@ -720,12 +776,22 @@ export function MousePathViewer({
               </span>
             )}
             {/* Stat pills */}
-            {hasVideo && (
+            {playableVideo && video && (
+              <span style={{ color: "rgba(0,245,160,0.7)" }}>
+                ● {video.codec.replace(/_nvenc$|_amf$|_qsv$/, "").toUpperCase()} video {video.width}×{video.height}
+              </span>
+            )}
+            {!playableVideo && frames.length > 0 && (
               <span style={{ color: "rgba(0,245,160,0.7)" }}>
                 ● {frames.length} frames
               </span>
             )}
-            {!hasVideo && (
+            {videoSrc && videoError && (
+              <span style={{ color: "rgba(255,120,120,0.7)" }} title="This replay's video codec isn't supported by AimMod's built-in browser.">
+                ● video can't play here
+              </span>
+            )}
+            {!hasVideo && !(videoSrc && videoError) && (
               <span style={{ color: "rgba(255,120,120,0.7)" }}>
                 ● no video frames
               </span>
@@ -788,6 +854,46 @@ export function MousePathViewer({
 
         {/* Canvas + game recording underlay */}
         <div style={{ position: "relative", lineHeight: 0 }}>
+          {videoSrc && !videoError && (
+            <video
+              ref={videoRef}
+              src={videoSrc}
+              muted
+              playsInline
+              preload="auto"
+              onError={(event) => {
+                setVideoError(true);
+                const element = event.currentTarget;
+                const probe = document.createElement("video");
+                const canPlay = [
+                  'video/mp4; codecs="hev1.1.6.L93.B0"',
+                  'video/mp4; codecs="hvc1.1.6.L93.B0"',
+                  'video/mp4; codecs="avc1.42E01E"',
+                ].map((type) => `${type} => "${probe.canPlayType(type)}"`).join("; ");
+                const src = element.currentSrc || videoSrc || "";
+                void fetch(src, { method: "HEAD" })
+                  .then((res) => `HTTP ${res.status} ${res.headers.get("content-type") ?? ""}`)
+                  .catch((err) => `fetch failed: ${String(err)}`)
+                  .then((fetchResult) => {
+                    logError(
+                      "replay_viewer",
+                      `video error code=${element.error?.code ?? "?"} message=${element.error?.message ?? ""} src=${src} fetch=${fetchResult} canPlayType: ${canPlay}`,
+                    );
+                  });
+              }}
+              style={{
+                // Same placement as the JPEG underlay below.
+                position: "absolute",
+                left:   "17.5%",
+                top:    "18.37%",
+                width:  "65%",
+                height: "63.27%",
+                objectFit: "fill",
+                opacity: showFull ? 0 : bgOpacity,
+                pointerEvents: "none",
+              }}
+            />
+          )}
           {currentFrameSrc && !showFull && (
             <img
               src={currentFrameSrc}

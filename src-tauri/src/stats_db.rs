@@ -617,6 +617,9 @@ pub fn get_replay_data(
         metrics,
         frames,
         run_snapshot,
+        // Videos live as files next to the replay; replay_store::load_replay
+        // attaches them from their sidecar after this row is read.
+        video: None,
     }))
 }
 

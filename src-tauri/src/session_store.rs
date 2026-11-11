@@ -687,6 +687,8 @@ fn try_clear_sessions(app: &AppHandle) -> anyhow::Result<()> {
     let conn = crate::stats_db::connect(app)?;
     conn.execute("DELETE FROM replay_assets", [])?;
     conn.execute("DELETE FROM sessions", [])?;
+    // Replay videos are files, not rows, so they need clearing alongside.
+    crate::replay_store::delete_all_replay_videos(app);
     Ok(())
 }
 

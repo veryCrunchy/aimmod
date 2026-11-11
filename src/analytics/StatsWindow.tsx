@@ -4787,6 +4787,7 @@ function ReplayTab({
                     rawPositions={replayPayloadView?.positions ?? replayPayload.positions}
                     metricPoints={replayPayloadView?.metrics ?? replayPayload.metrics}
                     screenFrames={replayPayloadView?.frames ?? replayPayload.frames ?? []}
+                    screenVideo={replayPayload.video ?? null}
                     hitTimestampsMs={replayHitTimestamps}
                     segmentLabel={selectedContextRow?.label ?? null}
                     segmentWindowLabel={selectedContextRow ? formatTelemetryWindowLabel(selectedContextRow.startMs, selectedContextRow.endMs) : null}
@@ -5182,6 +5183,7 @@ function ReplayTab({
                   rawPositions={replayPayloadView?.positions ?? replayPayload.positions}
                   metricPoints={replayPayloadView?.metrics ?? replayPayload.metrics}
                   screenFrames={replayPayloadView?.frames ?? replayPayload.frames ?? []}
+                  screenVideo={replayPayload.video ?? null}
                   hitTimestampsMs={replayHitTimestamps}
                   segmentLabel={selectedContextRow?.label ?? null}
                   segmentWindowLabel={selectedContextRow ? formatTelemetryWindowLabel(selectedContextRow.startMs, selectedContextRow.endMs) : null}
@@ -7788,7 +7790,8 @@ function HubOverviewPanel({
                   )}
                 </div>
                 <div style={{ fontSize: 10, color: C.textFaint }}>
-                  {record.replay_frames_count} frames · {record.replay_positions_count} mouse samples
+                  {/* FTHR video replays store no JPEG frames, so show "video" instead of "0 frames". */}
+                  {record.replay_frames_count > 0 ? `${record.replay_frames_count} frames` : "video"} · {record.replay_positions_count} mouse samples
                 </div>
               </div>
             ))}

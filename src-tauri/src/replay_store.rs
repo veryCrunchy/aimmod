@@ -70,6 +70,10 @@ pub struct ReplayData {
     /// Absent in replays saved before this field was added.
     #[serde(default)]
     pub run_snapshot: Option<crate::bridge::BridgeRunSnapshot>,
+    /// FTHR video recording, stored as an MP4 next to the replay. Replays with
+    /// a video usually have no JPEG `frames`.
+    #[serde(default)]
+    pub video: Option<crate::fthr_recorder::ReplayVideo>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -78,6 +82,8 @@ pub struct ReplayPayloadData {
     pub metrics: Vec<MetricPoint>,
     #[serde(default)]
     pub frames: Vec<crate::screen_recorder::ScreenFrame>,
+    #[serde(default)]
+    pub video: Option<crate::fthr_recorder::ReplayVideo>,
 }
 
 impl From<&ReplayData> for ReplayPayloadData {
@@ -86,7 +92,14 @@ impl From<&ReplayData> for ReplayPayloadData {
             positions: value.positions.clone(),
             metrics: value.metrics.clone(),
             frames: value.frames.clone(),
+            video: value.video.clone(),
         }
+    }
+}
+
+impl ReplayData {
+    fn has_media(&self) -> bool {
+        !self.frames.is_empty() || self.video.is_some()
     }
 }
 
@@ -97,6 +110,117 @@ fn replay_dir(app: &AppHandle) -> Option<PathBuf> {
     let dir = data_dir.join("replays");
     std::fs::create_dir_all(&dir).ok()?;
     Some(dir)
+}
+
+/// Directory holding FTHR replay videos (`<session>.mp4` + `<session>.json`).
+pub fn replay_videos_dir(app: &AppHandle) -> Option<PathBuf> {
+    let dir = replay_dir(app)?.join("videos");
+    std::fs::create_dir_all(&dir).ok()?;
+    Some(dir)
+}
+
+fn video_file_stem(session_id: &str) -> String {
+    sanitize_replay_temp_component(session_id)
+}
+
+fn move_file(source: &Path, target: &Path) -> std::io::Result<()> {
+    if fs::rename(source, target).is_ok() {
+        return Ok(());
+    }
+    fs::copy(source, target)?;
+    fs::remove_file(source)
+}
+
+/// Moves a freshly saved clip into the videos directory and writes its sidecar.
+fn store_replay_video(
+    app: &AppHandle,
+    session_id: &str,
+    mut video: crate::fthr_recorder::ReplayVideo,
+) -> Option<crate::fthr_recorder::ReplayVideo> {
+    let source = PathBuf::from(&video.path);
+    let Some(dir) = replay_videos_dir(app) else {
+        let _ = fs::remove_file(&source);
+        return None;
+    };
+    let stem = video_file_stem(session_id);
+    let target = dir.join(format!("{stem}.mp4"));
+    if source != target {
+        if let Err(error) = move_file(&source, &target) {
+            log::warn!(
+                "replay_store: could not store replay video for {}: {}",
+                session_id,
+                error
+            );
+            let _ = fs::remove_file(&source);
+            return None;
+        }
+    }
+    video.file_name = format!("{stem}.mp4");
+    video.path = String::new();
+    let sidecar = dir.join(format!("{stem}.json"));
+    let written = serde_json::to_vec(&video)
+        .map_err(|e| e.to_string())
+        .and_then(|bytes| fs::write(&sidecar, bytes).map_err(|e| e.to_string()));
+    if let Err(error) = written {
+        log::warn!("replay_store: could not write video sidecar for {session_id}: {error}");
+        let _ = fs::remove_file(&target);
+        return None;
+    }
+    video.path = target.to_string_lossy().into_owned();
+    Some(video)
+}
+
+/// Loads a replay's video sidecar if its MP4 still exists.
+fn load_replay_video(
+    app: &AppHandle,
+    session_id: &str,
+) -> Option<crate::fthr_recorder::ReplayVideo> {
+    let dir = replay_videos_dir(app)?;
+    let stem = video_file_stem(session_id);
+    let bytes = fs::read(dir.join(format!("{stem}.json"))).ok()?;
+    let mut video: crate::fthr_recorder::ReplayVideo = serde_json::from_slice(&bytes).ok()?;
+    // Never trust a path from disk; only the file name inside our directory.
+    let file = dir.join(Path::new(&video.file_name).file_name()?);
+    if !file.is_file() || video.segments.is_empty() {
+        return None;
+    }
+    video.path = file.to_string_lossy().into_owned();
+    Some(video)
+}
+
+fn delete_replay_video(app: &AppHandle, session_id: &str) {
+    let Some(dir) = replay_videos_dir(app) else {
+        return;
+    };
+    let stem = video_file_stem(session_id);
+    for ext in ["mp4", "json"] {
+        let path = dir.join(format!("{stem}.{ext}"));
+        if let Err(error) = fs::remove_file(&path) {
+            if error.kind() != std::io::ErrorKind::NotFound {
+                log::warn!("replay_store: could not remove {}: {}", path.display(), error);
+            }
+        }
+    }
+}
+
+/// Removes every stored replay video (used when session history is cleared).
+pub fn delete_all_replay_videos(app: &AppHandle) {
+    let Some(dir) = replay_videos_dir(app) else {
+        return;
+    };
+    let Ok(entries) = fs::read_dir(&dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let is_video_file = path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("mp4") || ext.eq_ignore_ascii_case("json"));
+        if path.is_file() && is_video_file {
+            let _ = fs::remove_file(&path);
+        }
+    }
 }
 
 fn sqlite_replay_path(session_id: &str) -> PathBuf {
@@ -583,6 +707,9 @@ pub fn apply_replay_retention(
 
     match crate::stats_db::prune_replay_assets(app, keep_count, protected_session_id) {
         Ok(pruned) if !pruned.is_empty() => {
+            for session_id in &pruned {
+                delete_replay_video(app, session_id);
+            }
             log::info!(
                 "replay_store: pruned {} non-favorited replay(s) to keep the latest {}",
                 pruned.len(),
@@ -610,7 +737,9 @@ pub fn set_replay_favorite(
 }
 
 pub fn delete_replay(app: &AppHandle, session_id: &str) -> Result<(), String> {
-    crate::stats_db::delete_replay_asset(app, session_id).map_err(|e| e.to_string())
+    crate::stats_db::delete_replay_asset(app, session_id).map_err(|e| e.to_string())?;
+    delete_replay_video(app, session_id);
+    Ok(())
 }
 
 pub fn export_replay_video(app: &AppHandle, session_id: &str) -> Result<PathBuf, String> {
@@ -671,6 +800,9 @@ fn encode_replay_video_to_path(
 
     let replay =
         load_replay(app, session_id).ok_or_else(|| format!("replay not found: {session_id}"))?;
+    if let Some(video) = replay.video.as_ref() {
+        return encode_video_segments_to_path(app, session_id, video, encode_quality, output_path);
+    }
     if replay.frames.is_empty() {
         return Err("This replay has no saved video frames.".to_string());
     }
@@ -761,6 +893,62 @@ fn encode_replay_video_to_path(
         return Err(format!("ffmpeg failed to export this replay: {detail}"));
     }
 
+    Ok(())
+}
+
+/// Re-encodes the run's stretches of an FTHR clip to H.264 so exports and
+/// uploads play everywhere (HEVC playback depends on the viewer's decoder).
+fn encode_video_segments_to_path(
+    app: &AppHandle,
+    session_id: &str,
+    video: &crate::fthr_recorder::ReplayVideo,
+    encode_quality: ReplayMediaQuality,
+    output_path: &Path,
+) -> Result<(), String> {
+    if video.segments.is_empty() {
+        return Err("This replay video has no playable segments.".to_string());
+    }
+    let mut filter = String::new();
+    for (index, segment) in video.segments.iter().enumerate() {
+        filter.push_str(&format!(
+            "[0:v]trim=start={:.3}:duration={:.3},setpts=PTS-STARTPTS[v{index}];",
+            segment.video_start_ms as f64 / 1000.0,
+            segment.duration_ms as f64 / 1000.0,
+        ));
+    }
+    for index in 0..video.segments.len() {
+        filter.push_str(&format!("[v{index}]"));
+    }
+    filter.push_str(&format!(
+        "concat=n={}:v=1:a=0,pad=ceil(iw/2)*2:ceil(ih/2)*2[out]",
+        video.segments.len()
+    ));
+
+    let [preset_flag, preset_value, crf_flag, crf_value] = encode_quality.ffmpeg_args();
+    let ffmpeg_path = ensure_ffmpeg_available(app)?;
+    let mut command = std::process::Command::new(&ffmpeg_path);
+    configure_background_command(&mut command);
+    let output = command
+        .args(["-y", "-hide_banner", "-loglevel", "error", "-i"])
+        .arg(&video.path)
+        .args(["-filter_complex", filter.as_str(), "-map", "[out]", "-c:v", "libx264"])
+        .args([preset_flag, preset_value, crf_flag, crf_value])
+        .args(["-pix_fmt", "yuv420p", "-movflags", "+faststart"])
+        .arg(output_path)
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|e| format!("Could not start ffmpeg: {e}"))?;
+    if !output.status.success() {
+        let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        log::warn!(
+            "replay_store: ffmpeg video export failed for {} using {}: {}",
+            session_id,
+            ffmpeg_path.display(),
+            detail
+        );
+        return Err(format!("ffmpeg failed to export this replay: {detail}"));
+    }
     Ok(())
 }
 
@@ -905,8 +1093,11 @@ fn write_ffconcat_timeline(
 
 /// Persist `data` for `session_id`.  Positions are downsampled before writing.
 /// Returns `true` if the replay payload was written successfully.
-pub fn save_replay(app: &AppHandle, session_id: &str, data: ReplayData) -> bool {
-    if data.frames.is_empty() {
+pub fn save_replay(app: &AppHandle, session_id: &str, mut data: ReplayData) -> bool {
+    if let Some(video) = data.video.take() {
+        data.video = store_replay_video(app, session_id, video);
+    }
+    if !data.has_media() {
         purge_invalid_replay_without_video_frames(app, session_id, "replay save", None);
         return false;
     }
@@ -926,17 +1117,20 @@ pub fn save_replay(app: &AppHandle, session_id: &str, data: ReplayData) -> bool 
         metrics: data.metrics,
         frames: data.frames,
         run_snapshot: data.run_snapshot,
+        video: data.video,
     };
 
     if !backfill_sqlite_replay(app, session_id, &stored) {
+        delete_replay_video(app, session_id);
         return false;
     }
     log::info!(
-        "replay_store: saved {} ({} positions, {} metrics, {} frames, run_snapshot={})",
+        "replay_store: saved {} ({} positions, {} metrics, {} frames, video={}, run_snapshot={})",
         session_id,
         stored.positions.len(),
         stored.metrics.len(),
         stored.frames.len(),
+        stored.video.as_ref().map(|v| v.codec.as_str()).unwrap_or("none"),
         stored.run_snapshot.is_some(),
     );
     apply_replay_retention(app, None, Some(session_id));
@@ -947,12 +1141,12 @@ pub fn save_replay(app: &AppHandle, session_id: &str, data: ReplayData) -> bool 
 /// cannot be parsed.
 pub fn load_replay(app: &AppHandle, session_id: &str) -> Option<ReplayData> {
     match crate::stats_db::get_replay_data(app, session_id) {
-        Ok(Some(replay)) => {
-            if replay.frames.is_empty() {
+        Ok(Some(mut replay)) => {
+            replay.video = load_replay_video(app, session_id);
+            if !replay.has_media() {
                 purge_invalid_replay_without_video_frames(app, session_id, "sqlite replay", None);
                 return None;
             }
-            let mut replay = replay;
             repair_replay_timing_if_needed(app, session_id, &mut replay);
             repair_tick_stream_if_needed(app, session_id, &mut replay);
             repair_run_capture_if_needed(app, session_id, &replay);
@@ -1000,6 +1194,7 @@ pub fn load_replay(app: &AppHandle, session_id: &str) -> Option<ReplayData> {
 fn load_replay_allowing_missing_video(app: &AppHandle, session_id: &str) -> Option<ReplayData> {
     match crate::stats_db::get_replay_data(app, session_id) {
         Ok(Some(mut replay)) => {
+            replay.video = load_replay_video(app, session_id);
             repair_replay_timing_if_needed(app, session_id, &mut replay);
             repair_tick_stream_if_needed(app, session_id, &mut replay);
             repair_run_capture_if_needed(app, session_id, &replay);
@@ -1051,6 +1246,7 @@ fn purge_invalid_replay_without_video_frames(
             error
         );
     }
+    delete_replay_video(app, session_id);
     let _ = crate::stats_db::delete_legacy_replay_blob(app, session_id);
     if let Some(path) = legacy_path {
         if let Err(error) = std::fs::remove_file(path) {

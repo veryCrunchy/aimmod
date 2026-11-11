@@ -291,6 +291,7 @@ fn process_stats_csv(app: AppHandle, path: PathBuf) {
             let mouse_capture =
                 crate::mouse_hook::take_replay_capture_for_run(run_snapshot.as_ref());
             let screen_frames = crate::screen_recorder::take_frames_for_run(run_snapshot.as_ref());
+            let screen_video = crate::fthr_recorder::take_video_for_run(run_snapshot.as_ref());
             let shot_timing =
                 run_snapshot
                     .as_ref()
@@ -358,6 +359,7 @@ fn process_stats_csv(app: AppHandle, path: PathBuf) {
                     metrics: mouse_capture.metrics,
                     frames: screen_frames,
                     run_snapshot: run_snapshot.clone(),
+                    video: screen_video,
                 },
             );
             if has_replay {
