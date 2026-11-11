@@ -188,6 +188,52 @@ fn load_replay_video(
     Some(video)
 }
 
+/// Writes an empty sidecar for a replay whose FTHR video was recorded but never
+/// saved. The sidecar marks the replay as a video replay, so it is kept with
+/// its mouse path instead of being purged for having no media.
+fn write_missing_video_marker(app: &AppHandle, session_id: &str) -> bool {
+    let Some(dir) = replay_videos_dir(app) else {
+        return false;
+    };
+    let marker = crate::fthr_recorder::ReplayVideo {
+        file_name: String::new(),
+        path: String::new(),
+        codec: String::new(),
+        width: 0,
+        height: 0,
+        segments: Vec::new(),
+    };
+    let sidecar = dir.join(format!("{}.json", video_file_stem(session_id)));
+    let written = serde_json::to_vec(&marker)
+        .map_err(|e| e.to_string())
+        .and_then(|bytes| fs::write(&sidecar, bytes).map_err(|e| e.to_string()));
+    match written {
+        Ok(()) => true,
+        Err(error) => {
+            log::warn!("replay_store: could not mark {session_id} as a video replay: {error}");
+            false
+        }
+    }
+}
+
+/// True when this replay was recorded as a video (its sidecar or MP4 exists),
+/// or when the videos directory can't be checked. Such replays must not be
+/// purged when their video fails to load: the failure may be temporary, and
+/// the mouse path is still worth keeping.
+fn replay_has_video_record(app: &AppHandle, session_id: &str) -> bool {
+    let Ok(data_dir) = app.path().app_data_dir() else {
+        return true;
+    };
+    let dir = data_dir.join("replays").join("videos");
+    let stem = video_file_stem(session_id);
+    ["json", "mp4"].iter().any(|ext| {
+        match fs::symlink_metadata(dir.join(format!("{stem}.{ext}"))) {
+            Ok(_) => true,
+            Err(error) => error.kind() != std::io::ErrorKind::NotFound,
+        }
+    })
+}
+
 fn delete_replay_video(app: &AppHandle, session_id: &str) {
     let Some(dir) = replay_videos_dir(app) else {
         return;
@@ -1092,14 +1138,30 @@ fn write_ffconcat_timeline(
 // ─── Public API ───────────────────────────────────────────────────────────────
 
 /// Persist `data` for `session_id`.  Positions are downsampled before writing.
+/// `video_expected` means FTHR recorded this run, so JPEG capture was skipped;
+/// if its clip was lost, the replay is still kept with its mouse path.
 /// Returns `true` if the replay payload was written successfully.
-pub fn save_replay(app: &AppHandle, session_id: &str, mut data: ReplayData) -> bool {
+pub fn save_replay(
+    app: &AppHandle,
+    session_id: &str,
+    mut data: ReplayData,
+    video_expected: bool,
+) -> bool {
+    let video_expected = video_expected || data.video.is_some();
     if let Some(video) = data.video.take() {
         data.video = store_replay_video(app, session_id, video);
     }
     if !data.has_media() {
-        purge_invalid_replay_without_video_frames(app, session_id, "replay save", None);
-        return false;
+        let keep_without_video = video_expected
+            && !data.positions.is_empty()
+            && write_missing_video_marker(app, session_id);
+        if !keep_without_video {
+            purge_invalid_replay_without_video_frames(app, session_id, "replay save", None);
+            return false;
+        }
+        log::warn!(
+            "replay_store: video for {session_id} was not saved; keeping its mouse path only"
+        );
     }
 
     // Downsample positions: keep every DOWNSAMPLE_FACTOR-th point.
@@ -1144,8 +1206,18 @@ pub fn load_replay(app: &AppHandle, session_id: &str) -> Option<ReplayData> {
         Ok(Some(mut replay)) => {
             replay.video = load_replay_video(app, session_id);
             if !replay.has_media() {
-                purge_invalid_replay_without_video_frames(app, session_id, "sqlite replay", None);
-                return None;
+                if !replay_has_video_record(app, session_id) {
+                    purge_invalid_replay_without_video_frames(
+                        app,
+                        session_id,
+                        "sqlite replay",
+                        None,
+                    );
+                    return None;
+                }
+                log::warn!(
+                    "replay_store: video for {session_id} is unavailable; loading its mouse path only"
+                );
             }
             repair_replay_timing_if_needed(app, session_id, &mut replay);
             repair_tick_stream_if_needed(app, session_id, &mut replay);

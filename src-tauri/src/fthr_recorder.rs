@@ -35,12 +35,20 @@ pub struct ReplayVideo {
     pub segments: Vec<ReplayVideoSegment>,
 }
 
+/// What FTHR produced for a run. `recorded` is true when FTHR recorded the run
+/// (so no JPEG frames exist), even if its clip was then lost.
+#[derive(Debug, Default)]
+pub struct RunVideo {
+    pub video: Option<ReplayVideo>,
+    pub recorded: bool,
+}
+
 #[cfg(target_os = "windows")]
 pub use imp::*;
 
 #[cfg(not(target_os = "windows"))]
 mod fallback {
-    use super::ReplayVideo;
+    use super::RunVideo;
     pub fn init(_app: &tauri::AppHandle, _videos_dir: std::path::PathBuf) {}
     pub fn session_started(_session_start: std::time::Instant) -> bool {
         false
@@ -48,8 +56,8 @@ mod fallback {
     pub fn session_stopped() {}
     pub fn take_video_for_run(
         _run_snapshot: Option<&crate::bridge::BridgeRunSnapshot>,
-    ) -> Option<ReplayVideo> {
-        None
+    ) -> RunVideo {
+        RunVideo::default()
     }
 }
 #[cfg(not(target_os = "windows"))]
@@ -57,7 +65,7 @@ pub use fallback::*;
 
 #[cfg(target_os = "windows")]
 mod imp {
-    use super::{ReplayVideo, ReplayVideoSegment};
+    use super::{ReplayVideo, ReplayVideoSegment, RunVideo};
     use once_cell::sync::{Lazy, OnceCell};
     use std::collections::VecDeque;
     use std::os::windows::io::AsRawHandle;
@@ -94,7 +102,14 @@ mod imp {
     const CODEC_H264: u32 = 1;
     const ENGINE_INIT_TIMEOUT: Duration = Duration::from_secs(8);
     const SAVE_TIMEOUT: Duration = Duration::from_secs(30);
-    const WAIT_FOR_SAVE_TIMEOUT: Duration = Duration::from_secs(20);
+    /// After a save times out, how long the next save waits for the engine's
+    /// late reply before sending its own command.
+    const STALE_SAVE_GRACE: Duration = Duration::from_secs(15);
+    /// Longest a save can take: draining a late reply, then its own timeout.
+    /// The claim returns as soon as the run's clip arrives, so this is only
+    /// reached when a save is failing.
+    const WAIT_FOR_SAVE_TIMEOUT: Duration =
+        Duration::from_secs(STALE_SAVE_GRACE.as_secs() + SAVE_TIMEOUT.as_secs() + 5);
     /// Shut the engine down after the game window has been gone this long.
     const IDLE_SHUTDOWN: Duration = Duration::from_secs(60);
     const WATCH_INTERVAL: Duration = Duration::from_secs(2);
@@ -250,12 +265,25 @@ mod imp {
         session_end_unix_ms: u64,
     }
 
+    /// A session FTHR recorded, kept whether or not its clip was saved.
+    pub(super) struct RecordedSpan {
+        pub(super) start_unix_ms: u64,
+        pub(super) end_unix_ms: u64,
+    }
+
+    /// A save that timed out. The engine may still answer it later.
+    struct StaleSave {
+        path: PathBuf,
+        timed_out_at: Instant,
+    }
+
     #[derive(Default)]
     struct State {
         engine: Option<Engine>,
         session: Option<SessionClock>,
         pending_saves: usize,
         completed: VecDeque<CompletedClip>,
+        recorded: VecDeque<RecordedSpan>,
         game_missing_since: Option<Instant>,
         spawn_backoff_until: Option<Instant>,
         /// Last geometry seen and when it was first seen unchanged.
@@ -265,8 +293,9 @@ mod imp {
     static PATHS: OnceCell<Paths> = OnceCell::new();
     static STATE: Lazy<Mutex<State>> = Lazy::new(|| Mutex::new(State::default()));
     static SAVES_DONE: Condvar = Condvar::new();
-    /// Serializes SAVE_CLIP commands: the engine has one response slot.
-    static SAVE_CHANNEL: Mutex<()> = Mutex::new(());
+    /// Serializes SAVE_CLIP commands: the engine has one response slot. Holds
+    /// the last timed-out save so the next one can drain its late reply.
+    static SAVE_CHANNEL: Mutex<Option<StaleSave>> = Mutex::new(None);
     static JOB: OnceCell<usize> = OnceCell::new();
 
     // ─── Public API ─────────────────────────────────────────────────────────────
@@ -339,7 +368,15 @@ mod imp {
         let Some(session) = state.session.take() else {
             return;
         };
+        let session_end_unix_ms = unix_now_ms();
+        // Recorded even if the save below fails: JPEG capture was skipped for
+        // this session, so the replay must be kept without video.
+        state.recorded.push_back(RecordedSpan {
+            start_unix_ms: session.start_unix_ms,
+            end_unix_ms: session_end_unix_ms,
+        });
         let Some(engine) = state.engine.as_ref() else {
+            log::warn!("fthr_recorder: engine gone at session stop; no clip saved");
             return;
         };
         let layout = engine.layout() as usize;
@@ -350,7 +387,6 @@ mod imp {
 
         let elapsed_s = (qpc_now_s() - session.start_qpc_s).max(0.0);
         let duration_s = ((elapsed_s.ceil() as u32) + 2).clamp(1, BUFFER_SECONDS);
-        let session_end_unix_ms = unix_now_ms();
         let spawned = std::thread::Builder::new()
             .name("fthr-save".into())
             .spawn(move || {
@@ -397,10 +433,23 @@ mod imp {
     /// pending file; `replay_store` moves it into place.
     pub fn take_video_for_run(
         run_snapshot: Option<&crate::bridge::BridgeRunSnapshot>,
-    ) -> Option<ReplayVideo> {
+    ) -> RunVideo {
+        // The snapshot start is the replay timeline's zero point (mouse
+        // positions use it too). Its computed end can be far too early when
+        // tracking started before the challenge (start + run duration), so the
+        // window runs until the session actually stopped.
+        let snapshot_start = run_snapshot.and_then(|s| s.started_at_unix_ms);
+        let snapshot_end = run_snapshot.and_then(|s| s.ended_at_unix_ms);
+
         let mut state = STATE.lock().unwrap();
         let deadline = Instant::now() + WAIT_FOR_SAVE_TIMEOUT;
         while state.pending_saves > 0 {
+            // Stop waiting once this run's clip is in; other saves may still be queued.
+            if let Some(run_start) = snapshot_start {
+                if best_overlap(&state.completed, run_start, snapshot_end).is_some() {
+                    break;
+                }
+            }
             let now = Instant::now();
             if now >= deadline {
                 log::warn!("fthr_recorder: timed out waiting for clip save");
@@ -408,22 +457,19 @@ mod imp {
             }
             state = SAVES_DONE.wait_timeout(state, deadline - now).unwrap().0;
         }
+        let recorded = take_recorded_span(&mut state.recorded, snapshot_start, snapshot_end);
         if state.completed.is_empty() {
-            return None;
+            return RunVideo { video: None, recorded };
         }
 
-        // The snapshot start is the replay timeline's zero point (mouse
-        // positions use it too). Its computed end can be far too early when
-        // tracking started before the challenge (start + run duration), so the
-        // window runs until the session actually stopped.
-        let snapshot_start = run_snapshot.and_then(|s| s.started_at_unix_ms);
-        let snapshot_end = run_snapshot.and_then(|s| s.ended_at_unix_ms);
         let index = match snapshot_start {
             Some(run_start) => best_overlap(&state.completed, run_start, snapshot_end)
                 .unwrap_or(state.completed.len() - 1),
             None => state.completed.len() - 1,
         };
-        let clip = state.completed.remove(index)?;
+        let Some(clip) = state.completed.remove(index) else {
+            return RunVideo { video: None, recorded };
+        };
         drop(state);
 
         let run_start = snapshot_start.unwrap_or(clip.session_start_unix_ms);
@@ -449,16 +495,39 @@ mod imp {
         if segments.is_empty() {
             log::warn!("fthr_recorder: saved clip does not overlap the run; discarding");
             let _ = std::fs::remove_file(&clip.path);
-            return None;
+            return RunVideo { video: None, recorded };
         }
-        Some(ReplayVideo {
-            file_name: String::new(),
-            path: clip.path.to_string_lossy().into_owned(),
-            codec: clip.codec,
-            width: clip.width,
-            height: clip.height,
-            segments,
-        })
+        RunVideo {
+            video: Some(ReplayVideo {
+                file_name: String::new(),
+                path: clip.path.to_string_lossy().into_owned(),
+                codec: clip.codec,
+                width: clip.width,
+                height: clip.height,
+                segments,
+            }),
+            recorded: true,
+        }
+    }
+
+    /// Removes the recorded sessions that overlap this run. Returns true when
+    /// FTHR recorded any part of it.
+    pub(super) fn take_recorded_span(
+        recorded: &mut VecDeque<RecordedSpan>,
+        run_start: Option<u64>,
+        run_end: Option<u64>,
+    ) -> bool {
+        let Some(run_start) = run_start else {
+            // No run timing to match against: claim the latest session.
+            return recorded.pop_back().is_some();
+        };
+        let before = recorded.len();
+        recorded.retain(|span| {
+            let end = run_end.unwrap_or(0).max(span.end_unix_ms);
+            let overlaps = span.start_unix_ms < end && span.end_unix_ms > run_start;
+            !overlaps
+        });
+        recorded.len() != before
     }
 
     // ─── Timeline mapping ───────────────────────────────────────────────────────
@@ -490,12 +559,22 @@ mod imp {
         clip_start: u64,
         clip_end: u64,
     ) -> Vec<ReplayVideoSegment> {
-        let mut pauses: Vec<(u64, u64)> = pauses
+        // Clip pauses to the run and merge overlaps, so a pause that began
+        // before the run (e.g. pause menu -> Restart) or a doubled pause window
+        // is never subtracted twice.
+        let mut clipped: Vec<(u64, u64)> = pauses
             .iter()
-            .copied()
+            .map(|(s, e)| ((*s).max(run_start), (*e).min(run_end)))
             .filter(|(s, e)| e > s)
             .collect();
-        pauses.sort_unstable();
+        clipped.sort_unstable();
+        let mut pauses: Vec<(u64, u64)> = Vec::with_capacity(clipped.len());
+        for (start, end) in clipped {
+            match pauses.last_mut() {
+                Some(last) if start <= last.1 => last.1 = last.1.max(end),
+                _ => pauses.push((start, end)),
+            }
+        }
 
         let mut active = Vec::new();
         let mut cursor = run_start;
@@ -518,7 +597,7 @@ mod imp {
         let paused_before = |abs: u64| -> u64 {
             pauses
                 .iter()
-                .map(|(s, e)| if abs <= *s { 0 } else { abs.min(*e) - s })
+                .map(|(s, e)| abs.min(*e).saturating_sub(*s))
                 .sum()
         };
 
@@ -528,7 +607,9 @@ mod imp {
                 let start = a.max(clip_start);
                 let end = b.min(clip_end);
                 (end > start).then(|| ReplayVideoSegment {
-                    replay_start_ms: start - run_start - paused_before(start),
+                    replay_start_ms: start
+                        .saturating_sub(run_start)
+                        .saturating_sub(paused_before(start)),
                     video_start_ms: start - clip_start,
                     duration_ms: end - start,
                 })
@@ -737,7 +818,10 @@ mod imp {
     /// Sends SAVE_CLIP and waits for the result. Returns the clip path and its
     /// QPC presentation interval.
     fn save_clip(layout: *mut SharedLayout, duration_s: u32) -> Result<(PathBuf, f64, f64), String> {
-        let _channel = SAVE_CHANNEL.lock().unwrap();
+        let mut channel = SAVE_CHANNEL.lock().unwrap();
+        if let Some(stale) = channel.take() {
+            drain_stale_save(layout, stale);
+        }
         let paths = PATHS.get().ok_or("not initialized")?;
         let path = paths.pending_dir.join(format!("{}.mp4", unix_now_ms()));
         let wide: Vec<u16> = path.as_os_str().to_string_lossy().encode_utf16().collect();
@@ -760,6 +844,13 @@ mod imp {
                 RESP_CLIP_SAVED => {
                     let text = read_engine_string(layout);
                     wr!(layout, engine_response, RESP_NONE);
+                    // The reply carries no path, so make sure it's for our file.
+                    if !path.is_file() {
+                        return Err(format!(
+                            "engine reported a save but {} is missing",
+                            path.display()
+                        ));
+                    }
                     let (start, end) = parse_interval(&text)
                         .ok_or_else(|| format!("clip saved without an interval: {text:?}"))?;
                     return Ok((path, start, end));
@@ -774,9 +865,45 @@ mod imp {
                 _ => {}
             }
             if Instant::now() >= deadline {
+                // The engine may still finish this save. Remember it so the
+                // next save drains that reply instead of taking it as its own.
+                *channel = Some(StaleSave {
+                    path,
+                    timed_out_at: Instant::now(),
+                });
                 return Err("timed out waiting for the engine to save".into());
             }
             std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    /// Waits briefly for a timed-out save's late reply, consumes it, and
+    /// deletes its clip. Nothing claims that clip: its session was already
+    /// stored without video.
+    fn drain_stale_save(layout: *mut SharedLayout, stale: StaleSave) {
+        let deadline = stale.timed_out_at + STALE_SAVE_GRACE;
+        loop {
+            match rd!(layout, engine_response) {
+                RESP_CLIP_SAVED | RESP_ERROR => {
+                    wr!(layout, engine_response, RESP_NONE);
+                    log::info!("fthr_recorder: discarded a late reply from a timed-out save");
+                    break;
+                }
+                _ => {}
+            }
+            if Instant::now() >= deadline {
+                log::warn!("fthr_recorder: timed-out save never answered; continuing");
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        if let Err(error) = std::fs::remove_file(&stale.path) {
+            if error.kind() != std::io::ErrorKind::NotFound {
+                log::warn!(
+                    "fthr_recorder: could not remove timed-out clip {}: {error}",
+                    stale.path.display()
+                );
+            }
         }
     }
 
@@ -933,6 +1060,9 @@ mod imp {
             }
             keep
         });
+        state
+            .recorded
+            .retain(|span| now.saturating_sub(span.end_unix_ms) < UNCLAIMED_CLIP_TTL_MS);
     }
 
     /// Clips left in `pending` by a previous run were never attached to a replay.
@@ -967,7 +1097,41 @@ mod imp {
 
 #[cfg(all(test, target_os = "windows"))]
 mod tests {
-    use super::imp::build_segments;
+    use super::imp::{RecordedSpan, build_segments, take_recorded_span};
+    use std::collections::VecDeque;
+
+    #[test]
+    fn claims_only_the_recorded_session_that_overlaps_the_run() {
+        let mut recorded = VecDeque::from([
+            RecordedSpan { start_unix_ms: 1_000, end_unix_ms: 61_000 },
+            RecordedSpan { start_unix_ms: 70_000, end_unix_ms: 130_000 },
+        ]);
+        // A run FTHR never saw is not claimed.
+        assert!(!take_recorded_span(&mut recorded, Some(200_000), Some(260_000)));
+        assert_eq!(recorded.len(), 2);
+        // The run inside the second session claims it and leaves the first.
+        assert!(take_recorded_span(&mut recorded, Some(72_000), Some(128_000)));
+        assert_eq!(recorded.len(), 1);
+        assert_eq!(recorded[0].start_unix_ms, 1_000);
+        // Without run timing, the latest session is claimed.
+        assert!(take_recorded_span(&mut recorded, None, None));
+        assert!(recorded.is_empty());
+    }
+
+    #[test]
+    fn pause_straddling_run_start_does_not_underflow() {
+        // Pause 5s..15s, run re-anchored to start at 10s (restart from pause menu).
+        let segments = build_segments(10_000, 70_000, &[(5_000, 15_000)], 0, 80_000);
+        assert_eq!(segments.len(), 1);
+        assert_eq!((segments[0].replay_start_ms, segments[0].video_start_ms, segments[0].duration_ms), (0, 15_000, 55_000));
+    }
+
+    #[test]
+    fn overlapping_pauses_count_once() {
+        let segments = build_segments(0, 60_000, &[(20_000, 25_000), (22_000, 30_000)], 0, 60_000);
+        assert_eq!(segments.len(), 2);
+        assert_eq!((segments[1].replay_start_ms, segments[1].video_start_ms, segments[1].duration_ms), (20_000, 30_000, 30_000));
+    }
 
     #[test]
     fn maps_unpaused_run_onto_clip() {

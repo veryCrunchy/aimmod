@@ -426,8 +426,9 @@ fn process_stats_csv(app: AppHandle, path: PathBuf) {
                     metrics: mouse_capture.metrics,
                     frames: screen_frames,
                     run_snapshot: run_snapshot.clone(),
-                    video: screen_video,
+                    video: screen_video.video,
                 },
+                screen_video.recorded,
             );
             if has_replay {
                 crate::session_store::set_session_has_replay(&app, &session_id, true);

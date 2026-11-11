@@ -8,7 +8,9 @@ installGlobalErrorLogging("main");
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <ErrorBoundary name="main">
+    {/* The overlay sits over the game and ignores clicks: hide errors (they
+        are still logged) rather than cover the game with an error panel. */}
+    <ErrorBoundary name="main" hidden>
       <App />
     </ErrorBoundary>
   </React.StrictMode>

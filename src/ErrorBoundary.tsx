@@ -4,9 +4,13 @@ import { logError } from "./log";
 /**
  * Catches render errors so a failing component shows its error instead of
  * blanking the whole window, and forwards the error to aimmod.log.
+ *
+ * `hidden` renders nothing on error. Use it in the transparent, click-through
+ * game overlay, where an error panel would cover the game and its button
+ * could not be clicked.
  */
 export class ErrorBoundary extends React.Component<
-  { name: string; children: React.ReactNode },
+  { name: string; hidden?: boolean; children: React.ReactNode },
   { error: Error | null }
 > {
   state: { error: Error | null } = { error: null };
@@ -25,6 +29,7 @@ export class ErrorBoundary extends React.Component<
   render() {
     const { error } = this.state;
     if (!error) return this.props.children;
+    if (this.props.hidden) return null;
     return (
       <div style={{ padding: 24, color: "#f5f5f5", background: "#111", minHeight: "100vh", fontFamily: "monospace" }}>
         <h2 style={{ marginBottom: 12 }}>Something in this view crashed</h2>

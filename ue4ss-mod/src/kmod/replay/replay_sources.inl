@@ -423,15 +423,26 @@ static auto replay_collect_entity_actor_refs(std::vector<ReplayEntityActorRef>& 
     const std::vector<RC::Unreal::UObject*> candidates =
         replay_find_all_cached(character_cache, STR("MetaCharacter"), STR("FPSCharacter_C"), 250);
 
-    // Identity fields (name, profile, controller presence) only change when
-    // the candidate list does, so they are cached per actor and rebuilt with
-    // it; transforms are still read live every sample.
+    // Name and profile never change for an actor, so they are cached per actor;
+    // transforms are still read live every sample. Controller presence can
+    // arrive after the actor is first seen (spawned before possession), so an
+    // actor with neither controller is read again once per list refresh.
+    //
+    // The list is reused for up to 250ms, and GC can free an actor in that
+    // time. A freed actor's memory stays readable, so each cached actor is
+    // looked up again by path before use: a freed one is not found, and an
+    // address reused by a new actor resolves to a different object.
     struct CachedEntityInfo {
         bool usable = false;
+        // Set when the actor failed the liveness check; dropped on refresh.
+        bool gone = false;
+        RC::StringType path{};
         std::string id{};
         std::string profile{};
         bool is_player = false;
         bool is_bot = false;
+        // List generation the controller fields were last read in.
+        uint64_t controllers_read_generation = 0;
     };
     static std::unordered_map<RC::Unreal::UObject*, CachedEntityInfo> entity_info_cache{};
     static uint64_t entity_info_generation = 0;
@@ -441,7 +452,7 @@ static auto replay_collect_entity_actor_refs(std::vector<ReplayEntityActorRef>& 
         // replay sampling stall the mod for seconds with many characters.
         std::unordered_set<RC::Unreal::UObject*> present(candidates.begin(), candidates.end());
         for (auto it = entity_info_cache.begin(); it != entity_info_cache.end();) {
-            if (present.count(it->first) == 0) {
+            if (present.count(it->first) == 0 || it->second.gone) {
                 it = entity_info_cache.erase(it);
             } else {
                 ++it;
@@ -458,11 +469,31 @@ static auto replay_collect_entity_actor_refs(std::vector<ReplayEntityActorRef>& 
         }
 
         auto cached = entity_info_cache.find(obj);
+        if (cached != entity_info_cache.end()) {
+            CachedEntityInfo& known = cached->second;
+            if (known.gone) {
+                continue;
+            }
+            if (known.usable) {
+                auto* live = RC::Unreal::UObjectGlobals::StaticFindObject<RC::Unreal::UObject*>(
+                    nullptr,
+                    nullptr,
+                    known.path.c_str()
+                );
+                if (live != obj) {
+                    // Freed, or the address now holds another actor. Skip it
+                    // until the next refresh; touching it could crash.
+                    known.gone = true;
+                    continue;
+                }
+            }
+        }
         if (cached == entity_info_cache.end()) {
             CachedEntityInfo info{};
             const auto full_name = obj->GetFullName();
             if (!replay_is_rejected_runtime_object_name(full_name)) {
-                info.id = utf8_from_wide(replay_object_path_from_full_name(full_name));
+                info.path = replay_object_path_from_full_name(full_name);
+                info.id = utf8_from_wide(info.path);
                 info.usable = !info.id.empty();
             }
             if (info.usable) {
@@ -470,17 +501,21 @@ static auto replay_collect_entity_actor_refs(std::vector<ReplayEntityActorRef>& 
                 if (replay_read_string_property(obj, "characterprofilename", profile)) {
                     info.profile = profile;
                 }
-                bool has_player = false;
-                bool has_ai = false;
-                info.is_player =
-                    replay_read_object_presence_property(obj, "myplayercontroller", has_player) && has_player;
-                info.is_bot = replay_read_object_presence_property(obj, "myaicontroller", has_ai) && has_ai;
             }
             cached = entity_info_cache.emplace(obj, std::move(info)).first;
         }
-        const CachedEntityInfo& info = cached->second;
+        CachedEntityInfo& info = cached->second;
         if (!info.usable) {
             continue;
+        }
+        if (!info.is_player && !info.is_bot
+            && info.controllers_read_generation != entity_info_generation) {
+            bool has_player = false;
+            bool has_ai = false;
+            info.is_player =
+                replay_read_object_presence_property(obj, "myplayercontroller", has_player) && has_player;
+            info.is_bot = replay_read_object_presence_property(obj, "myaicontroller", has_ai) && has_ai;
+            info.controllers_read_generation = entity_info_generation;
         }
         if (!seen_ids.insert(info.id).second) {
             continue;
