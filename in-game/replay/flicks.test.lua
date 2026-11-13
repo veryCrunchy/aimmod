@@ -23,9 +23,9 @@ local function text(value)local n=make('TextBlock');n:SetText(value);return n en
 local function button(label,x,w,callback)buttons[label]=callback end
 local update=M.create('synthetic',make,function()end,text,{},button,function(a,v)commands[#commands+1]={a,v}end)
 update({time=.2,playing=false})
-assert(made[1].SetVisibilityValue==3 and made[2].SetTextValue=='Flick efficiency: 90%')
+assert(made[1].SetVisibilityValue==3 and made[3].SetTextValue=='Flick efficiency: 90%')
 update({time=.2,playing=true});assert(made[1].SetVisibilityValue==2)
-buttons['|']();assert(commands[1][1]=='flick-seek' and commands[1][2]==0)
-buttons.Paths();update({time=.2,playing=false});assert(made[1].SetVisibilityValue==2)
+buttons['']();assert(commands[1][1]=='flick-seek' and commands[1][2]==0)
+buttons['Flick paths']();update({time=.2,playing=false});assert(made[1].SetVisibilityValue==2)
 io.open=opened
 print('4 flick rendering and interaction checks passed')

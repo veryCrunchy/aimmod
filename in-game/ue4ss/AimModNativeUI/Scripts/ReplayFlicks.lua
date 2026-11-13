@@ -30,19 +30,22 @@ function M.create(id,make,place,text,canvas,button,send)
     local paths,duration={}
     if file then local data=file:read(16000001);file:close();paths,duration=M.parse(data,id)end
     local panel=make('CanvasPanel');panel:SetVisibility(2);place(canvas,panel,24,120,340,240)
+    -- A backdrop keeps the path readable over bright maps.
+    local backdrop=make('Border');backdrop:SetVisibility(3);backdrop:SetPadding({Left=0,Top=0,Right=0,Bottom=0});backdrop:SetBrushColor({R=.009,G=.024,B=.018,A=.88});place(panel,backdrop,-12,-10,364,260)
     local caption=text('',14);place(panel,caption,0,0,340,24)
     local legend=text('Recorded: green   Ideal: amber',11);place(panel,legend,0,218,340,20)
     local lines={}
-    for k=1,96 do local line=make('Border');line:SetVisibility(2);line:SetPadding({Left=0,Top=0,Right=0,Bottom=0});place(panel,line,0,0,1,2);lines[k]=line end
+    for k=1,128 do local line=make('Border');line:SetVisibility(2);line:SetPadding({Left=0,Top=0,Right=0,Bottom=0});place(panel,line,0,0,1,2);lines[k]=line end
     local enabled=true;local previous
-    button('Paths',740,112,function()enabled=not enabled;previous=nil;panel:SetVisibility(2)end)
+    button('Flick paths',716,136,function()enabled=not enabled;previous=nil;panel:SetVisibility(2)end)
     -- Markers use the HUD's registered button routes and its existing scrubber coordinates.
     local bins={}
+    local marker={normal={R=.62,G=.38,B=.06,A=1},hover={R=1,G=.72,B=.2,A=1},pressed={R=.42,G=.25,B=.04,A=1},disabled={R=.2,G=.14,B=.05,A=.55}}
     for index,f in ipairs(paths)do
         local bin=math.floor(f.time/duration*124)
         if not bins[bin]then
             bins[bin]=true
-            button('|',24+bin*8,8,function()send('flick-seek',index-1)end,false,42,12)
+            button('',25+bin*8,6,function()send('flick-seek',index-1)end,false,66,12,marker)
         end
     end
     return function(state)
