@@ -60,6 +60,27 @@ namespace aimmod
     // code and a message for the player. Never partially accepted.
     std::variant<GameCommand, CommandError> ParseGameCommand(std::string_view text);
 
+    // Decides which contents of core-command.tsv are requests to run. Each
+    // request runs once, and one left from an earlier session never runs.
+    // Whether a request is left over is settled by when the file was written,
+    // not by which read happens to see it first: the first read may fail, and
+    // a request written right after start-up must still run.
+    class CommandIntake
+    {
+    public:
+        // The file's contents. `sinceStart`: the file was written after
+        // AimModCore started (only used until the first contents are judged).
+        std::optional<std::variant<GameCommand, CommandError>> Offer(std::string_view text, bool sinceStart);
+        // The file does not exist: nothing is left over, the next request is new.
+        void Missing() { m_primed = true; }
+        bool primed() const { return m_primed; }
+
+    private:
+        std::string m_text;
+        std::uint64_t m_sequence{};
+        bool m_primed{};
+    };
+
     // "AIMMOD_CORE_RESULT_1\t<seq>\t<state>\t<code>\t<message>\n"; state is
     // accepted | done | error. The message is %-escaped like the journal.
     std::string FormatCommandResult(std::uint64_t sequence, std::string_view state, std::string_view code, std::string_view message);

@@ -272,6 +272,26 @@ namespace aimmod
         return out.substr(0, out.size() - 4) + "-" + std::to_string(index + 1) + ".png";
     }
 
+    std::optional<std::variant<GameCommand, CommandError>> CommandIntake::Offer(std::string_view text, bool sinceStart)
+    {
+        if (m_primed && text == m_text) return std::nullopt;
+        m_text = text;
+        auto parsed = ParseGameCommand(text);
+        const std::uint64_t sequence = std::holds_alternative<GameCommand>(parsed) ? std::get<GameCommand>(parsed).sequence : std::get<CommandError>(parsed).sequence;
+        if (!m_primed)
+        {
+            m_primed = true;
+            if (!sinceStart)
+            {
+                m_sequence = sequence;
+                return std::nullopt;
+            }
+        }
+        if (sequence != 0 && sequence <= m_sequence) return std::nullopt;
+        if (sequence != 0) m_sequence = sequence;
+        return parsed;
+    }
+
     std::string FormatCommandResult(std::uint64_t sequence, std::string_view state, std::string_view code, std::string_view message)
     {
         std::string out = "AIMMOD_CORE_RESULT_1\t" + std::to_string(sequence) + "\t" + std::string(state) + "\t" + std::string(code) + "\t";
