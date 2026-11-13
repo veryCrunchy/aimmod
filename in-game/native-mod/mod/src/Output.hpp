@@ -186,11 +186,12 @@ namespace aimmod
         std::set<std::wstring> m_consumed;
         std::uint64_t m_lastStatsScan{};
         std::deque<std::variant<GameCommand, CommandError>> m_commands;
-        std::string m_commandText;
-        std::uint64_t m_commandSequence{}, m_lastCommandCheck{};
-        bool m_commandPrimed{};
+        CommandIntake m_intake;
+        // When this session started, as a file time: a command file written
+        // before it is left over (see CommandIntake).
+        std::uint64_t m_commandStart{}, m_lastCommandCheck{};
         std::deque<std::string> m_results, m_resultHistory;
-        void ReadCommand(std::uint64_t now);
+        void ReadCommand(std::uint64_t now, bool starting);
         std::string m_version;
         std::thread m_thread;
         std::atomic<std::shared_ptr<const FileSnapshot>> m_files[3];

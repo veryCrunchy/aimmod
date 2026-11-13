@@ -47,6 +47,32 @@ namespace aimmod
             return true;
         }
 
+        std::uint64_t Ticks(const FILETIME& time) { return (static_cast<std::uint64_t>(time.dwHighDateTime) << 32) | time.dwLowDateTime; }
+
+        // core-command.tsv with its last write time, taken from the handle the
+        // text is read from so the two always describe the same file.
+        enum class Found { Yes, Missing, Unreadable };
+        Found ReadCommandFile(const std::filesystem::path& path, std::string& out, std::uint64_t& written)
+        {
+            HANDLE file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+                                      FILE_ATTRIBUTE_NORMAL, nullptr);
+            if (file == INVALID_HANDLE_VALUE)
+            {
+                const DWORD error = GetLastError();
+                return error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND ? Found::Missing : Found::Unreadable;
+            }
+            constexpr DWORD limit = 4097;
+            out.assign(limit, '\0');
+            DWORD read = 0;
+            FILETIME time{};
+            const bool ok = GetFileTime(file, nullptr, nullptr, &time) && ReadFile(file, out.data(), limit, &read, nullptr);
+            CloseHandle(file);
+            if (!ok) return Found::Unreadable;
+            out.resize(read);
+            written = Ticks(time);
+            return Found::Yes;
+        }
+
         bool WriteAll(HANDLE file, const std::string& data)
         {
             std::size_t done = 0;
@@ -104,6 +130,16 @@ namespace aimmod
             std::memcpy(bytes + 4, &layout, 4);
         }
         m_stop = false;
+        // Whatever core-command.tsv holds now is left from an earlier session.
+        // If it cannot be read yet, its write time decides once it can.
+        if (!m_intake.primed())
+        {
+            FILETIME started{};
+            GetSystemTimeAsFileTime(&started);
+            m_commandStart = Ticks(started);
+            m_lastCommandCheck = 0;
+            ReadCommand(NowMs(), true);
+        }
         Periodic(true);
         m_thread = std::thread([this] { Run(); });
         return true;
@@ -168,26 +204,19 @@ namespace aimmod
         m_wake.notify_one();
     }
 
-    void Output::ReadCommand(std::uint64_t now)
+    void Output::ReadCommand(std::uint64_t now, bool starting)
     {
         if (now - m_lastCommandCheck < 100) return;
         m_lastCommandCheck = now;
         std::string text;
-        if (!ReadSmall(m_root / L"core-command.tsv", text, 4097) || text == m_commandText) return;
-        m_commandText = text;
-        auto parsed = ParseGameCommand(text);
-        const std::uint64_t sequence = std::holds_alternative<GameCommand>(parsed) ? std::get<GameCommand>(parsed).sequence : std::get<CommandError>(parsed).sequence;
-        // A request left from an earlier session is never replayed.
-        if (!m_commandPrimed)
-        {
-            m_commandPrimed = true;
-            m_commandSequence = sequence;
-            return;
-        }
-        if (sequence != 0 && sequence <= m_commandSequence) return;
-        if (sequence != 0) m_commandSequence = sequence;
+        std::uint64_t written = 0;
+        const Found found = ReadCommandFile(m_root / L"core-command.tsv", text, written);
+        if (found == Found::Missing) m_intake.Missing();
+        if (found != Found::Yes) return;
+        auto command = m_intake.Offer(text, !starting && written >= m_commandStart);
+        if (!command) return;
         std::lock_guard lock(m_mutex);
-        if (m_commands.size() < 8) m_commands.push_back(std::move(parsed));
+        if (m_commands.size() < 8) m_commands.push_back(std::move(*command));
     }
 
     void Output::PublishSelfPose(std::string body)
@@ -969,9 +998,7 @@ namespace aimmod
             std::lock_guard lock(m_mutex);
             m_clips = clips;
         }
-        if (std::error_code missing; !m_commandPrimed && now - m_lastCommandCheck >= 100 && !std::filesystem::exists(m_root / L"core-command.tsv", missing))
-            m_commandPrimed = true;
-        ReadCommand(now);
+        ReadCommand(now, false);
         {
             std::deque<std::string> results;
             {
