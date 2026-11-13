@@ -110,10 +110,19 @@ static class WorkspaceChecks
                 Check(response.StatusCode == HttpStatusCode.NotFound, "absent local run telemetry not invented");
             var unicodeSnapshot = "{\"scenario\":\"Synthetic \u7df4\u7fd2\"}";
             host.Update(unicodeSnapshot);
+            var unicodeTag = WorkspaceHost.Encode(unicodeSnapshot).Tag;
             for (var poll = 0; poll < 2; poll++)
-                Check(await client.GetStringAsync(root + "/data") == unicodeSnapshot, "Cached snapshot preserves UTF-8 across repeated polls");
+                Check(await client.GetStringAsync(root + "/data") == "{\"snapshot\":\"" + unicodeTag + "\"," + unicodeSnapshot[1..], "Cached snapshot preserves UTF-8 across repeated polls");
+            Check(unicodeTag.Length == 16 && WorkspaceHost.Encode("{\"scenario\":\"Synthetic\"}").Tag != unicodeTag && WorkspaceHost.Encode("{}").Tag.Length == 0, "snapshot tag follows the content");
+            using (var response = await client.GetAsync(root + "/data?have=" + unicodeTag))
+                Check(response.StatusCode == HttpStatusCode.NoContent && (await response.Content.ReadAsByteArrayAsync()).Length == 0, "poll holding the current snapshot gets no body");
+            using (var response = await client.GetAsync(root + "/data?have=0000000000000000"))
+                Check(response.StatusCode == HttpStatusCode.OK && (await response.Content.ReadAsStringAsync()).Contains(unicodeTag), "poll holding another snapshot gets the current one");
+            host.Update(unicodeSnapshot);
+            using (var response = await client.GetAsync(root + "/data?have=" + unicodeTag))
+                Check(response.StatusCode == HttpStatusCode.NoContent, "republishing identical data keeps the tag");
             host.Update("{\"synthetic\":true,\"revision\":7}");
-            using (var response = await client.GetAsync(root + "/data"))
+            using (var response = await client.GetAsync(root + "/data?have=" + unicodeTag))
             {
                 using var snapshot = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
                 Check(response.StatusCode == HttpStatusCode.OK && response.Content.Headers.ContentType?.MediaType == "application/json" && snapshot.RootElement.GetProperty("revision").GetInt32() == 7, "snapshot GET exposes current data");
