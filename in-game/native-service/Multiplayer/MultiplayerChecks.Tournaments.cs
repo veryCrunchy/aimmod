@@ -22,8 +22,41 @@ static partial class MultiplayerChecks
         }
     }
 
+    // Calls back into the tournament service from another thread, the way the multiplayer tick asks for tournament notices.
+    sealed class ReentrantLobby : ITournamentLobby
+    {
+        public TournamentService? Service;
+        public bool Blocked;
+        public LobbyResult HostTournamentGame(TournamentGameSpec spec) => LobbyResult.Success;
+        public LobbyResult JoinTournamentLobby(string lobbyId, string matchId, string? joinToken) => LobbyResult.Success;
+        public TournamentLobbyState? TournamentLobby()
+        {
+            var other = Task.Run(() => Service?.Notice());
+            if (!other.Wait(TimeSpan.FromSeconds(2))) Blocked = true;
+            return null;
+        }
+        public string? TournamentPlayedScenario() => null;
+        public byte[]? TournamentReplay(string lobbyMatch) => null;
+        public bool CanHostLobby => false;
+    }
+
+    static void TournamentLockOrder(string root)
+    {
+        var output = Path.Combine(root, "tournament-lock-order");
+        Directory.CreateDirectory(output);
+        using var hub = new Hub(Path.Combine(root, "hub-lock-order"), new TournamentFixture());
+        var lobby = new ReentrantLobby();
+        var tournaments = new TournamentService(new HubTournamentSource(hub), lobby, () => true, () => ["Synthetic A"], () => "Synthetic Player", output, () => 0, autoTick: false);
+        lobby.Service = tournaments;
+        tournaments.View();
+        Check(!lobby.Blocked, "The tournament view reads the lobby without holding its own lock");
+        tournaments.ObsView();
+        Check(!lobby.Blocked, "The tournament OBS view reads the lobby without holding its own lock");
+    }
+
     static void Tournaments(string root)
     {
+        TournamentLockOrder(root);
         TournamentRules();
         TournamentHubClient(root);
         TournamentSeedCommand(root);

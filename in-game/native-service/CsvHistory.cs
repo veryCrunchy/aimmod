@@ -58,6 +58,9 @@ sealed class CsvHistory
   var score=Number("Score")??throw new FormatException("Missing score.");
   if(!fields.TryGetValue("Challenge Start",out var startText)||!TimeSpan.TryParseExact(startText,["hh\\:mm\\:ss","hh\\:mm\\:ss\\.FFFFFFF","hh\\.mm\\.ss"],CultureInfo.InvariantCulture,out var start)||start<TimeSpan.Zero||start>=TimeSpan.FromDays(1))throw new FormatException("Missing challenge start.");
   var duration=(end.TimeOfDay-start).TotalSeconds;if(duration<0)duration+=86400;
+  var pause=Number("Pause Duration")??0;
+  if(pause<0||pause>=duration)throw new FormatException("Invalid pause duration.");
+  duration-=pause;
   var hit=Number("Hit Count");var miss=Number("Miss Count");double? accuracy=hit is >=0&&miss is >=0&&hit+miss>0?hit/(hit+miss)*100:null;
   var run=new Run("",match.Groups["scenario"].Value,score,accuracy,duration,Math.Max(0,Number("Kills")??0),Math.Max(0,Number("Damage Done")??0),match.Groups["stamp"].Value,null,null,null,null,false);
   if(!Valid(run))throw new FormatException("Invalid score or duration.");

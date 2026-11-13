@@ -42,6 +42,16 @@ namespace aimmod
         void Stop();
 
         void AppendJournal(std::string line);
+        void PerfWarning(std::string line);
+        struct FileSnapshot { std::string text; std::uint64_t stamp{}; };
+        std::shared_ptr<const FileSnapshot> Snapshot(unsigned index) const { return index < 3 ? m_files[index].load() : nullptr; }
+        std::unique_ptr<replay2::Capture> TakeCapture() { std::lock_guard lock(m_mutex); return std::move(m_spareCapture); }
+        void PublishPerf(std::string body) { std::lock_guard lock(m_mutex); m_perf = std::move(body); }
+        bool RuntimeEditsKnown() const { return m_editsSaved.load() >= 0; }
+        bool RuntimeEditsPending() const { return m_editsSaved.load() == 1; }
+        bool RequestRuntimeEdits() { if (m_editsClearing.load()) return false; m_editsWanted = 1; return m_editsSaved.load() == 1; }
+        void ClearRuntimeEdits() { m_editsClearing = true; m_editsWanted = 0; }
+
         void PublishLive(std::string body);
         // core-scene.json: what the game currently shows (replay start gate).
         void PublishScene(std::string body);
@@ -126,7 +136,7 @@ namespace aimmod
         void PublishPointer(std::string body);
         void PublishReplayStatus(std::string body);
         // Encodes (format 2) and publishes a completed recording.
-        void ReplayWrite(std::unique_ptr<replay2::Capture> capture);
+        void ReplayWrite(std::unique_ptr<replay2::Capture> capture, bool discard = false);
         void SetCapabilities(std::string capabilities);
 
         // Looks for the stats CSV the game writes when this attempt completes
@@ -149,7 +159,7 @@ namespace aimmod
     private:
         struct Job
         {
-            enum class Kind { Journal, Replay };
+            enum class Kind { Journal, Replay, Discard, Warning };
             Kind kind{};
             std::string data;
             std::shared_ptr<replay2::Capture> capture;
@@ -176,13 +186,19 @@ namespace aimmod
         std::set<std::wstring> m_consumed;
         std::uint64_t m_lastStatsScan{};
         std::deque<std::variant<GameCommand, CommandError>> m_commands;
-        std::string m_commandText;
-        std::uint64_t m_commandSequence{}, m_lastCommandCheck{};
-        bool m_commandPrimed{};
+        CommandIntake m_intake;
+        // When this session started, as a file time: a command file written
+        // before it is left over (see CommandIntake).
+        std::uint64_t m_commandStart{}, m_lastCommandCheck{};
         std::deque<std::string> m_results, m_resultHistory;
-        void ReadCommand(std::uint64_t now);
+        void ReadCommand(std::uint64_t now, bool starting);
         std::string m_version;
         std::thread m_thread;
+        std::atomic<std::shared_ptr<const FileSnapshot>> m_files[3];
+        std::atomic<bool> m_editsClearing{};
+        std::atomic<int> m_editsSaved{-1}, m_editsWanted{-1};
+        std::string m_perf;
+        std::unique_ptr<replay2::Capture> m_spareCapture;
         std::mutex m_mutex;
         std::condition_variable m_wake;
         std::deque<Job> m_jobs;

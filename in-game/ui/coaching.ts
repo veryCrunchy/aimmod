@@ -32,7 +32,7 @@ const cardCopy:Record<string,[string,string]>={
  'global-precision-ahead-of-tempo':['Add a little speed','Pair a reliable accuracy scenario with a faster contrast.'],
  'global-tempo-ahead-of-precision':['Keep speed under control','Reduce pace until first-shot quality holds steady.'],
  'global-control-foundation':['Challenge your control','Increase one demand: target size, speed, or switching.'],
- 'global-learning-efficiency-low':['Simplify your practice','Keep fewer scenarios, stable blocks, and one main focus.'],
+ 'global-learning-efficiency-low':['Repeat one scenario for 3 runs','Keep the setup and block length the same.'],
  'global-learning-efficiency-strong':['Raise one challenge','Keep the same routine while increasing one demand.'],
  'global-practice-density':['Split up long sessions','Use shorter sessions to keep the quality of your practice.'],
  'global-practice-cadence':['Keep your practice rhythm','Adjust one demand at a time while keeping your routine.'],
@@ -45,7 +45,7 @@ const cardCopy:Record<string,[string,string]>={
  'global-retention-weak':['Repeat a familiar routine','Keep your main scenarios and block structure consistent.'],
  'global-retention-strong':['Try a harder variation','Keep your routine and rotate a little more difficulty.'],
  'global-momentum-up':['Build on recent progress','Raise difficulty slightly or choose one technical focus.'],
- 'global-momentum-down':['Reset your practice','Simplify your scenario rotation and return to one focus.'],
+ 'global-momentum-down':['Rebuild your recent score average','Use one familiar scenario for your next block.'],
  'global-variance-high':['Make your setup repeatable','Keep the same warm-up, setup, and first-block focus.'],
  'global-stable':['Change one thing at a time','Keep your routine and add a small, deliberate challenge.']
 };
@@ -67,12 +67,12 @@ function rankScenarios(input:any[],names?:Record<string,string>){
   else if(last.length>=8&&spread>=0.08){kind='consistency';issue='Scores swing a lot';detail='Your last '+last.length+' runs vary by ±'+fmt(spread*100)+'% around '+fmt(mean(last));}
   else if(gap>=0.05){kind='gap';issue='Below your best';detail='Last 5 average '+fmt(recentAvg)+' · best '+fmt(best);}
   else {kind='close';issue='Close to your best';detail='Last 5 average is within '+Math.max(1,Math.ceil(gap*100))+'% of your best '+fmt(best);}
-  rows.push({key,name:names&&names[key]||key,runs:runs.length,best,recentAvg,gap,spread,kind,issue,detail,recent:last,lastPlayed:runs[runs.length-1].timestampMs});});
+  rows.push({usualAccuracy:usual,recentAccuracy:now,key,name:names&&names[key]||key,runs:runs.length,best,recentAvg,gap,spread,kind,issue,detail,recent:last,lastPlayed:runs[runs.length-1].timestampMs});});
  rows.sort((a,b)=>b.gap-a.gap||b.runs-a.runs);return rows;
 }
 function render(container:HTMLElement,state:any,onScenario?:(name:string)=>void,onDrillSearch?:(query:string)=>void){
  const host=container as any;const view=host.aimmodCoachingView||{scope:'all',expanded:{},input:null,results:{}};host.aimmodCoachingView=view;
- view.redraw=null;view.observed=view.observed||{};view.feedback=view.feedback||{feedback:[],history:[]};
+ view.observed=view.observed||{};view.feedback=view.feedback||{feedback:[],history:[]};
  function send(body:any,done:()=>void){if(view.busy||!window.XMLHttpRequest)return;view.busy=true;const xhr=new XMLHttpRequest();const path=window.location.pathname;const base=path.slice(0,path.lastIndexOf('/'));xhr.open(body?'POST':'GET',base+'/coaching-feedback',true);xhr.timeout=12000;if(body){xhr.setRequestHeader('X-AimMod-UI','1');xhr.setRequestHeader('Content-Type','application/json');}let finished=false;function finish(ok:boolean){if(finished)return;finished=true;view.busy=false;if(ok){try{const data=JSON.parse(xhr.responseText);if(!Array.isArray(data.feedback)||!Array.isArray(data.history))throw new Error();view.feedback=data;view.feedbackLoaded=true;view.feedbackError=false;}catch(e){ok=false;}}if(!ok)view.feedbackError=true;done();if(view.redraw)view.redraw();}xhr.onreadystatechange=()=>{if(xhr.readyState===4)finish(xhr.status===200);};xhr.onerror=xhr.ontimeout=()=>finish(false);xhr.send(body?JSON.stringify(body):null);}
  function mark(scope:string,id:string,feedback:string){send({action:'feedback',scope,id,feedback},()=>{});}
  function feedbackFor(scope:string,id:string){return view.feedback.feedback.filter((x:any)=>x.scope===scope&&x.id===id)[0]?.feedback;}
@@ -82,7 +82,7 @@ function render(container:HTMLElement,state:any,onScenario?:(name:string)=>void,
  const input=state.coachingHistory||[];let signature='';try{signature=JSON.stringify(input);}catch(e){signature=String(Math.random());}if(view.signature!==signature){view.signature=signature;view.input=input;view.results={};}
  if(!state.selectedScenario)view.scope='all';
  function button(parent:HTMLElement,label:string,action:()=>void,cls='button'){const b=node(parent,'button',label,cls) as HTMLButtonElement;b.type='button';b.onclick=action;return b;}
- function draw(){container.textContent='';const shell=node(container,'div',undefined,'coach-workspace');const toolbar=node(shell,'div',undefined,'coach-toolbar');const scopes=node(toolbar,'div',undefined,'coach-scopes');
+ function draw(){if((window as any).AimModPractice)(window as any).AimModPractice.dispose(container);container.textContent='';const shell=node(container,'div',undefined,'coach-workspace');const toolbar=node(shell,'div',undefined,'coach-toolbar');const scopes=node(toolbar,'div',undefined,'coach-scopes');
   for(const item of [{key:'all',label:'All practice'},{key:'scenario',label:'This scenario'}]){const b=button(scopes,item.label,()=>{view.scope=item.key;draw();},'button'+(view.scope===item.key?' primary':''));b.setAttribute('aria-pressed',String(view.scope===item.key));b.disabled=item.key==='scenario'&&!state.selectedScenario;}
   const scenario=view.scope==='scenario'?String(state.selectedScenario).trim().toLowerCase():undefined;
   const cacheKey=scenario?'scenario:'+scenario:'all';const result=view.results[cacheKey]||(view.results[cacheKey]=analyze(input,scenario));
@@ -91,18 +91,20 @@ function render(container:HTMLElement,state:any,onScenario?:(name:string)=>void,
   const names:Record<string,string>={};(state.scenarios||[]).forEach((x:any)=>{if(x&&typeof x.name==='string')names[x.name.trim().toLowerCase()]=x.name;});
   if(!view.ranking||view.rankingSignature!==view.signature){view.ranking=rankScenarios(input,names);view.rankingSignature=view.signature;}
   function ranking(parent:HTMLElement){const panel=node(parent,'div',undefined,'coach-ranking');const head=node(panel,'div',undefined,'coach-panel-head');node(head,'h3','Room to improve');node(head,'p','Scenarios ranked by how far your last 5 runs sit below your best.','coach-axis-caption');
-   const rows=view.ranking.slice(0,6);if(!rows.length){node(panel,'p','Play at least 5 runs on a scenario to rank it here.','coach-rank-empty');return;}
+   const rows=view.ranking.slice(0,4);if(!rows.length){node(panel,'p','Play at least 5 runs on a scenario to rank it here.','coach-rank-empty');return;}
    const selectedKey=String(state.selectedScenario||'').trim().toLowerCase();
    rows.forEach((row:any,index:number)=>{const item=button(panel,'',()=>{view.scope='scenario';if(onScenario)onScenario(row.name);draw();},'coach-rank'+(row.key===selectedKey?' selected':''));item.setAttribute('aria-label',row.name+': '+row.issue);
     node(item,'span',String(index+1),'coach-rank-index');const body=node(item,'span',undefined,'coach-rank-body');node(body,'strong',row.name,'coach-rank-name');const line=node(body,'span',undefined,'coach-rank-issue '+row.kind);node(line,'span',row.issue,'coach-rank-kind');node(line,'span','· '+row.detail,'coach-rank-detail');
     // Mini visual: last runs as bars, scaled from 90% of the lowest run to the best.
-    const bars=node(item,'span',undefined,'coach-spark');const low=Math.min.apply(null,row.recent)*0.9,span=Math.max(1e-6,row.best-low);row.recent.forEach((v:number,i:number)=>{const bar=node(bars,'span',undefined,'coach-spark-bar'+(i===row.recent.length-1?' last':''));bar.style.height=Math.max(3,Math.round((v-low)/span*30))+'px';});
+    const bars=node(item,'span',undefined,'coach-spark');const low=Math.min.apply(null,row.recent)*0.9,span=Math.max(1e-6,row.best-low);bars.setAttribute('role','img');bars.setAttribute('aria-label','Last '+row.recent.length+' scores, oldest to newest: '+row.recent.map((v:number)=>fmt(v)).join(', '));row.recent.forEach((v:number,i:number)=>{const bar=node(bars,'span',undefined,'coach-spark-bar'+(i===row.recent.length-1?' last':''));bar.title='Run '+(i+1)+': '+fmt(v);bar.style.height=Math.max(3,Math.round((v-low)/span*30))+'px';});
     node(item,'span',row.gap>=0.005?'-'+fmt(row.gap*100)+'%':'At best','coach-rank-gap');});}
   if(!result.profile){if(view.ranking.length)ranking(shell);const empty=node(shell,'div',undefined,'coach-empty');node(empty,'h3','Build your practice profile');node(empty,'p','Complete a few more runs to reveal a useful next focus.');history(shell,cacheKey);return;}
   const profile=result.profile,axes=measuredAxes(profile);const validKeys=axes.map((a:any)=>a.key);
   const measuredKeys=axes.filter((a:any)=>a.valuePct>0).map((a:any)=>a.key);const strength=profile.strengths.filter(s=>measuredKeys.indexOf(s.key)>=0)[0];const focus=profile.constraints.filter(s=>measuredKeys.indexOf(s.key)>=0)[0];
   const lead=node(shell,'div',undefined,'coach-summary');node(lead,'span','NEXT BLOCK','coach-eyebrow');
-  node(lead,'h2',focus?'Focus on '+focus.label.toLowerCase():'Keep building your baseline');node(lead,'p',focus?(focusCopy[focus.key]||'Choose one clear focus for your next block.'):'Keep your routine steady and change one demand at a time.');
+  const target=view.ranking.filter((r:any)=>!scenario||r.key===scenario)[0];
+  if(target){node(lead,'h2','3 runs on '+target.name);node(lead,'p',target.detail,'coach-evidence');node(lead,'p',target.kind==='accuracy'?'Slow your first shot. Aim for '+fmt(target.usualAccuracy)+'% accuracy on each run.':'Keep the same setup. Aim for '+fmt(target.recentAvg)+' score or higher on each run.');if(onScenario)button(node(lead,'div',undefined,'actions'),'View scenario analysis',()=>onScenario(target.name),'button primary');}
+  else {node(lead,'h2',focus?'Focus on '+focus.label.toLowerCase():'Record 5 runs on one scenario');node(lead,'p',focus?(focusCopy[focus.key]||'Repeat one scenario for 3 runs, then compare your scores.'):'Use the same setup so your next block has a useful comparison.');}
   const columns=node(shell,'div',undefined,'coach-columns');const left=node(columns,'div',undefined,'coach-profile');left.style.width='49%';left.style.marginRight='2%';const advice=node(columns,'div',undefined,'coach-advice');advice.style.width='49%';
   ranking(left);
   const overview=node(shell,'div',undefined,'coach-signals');const signalRow=node(overview,'div',undefined,'coach-signal-row');
@@ -111,20 +113,22 @@ function render(container:HTMLElement,state:any,onScenario?:(name:string)=>void,
   const axisList=node(indicators,'div',undefined,'coach-axis-list');
   axes.forEach((axis:any)=>{const row=node(axisList,'div',undefined,'coach-axis'+(axis.valuePct>0?'':' missing'));row.style.width='48%';const heading=node(row,'div',undefined,'coach-axis-heading');node(heading,'span',axis.label);node(heading,'span',axis.valuePct>0?Math.round(axis.valuePct)+' / 100':'Not enough data','coach-axis-value');const track=node(row,'div',undefined,'coach-axis-track');track.setAttribute('role','img');track.setAttribute('aria-label',axis.label+': '+Math.round(axis.valuePct)+' of 100');const fill=node(track,'div',undefined,'coach-axis-fill');fill.style.width=axis.valuePct+'%';});
   if(!axes.length)node(indicators,'p','Practice signals will appear as more measurements become available.','coach-axis-caption');
-  function recommendation(card:any,index:number){const copy=cardCopy[card.id]||[card.title,card.tip];const item=node(advice,'div',undefined,index===0?'coach-primary':'coach-more');if(index===0)node(item,'span','TRY THIS NEXT','coach-eyebrow');node(item,'h3',copy[0]);node(item,'p',copy[1]||card.tip||card.body||'',index===0?'coach-action':'coach-action coach-more-body');
+  function recommendation(card:any,index:number){const copy=cardCopy[card.id]||[card.title,card.tip];const item=node(advice,'div',undefined,index===0?'coach-primary':'coach-more');if(index===0)node(item,'span','SUPPORTING EVIDENCE','coach-eyebrow');node(item,'h3',copy[0]);node(item,'p',card.id==='global-learning-efficiency-low'&&target?target.detail:(card.body||copy[1]||'').split('. ')[0]+'.',index===0?'coach-action':'coach-action coach-more-body');
+   if(card.drills&&card.drills.length)node(item,'p','Try: '+card.drills[0].label,'coach-drill-label');
    const details=node(item,'div',undefined,'coach-details');const detailKey=cacheKey+':'+card.id;details.style.display=view.expanded[detailKey]?'block':'none';node(details,'p',card.body);node(details,'p',card.tip,'coach-tip');
    const drills=card.drills||[];if(drills.length){const drillGroup=node(details,'div',undefined,'coach-drills');node(drillGroup,'span','Practice ideas','coach-eyebrow');drills.forEach((d:any)=>{if(onDrillSearch)button(drillGroup,d.label,()=>onDrillSearch(d.query),'button coach-drill');else node(drillGroup,'p',d.label+' - '+d.query);});}
-   const actions=node(item,'div',undefined,'coach-feedback');const useful=button(actions,feedbackFor(cacheKey,card.id)==='helpful'?'Marked useful':'Useful',()=>mark(cacheKey,card.id,feedbackFor(cacheKey,card.id)==='helpful'?'none':'helpful'));useful.setAttribute('aria-pressed',String(feedbackFor(cacheKey,card.id)==='helpful'));const hide=button(actions,'Hide this advice',()=>mark(cacheKey,card.id,'not_for_me'));useful.disabled=hide.disabled=!!view.busy;
+   const actions=node(item,'div',undefined,'coach-feedback');const useful=button(actions,'Got it',()=>mark(cacheKey,card.id,feedbackFor(cacheKey,card.id)==='helpful'?'none':'helpful'));useful.setAttribute('aria-pressed',String(feedbackFor(cacheKey,card.id)==='helpful'));const hide=button(actions,'Not for me',()=>mark(cacheKey,card.id,'not_for_me'));useful.disabled=hide.disabled=!!view.busy;
    const toggle=button(actions,view.expanded[detailKey]?'Hide details':'Show details',()=>{view.expanded[detailKey]=!view.expanded[detailKey];details.style.display=view.expanded[detailKey]?'block':'none';toggle.textContent=view.expanded[detailKey]?'Hide details':'Show details';toggle.setAttribute('aria-expanded',String(!!view.expanded[detailKey]));},'button coach-details-toggle');toggle.setAttribute('aria-expanded',String(!!view.expanded[detailKey]));
   }
   const cards=result.cards.slice(0,16);const observed=JSON.stringify([cacheKey,cards.map((card:any)=>[card.id,card.title,card.body,card.tip])]);
   if(window.XMLHttpRequest&&!view.observed[observed]&&!view.busy&&!view.feedbackError){if(Object.keys(view.observed).length>=32)view.observed={};view.observed[observed]=true;send({action:'observe',scope:cacheKey,cards:cards.map((card:any)=>({id:card.id,title:(cardCopy[card.id]||[card.title])[0],body:card.body||'',tip:card.tip||''}))},()=>{});}
   if(view.feedbackError){node(advice,'p','Your advice preferences are unavailable right now, so hidden advice may reappear.','coach-axis-caption');button(node(advice,'div',undefined,'actions'),'Retry preferences',()=>{view.feedbackError=false;view.observed={};send(null,()=>{});});}
   // Preferences only filter advice; a failed preference request must not hide it.
-  if(!window.XMLHttpRequest||view.feedbackLoaded||view.feedbackError){const visibleCards=cards.filter((card:any)=>feedbackFor(cacheKey,card.id)!=='not_for_me');const limit=view.allAdvice?visibleCards.length:4;visibleCards.slice(0,limit).forEach(recommendation);if(visibleCards.length>4){const more=button(node(advice,'div',undefined,'actions'),view.allAdvice?'Show fewer ideas':'Show '+(visibleCards.length-4)+' more ideas',()=>{view.allAdvice=!view.allAdvice;draw();},'button compact coach-more-toggle');more.setAttribute('aria-expanded',String(!!view.allAdvice));}if(cards.length&&!visibleCards.length)node(advice,'p','Your current advice is hidden. Restore it from Advice history.');}else node(advice,'p','Loading advice…');
+  if(!window.XMLHttpRequest||view.feedbackLoaded||view.feedbackError){const visibleCards=cards.filter((card:any)=>feedbackFor(cacheKey,card.id)!=='not_for_me');const limit=view.allAdvice?visibleCards.length:1;visibleCards.slice(0,limit).forEach(recommendation);if(visibleCards.length>1){const more=button(node(advice,'div',undefined,'actions'),view.allAdvice?'Show fewer ideas':'Show '+(visibleCards.length-1)+' more ideas',()=>{view.allAdvice=!view.allAdvice;draw();},'button compact coach-more-toggle');more.setAttribute('aria-expanded',String(!!view.allAdvice));}if(cards.length&&!visibleCards.length)node(advice,'p','Your current advice is hidden. Restore it from Advice history.');}else node(advice,'p','Loading advice…');
+  if((window as any).AimModPractice){const readiness=node(shell,'div',undefined,'coach-readiness');const toggle=button(node(readiness,'div',undefined,'actions'),'Show readiness details',()=>{toggle.disabled=true;(window as any).AimModPractice.summary(node(readiness,'div',undefined,'panel'),'guidance');});}
   history(shell,cacheKey);
   if(!result.cards.length){node(advice,'h3','Keep your next block deliberate');node(advice,'p','Choose one focus, then compare your runs.');}
  }
- view.redraw=draw;draw();if(window.XMLHttpRequest&&!view.feedbackLoaded&&!view.busy&&!view.feedbackError)send(null,()=>{});
+ const renderKey=JSON.stringify([view.signature,state.selectedScenario,state.scenarios,container.offsetWidth]);if(view.renderKey===renderKey&&container.children.length&&(!container.querySelector||!container.querySelector('.practice-summary')||!(window as any).AimModPractice|| (window as any).AimModPractice.active(container)))return;view.renderKey=renderKey;view.redraw=draw;draw();if(window.XMLHttpRequest&&!view.feedbackLoaded&&!view.busy&&!view.feedbackError)send(null,()=>{});
 }
 window.AimModCoaching={render,analyze,measuredAxes,rankScenarios};

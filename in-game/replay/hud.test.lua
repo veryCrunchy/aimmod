@@ -93,14 +93,14 @@ check(hud.view==frame and focused==frame,'returned view is fullscreen host')
 check(panel.class=='Border' and body.class=='CanvasPanel','custom native panel has explicit canvas layout')
 check(canvas.visibility==4 and frame.visibility==4 and panel.visibility==0,'fullscreen containers preserve child hit testing')
 check(panel.slot.Anchors.Minimum.X==.5 and panel.slot.Anchors.Maximum.Y==1,'panel anchored bottom center')
-check(panel.slot.Offsets.Left==-520 and panel.slot.Offsets.Top==-184 and panel.slot.Offsets.Right==1040 and panel.slot.Offsets.Bottom==160,'panel has explicit size and bottom margin')
+check(panel.slot.Offsets.Left==-520 and panel.slot.Offsets.Top==-208 and panel.slot.Offsets.Right==1040 and panel.slot.Offsets.Bottom==184,'panel has explicit size and bottom margin')
 check(panel.slot.Alignment.X==0 and panel.slot.AutoSize==false,'offsets use unambiguous fixed-size slot')
 local marker=canvas.children[2]
 check(marker.visibility==2 and marker.slot.Anchors.Minimum.X==.5 and marker.slot.Anchors.Minimum.Y==.5,'confirmed-hit marker starts hidden at screen center')
 for _,item in ipairs(constructed)do check(item.outer==frame.WidgetTree and item.outer~=owner.WidgetTree,'controls owned by replay tree')end
 local function surfaceFor(item)
     for _,child in ipairs(body.children)do
-        if child.class=='Border' and child.slot.Offsets.Top==96 and child.slot.Offsets.Left==item.slot.Offsets.Left then return child end
+        if child.class=='Border' and child.slot.Offsets.Top==116 and child.slot.Offsets.Left==item.slot.Offsets.Left then return child end
     end
 end
 for i=2,#created-1 do
@@ -127,7 +127,7 @@ for i,command in ipairs(expected)do check(commands[i][1]==command[1] and command
 local function findText(value)for _,item in ipairs(constructed)do if item.text==value then return item end end end
 local function field(label)
     local title=findText(label)
-    for _,item in ipairs(body.children)do if item.class=='TextBlock' and item.slot.Offsets.Left==title.slot.Offsets.Left and item.slot.Offsets.Top==34 then return item end end
+    for _,item in ipairs(body.children)do if item.class=='TextBlock' and item.slot.Offsets.Left==title.slot.Offsets.Left and item.slot.Offsets.Top==30 then return item end end
 end
 local progress;for _,item in ipairs(constructed)do if item.class=='ProgressBar' then progress=item end end
 check(progress and progress.visibility==3,'progress paint does not intercept timeline capture')
@@ -215,4 +215,21 @@ crosshair.Scale=0
 local hiddenCross=M.create(owner,function()end);check(#hiddenCross.view.WidgetTree.RootWidget.children==2,'zero crosshair scale creates no replacement');hiddenCross.close()
 crosshair.Scale=1;weapon.CachedMainXHair=nil
 local missingCross=M.create(owner,function()end);check(#missingCross.view.WidgetTree.RootWidget.children==2,'missing crosshair cache creates no fake replacement');missingCross.close()
+
+
+local auto=M.create(owner,function()end)
+auto.update({playing=true,speed=1,time=1,duration=60})
+local autoPanel=auto.view.WidgetTree.RootWidget.children[1]
+realTime=realTime+4;auto.update({playing=true,speed=1,time=5,duration=60})
+check(autoPanel.visibility==2,'watching hides idle playback controls')
+pointerX=pointerX+20;auto.update({playing=true,speed=1,time=6,duration=60})
+check(autoPanel.visibility==0,'pointer movement restores controls')
+realTime=realTime+4;auto.update({playing=false,speed=1,time=6,duration=60})
+check(autoPanel.visibility==0,'paused playback keeps controls visible')
+auto.close()
+
+check(#M.parseMarkers('AIMMOD_KILLS_1\tsynthetic\t60\n0\n124\n248\n','synthetic')==3,'bounded kill markers accepted')
+check(#M.parseMarkers('AIMMOD_KILLS_1\tother\t60\n124\n','synthetic')==0,'stale recording markers rejected')
+check(#M.parseMarkers('AIMMOD_KILLS_1\tsynthetic\t60\n249\n','synthetic')==0,'out of range markers rejected')
+check(#M.parseMarkers('AIMMOD_KILLS_1\tsynthetic\t60\n124','synthetic')==0,'partial marker writes rejected')
 print('Replay HUD: '..checks..' checks passed')

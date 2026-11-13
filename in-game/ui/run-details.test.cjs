@@ -3,7 +3,7 @@ function setup(){
   const ctx=new Proxy({},{get(){return(...args)=>{for(const a of args)if(typeof a==='number')assert.ok(Number.isFinite(a))}},set(){return true}});
   function element(tag){let text='';return{tag,children:[],style:{},offsetWidth:600,appendChild(e){this.children.push(e);return e},setAttribute(){},getContext(){return ctx},get textContent(){return text},set textContent(v){text=String(v);this.children=[]}}}
   const c=vm.createContext({window:{},document:{createElement:element},setTimeout:fn=>fn()});require('./test-format.cjs').loadFormat(c);vm.runInContext(fs.readFileSync(path.join(__dirname,'run-details.js'),'utf8'),c);
-  const root=element('div');function all(e=root){return[e,...e.children.flatMap(all)]}return{root,all,api:c.window.AimModRunDetails};
+  const root=element('div');function all(e=root){return[e,...e.children.flatMap(all)]}return{root,all,window:c.window,api:c.window.AimModRunDetails};
 }
 function fixture(){return{Run:{Id:'a',Scenario:'<script>synthetic</script>',Score:0,Accuracy:0,Duration:60},Details:{Summary:null,Timeline:[]},Response:null,Episodes:[],EpisodeCount:0,Windows:[],WindowCount:0,
   Shots:[{Sequence:1,Kind:'shot_fired',TimestampMs:1000,Count:1,Targets:[{Label:'Target',Nearest:true,Distance:0,YawErrorDegrees:0,PitchErrorDegrees:null}]}],ShotCount:101,ShotPage:0,ShotPages:2,FirstShotTimestampMs:0};}
@@ -27,7 +27,7 @@ test('leaving invalidates late requests and failures retain a useful explanation
 test('summary labels shot-to-hit as an interval, not latency, and unknown units stay blank',()=>{
   const s=setup();const data=fixture();data.Run.Duration=null;data.Details.Summary={ShotsFired:10,ShotsHit:4,AverageFireToHitMs:null,CorrectiveShotRatio:0};
   s.api.open(s.root,'a',(u,m,b,done)=>done(true,JSON.stringify(data)));
-  assert.ok(s.all().some(e=>e.textContent==='Shot-to-hit interval'));assert.ok(!s.all().some(e=>/latency/i.test(e.textContent)&&!/not input latency/.test(e.textContent)));
+  assert.ok(!s.all().some(e=>e.textContent==='Shot-to-hit interval'));assert.ok(!s.all().some(e=>/latency/i.test(e.textContent)&&!/not input latency/.test(e.textContent)));
   assert.ok(!s.all().some(e=>/—(s|ms|°|%)$/.test(e.textContent)));assert.ok(s.all().some(e=>e.textContent==='4 hits of 10 shots'));
   s.all().find(e=>e.tag==='button'&&e.textContent==='Shots').onclick();assert.ok(!s.all().some(e=>/—°/.test(e.textContent)));
 });
@@ -48,4 +48,13 @@ test('run analysis links to its replay and to the scenario statistics',()=>{
   assert.deepEqual(calls,[['replay','r1'],['scenario','<script>synthetic</script>']]);
   c.window.AimModRunDetails.open(root,'b',(u,m,b,done)=>done(true,JSON.stringify(fixture())));
   assert.ok(!all().some(e=>e.textContent==='Watch replay'));assert.ok(all().some(e=>e.textContent==='Scenario statistics'));
+});
+
+test('practice tabs resolve the replay identity and dispose on tab changes and leave',()=>{
+  const s=setup(),calls=[];let disposed=0;
+  s.window.AimModPractice={run:(host,id,tab,transport,replay)=>{calls.push({id,tab,replay});return()=>disposed++;}};
+  s.api.open(s.root,'native:run-id',(u,m,b,done)=>done(true,JSON.stringify({...fixture(),ReplayId:'recorded-replay'})));
+  s.all().find(e=>e.textContent==='Flicks').onclick();assert.deepEqual(calls[0],{id:'native:run-id',tab:'flicks',replay:'recorded-replay'});
+  s.all().find(e=>e.textContent==='Tracking').onclick();assert.equal(disposed,1);assert.equal(calls[1].replay,'recorded-replay');
+  s.api.leave();assert.equal(disposed,2);
 });

@@ -10,6 +10,7 @@
 // It never touches ranked, leaderboards or the local player; it only reads
 // the local pose and spawns, drives and removes its own actors.
 #include "AvatarPath.hpp"
+#include "FileMailbox.hpp"
 #include "Bridge.hpp"
 #include "GameBindings.hpp"
 #include "GhostMath.hpp"
@@ -125,6 +126,8 @@ namespace aimmod
         game::Getter m_updateClientLocAndRot, m_overrideInvulnerable, m_startCrouching, m_startUncrouch, m_getTeam, m_loadCharacterProfile;
         game::Getter m_setMovementMode, m_updateVisibility, m_death, m_respawn, m_setTeam, m_setHealth;
         std::optional<bridge::avatarstate::File> m_avatarState;
+        std::unique_ptr<FileMailbox> m_orderFiles, m_stateFiles;
+        std::shared_ptr<const std::string> m_orderText, m_stateText;
         double m_nextStateRead = 0;
         double m_nextHelperPark = 0;
         std::set<RC::Unreal::UObject*> m_parkedHelpers; // identity only: logged once each

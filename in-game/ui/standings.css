@@ -38,3 +38,10 @@
 .sb-cs-side.t .sb-name,.sb-cs-side.t .sb-cs-score{color:#f0b45a}
 .sb-cs-side.ct .sb-name,.sb-cs-side.ct .sb-cs-score{color:#66ccff}
 .sb-cs-side.t{border-color:#f0b45a}.sb-cs-side.ct{border-color:#66ccff}
+
+.sb-full.sb-cs{width:840px}.sb-full.sb-cs .sb-num{width:66px}
+.sb-cs .sb-cols{color:#a7bab0}.sb-cs-side.t .sb-name{border-left-color:#f0b45a}.sb-cs-side.ct .sb-name{border-left-color:#66ccff}
+.sb-stream.sb-cs{width:800px}.sb-stream.sb-cs .sb-num{width:62px}
+.sb-corner.sb-cs{width:620px}.sb-corner.sb-cs .sb-num{width:48px}
+@media(max-height:760px){.sb-full.sb-cs{width:800px}.sb-full.sb-cs .sb-row{min-height:28px}.sb-full.sb-cs .sb-num{width:60px}}
+@media(min-height:1300px){.sb-full.sb-cs{transform:scale(1.25);transform-origin:50% 50%}}

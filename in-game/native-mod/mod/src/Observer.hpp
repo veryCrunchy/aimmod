@@ -3,6 +3,7 @@
 // broadcast observations), publishes live telemetry, writes the journal and
 // runs the replay sampler. Read-only with respect to the game.
 #include "Cosmetics.hpp"
+#include <aimmod/Perf.hpp>
 #include "CosmeticsPreview.hpp"
 #include "OverlayHost.hpp"
 #include "HudHost.hpp"
@@ -124,6 +125,7 @@ namespace aimmod
         std::deque<std::pair<std::int64_t, std::string>> m_seenHistory; // earlier publications' target rows
         void PollClipKey();
         void PublishSelfPose(double now);
+        double m_nextTags{};
         void TickTags(double now);
         std::uint32_t PoseId(UObject* actor);
         struct QuitAudit
@@ -149,6 +151,8 @@ namespace aimmod
         std::atomic<std::uint32_t> m_gameThread{0};
         std::uint32_t m_mainThread{0};
         std::atomic<bool> m_engineTick{false};
+        perf::Frame m_perf;
+        double m_presentMs{};
         double m_lastTick{};
         bool m_inTick{};
 

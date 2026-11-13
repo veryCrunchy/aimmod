@@ -40,7 +40,7 @@
     if(!n||(!n.cs&&!n.combat&&!n.duel)){scope(null);if(root.AimModWorldTags)root.AimModWorldTags.render(null);}boards(n);cs(n);chat(n);parts();showDebug(!!(n&&n.cs&&n.cs.buyOpen),chatHolds(n),n&&n.chat&&n.chat.session||0);
     var body=root.document.body,page=root.document.documentElement;
     function input(on){if(body)body.className=on?'input':'';if(page)page.className=on?'input':'';}
-    if(!n||(!n.active&&!n.badge&&!n.duel&&!n.combat&&!n.cs)){box.className='';input(chatHolds(n)&&!!n.interactive);clear(strips);clear(card);stripKey=toastKey='';return;}
+    if(!n||(!n.active&&!n.badge&&!n.duel&&!n.combat&&!n.cs&&!n.vote)){box.className='';input(chatHolds(n)&&!!n.interactive);clear(strips);clear(card);stripKey=toastKey='';return;}
     // CS draws its own strip at the top, so notices move below it.
     var extra=n.cs&&root.AimModCsHud?' cs-on'+(n.cs.buyOpen?' cs-buying':''):n.duel||n.combat||n.cs?' duel-on':'';
     box.className=(n.active?'show '+(n.kind||'info'):'show')+extra;
@@ -49,12 +49,13 @@
     // clicks elsewhere must not reach the game). Otherwise only the toast layout takes clicks as a whole.
     // So does the chat input or a radio menu (both hold input like the buy menu).
     input(!!n.interactive&&(n.layout!=='full'||!!(n.cs&&n.cs.buyOpen)||chatHolds(n)));
-    var sk=JSON.stringify([n.duel,n.combat,root.AimModCsHud?null:n.cs,n.badge]);
+    var sk=JSON.stringify([n.duel,n.combat,root.AimModCsHud?null:n.cs,n.badge,n.vote]);
     if(sk!==stripKey){
       stripKey=sk;clear(strips);
       if(n.duel)strips.appendChild(duel(n.duel));
       if(n.combat)strips.appendChild(combat(n.combat));
       if(n.cs&&!root.AimModCsHud)strips.appendChild(csHud(n.cs));
+      if(n.vote){var v=node('div','badge match-vote');v.appendChild(node('strong','',n.vote.label));v.appendChild(node('span','',n.vote.yes+' yes / '+n.vote.no+' no · '+n.vote.required+' needed · '+n.vote.left+'s'));v.appendChild(node('span','',n.vote.canVote?'F1 Yes · F2 No':'Vote recorded'));strips.appendChild(v);}
       if(n.badge){var b=node('div','badge');b.appendChild(node('span','eye'));b.appendChild(node('span','',n.badge));strips.appendChild(b);}
     }
     var tk=n.active?JSON.stringify([n.id,n.kind,n.eyebrow,n.title,n.body,n.note,n.key,n.countdown,n.actions,n.person?n.person.name:null]):'';

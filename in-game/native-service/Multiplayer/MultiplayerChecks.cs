@@ -22,6 +22,8 @@ static partial class MultiplayerChecks
     public static void Run()
     {
         count = 0;
+        CsKeyReader.Detached = true;
+        CorrectnessChecks();
         Rules();
         Authority();
         Matches();
@@ -31,6 +33,7 @@ static partial class MultiplayerChecks
         CsMode();
         CsWeapons();
         WeaponDropChecks();
+        MatchControlChecks();
         CsFeelChecks();
         CsGrenadeChecks();
         LoadGate();
@@ -700,7 +703,7 @@ static partial class MultiplayerChecks
 
         // Lobby: 3v3, 4v4 or 5v5 only, up to 10 players, halves of 6-15 rounds.
         var start = new LobbySettings(Scenario: content.Scenario("Synthetic A"));
-        var cs = LobbyRules.Apply(start, J(new { mode = "cs", maxPlayers = 7, halfRounds = 30 }), 2, content).Settings!;
+        var cs = LobbyRules.Apply(start, J(new { mode = "cs", csWarmup = false, maxPlayers = 7, halfRounds = 30 }), 2, content).Settings!;
         Check(cs.MaxPlayers == 8 && cs.HalfRounds == 15 && cs.Overtime && cs.TotalRounds == 30 && LobbyRules.Apply(cs, J(new { maxPlayers = 12 }), 2, content).Settings!.MaxPlayers == 10, "CS: even team sizes up to 5v5, halves capped at 15 rounds");
         Check(LobbyRules.Apply(start, J(new { mode = "deathmatch", maxPlayers = 10 }), 2, content).Settings!.MaxPlayers == 8, "Other modes stay at 8 players");
         Check(MatchScenario.Name(cs).Contains(" - CS competitive - ", StringComparison.Ordinal) && MatchScenario.Needed(cs), "CS plays its own arena");
@@ -787,7 +790,7 @@ static partial class MultiplayerChecks
 
         // On the host: 6 players start, freeze refuses hits, buys go through lobby commands.
         var (core, clock, advance) = Lobby();
-        core.Apply("host", "settings", Patch(new { mode = "cs", maxPlayers = 6, countdown = 3 }), content);
+        core.Apply("host", "settings", Patch(new { mode = "cs", csWarmup = false, maxPlayers = 6, countdown = 3 }), content);
         foreach (var id in new[] { "p2", "p3", "p4", "p5" }) core.Join(id, id);
         ReadyAll(core);
         Check(core.Apply("host", "start", default, content).Code == "blocked" && LobbyRules.StartBlockers(core.Snapshot()).Any(b => b.Code == "cs-teams"), "CS with five players is blocked: it needs 6, 8 or 10");
@@ -820,7 +823,7 @@ static partial class MultiplayerChecks
         foreach (var bad in new[] { Swap("aimmod.mp", "other"), Swap("\"v\":1", "\"v\":2"), Swap("\"command\"", "\"teleport\""), Swap("\"seq\":7", "\"seq\":-1"), "[]", "{", Swap("\"body\":{", "\"body\":[{").Replace("}}}", "}}]}") })
             Check(Protocol.Decode(Encoding.UTF8.GetBytes(bad)) is null, "Rejected frame: " + bad[..Math.Min(40, bad.Length)]);
         Check(Protocol.Decode(new byte[Protocol.MaxBytes + 1]) is null, "Oversized frames are rejected");
-        Check(!Protocol.Reliable("score") && Protocol.Reliable("snapshot") && Protocol.Reliable("track") && Protocol.Reliable("hit") && Protocol.Reliable("combat") && Protocol.Reliable("cosmetic.look") && Protocol.Reliable("hit-ack") && !Protocol.Reliable("bots") && !Protocol.Reliable("fired") && !Protocol.Reliable("shots") && Protocol.Types.Length == 26, "Score frames and bot positions are unreliable; state and tracking samples are reliable");
+        Check(!Protocol.Reliable("score") && Protocol.Reliable("snapshot") && Protocol.Reliable("track") && Protocol.Reliable("hit") && Protocol.Reliable("combat") && Protocol.Reliable("cosmetic.look") && Protocol.Reliable("hit-ack") && !Protocol.Reliable("bots") && !Protocol.Reliable("fired") && !Protocol.Reliable("shots") && Protocol.Types.Length == 28, "Score frames and bot positions are unreliable; state and tracking samples are reliable");
         var sync = new ClockSync();
         sync.Add(0, 1050, 200); sync.Add(1000, 2010, 1020); sync.Add(2000, 3100, 2300);
         Check(sync.Rtt == 20 && sync.Offset == 1000, "Clock sync uses the minimum round-trip sample");

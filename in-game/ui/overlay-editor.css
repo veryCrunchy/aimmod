@@ -4,13 +4,22 @@
 .ove-tab{display:flex;align-items:center;justify-content:center;height:44px;padding:0 16px;margin:0 2px -1px 0;background:transparent;border:0;border-bottom:2px solid transparent;border-radius:0;color:#a7bab0;font-size:14px;font-weight:500}
 .ove-tab:hover{color:#eef5f1;background:#151f1c}.ove-tab.active{color:#27e4a1;border-bottom-color:#27e4a1;background:transparent}
 .ove-status{flex-shrink:0;font-size:12px;color:#7f968a;padding:0 4px 0 16px;white-space:nowrap}.ove-status.warn{color:#f0b45a}.ove-status.idle{display:none}
-.ove-bar{display:flex;flex-direction:row;align-items:center;flex-wrap:wrap;margin-bottom:12px}
+.ove-bar{display:flex;flex-direction:column;align-items:stretch;margin-bottom:12px}
 .ove-scenes{display:flex;flex-direction:row;flex-wrap:wrap;align-items:center;flex:1;min-width:0}
 .ove-scene{height:34px;line-height:32px;padding:0 14px;margin:0 6px 6px 0;background:#151f1c;border-color:#22302a;color:#a7bab0}
 .ove-scene.active{background:#173b2f;border-color:#2c6b52;color:#eef5f1}
 .ove-scene-tag{display:block;margin-left:8px;padding:0 6px;height:18px;line-height:18px;border-radius:9px;background:#1d2b26;color:#7f968a;font-size:10px;font-weight:700;letter-spacing:.6px;text-transform:uppercase}
 .ove-scene.active .ove-scene-tag,.ove-scene-tag.on{background:#27e4a1;color:#06231a}
-.ove-bar-right{display:flex;flex-direction:row;align-items:center;flex-shrink:0;margin-bottom:6px}
+.ove-bar-right{display:flex;flex-direction:row;align-items:flex-start;flex-wrap:wrap;width:100%;margin-bottom:6px}
+.ove-tool-group{display:flex;flex-wrap:wrap;align-items:center;padding:8px;margin:0 8px 8px 0;border:1px solid #30433a;border-radius:6px}
+.ove-tool-group>.button{margin:2px}
+.ove-tool-label{width:100%;font-size:11px;color:#a7bab0;margin-bottom:6px}
+.ove-tool-group .dropdown{min-width:130px}
+.ove-layer-row{padding:6px 0;border-bottom:1px solid #30433a}
+.ove-layer-row>.button{margin-right:4px}
+.ove-layer-icon.button{width:30px;min-width:30px;padding:4px;justify-content:center}
+.ove-layer-icon canvas{display:block;width:20px;height:20px}
+.ove-lib-add{display:flex;align-items:center;justify-content:center}
 .ove-bar-right .segmented{margin-right:8px}
 .ove-seg .button{height:28px;line-height:28px;padding:0 10px;font-size:12px}
 .ove-drawer{padding:16px 20px;margin-bottom:12px}.ove-drawer h3{font-size:15px;margin-bottom:4px}.ove-drawer>p{font-size:13px;margin-bottom:12px}.ove-sub{margin-top:16px}
@@ -29,13 +38,13 @@
 .ove-center{flex:1;min-width:0;padding:0 16px}
 .ove-stage-frame{position:relative;border:1px solid #30433a;border-radius:8px;overflow:hidden;background:#0b1110}
 .ove-stage{position:relative;overflow:hidden}
-.ove-world{position:absolute;left:0;top:0;width:1920px;height:1080px;transform-origin:0 0}
-.ove-sky{position:absolute;left:0;top:0;width:1920px;height:594px;background:#55626d}
-.ove-floor{position:absolute;left:0;top:594px;width:1920px;height:486px;background:#323b33}
-.ove-layer{position:absolute;left:0;top:0;width:1920px;height:1080px}
-.ove-guides{position:absolute;left:0;top:0;width:1920px;height:1080px;pointer-events:none}
-.ove-guide{position:absolute;background:#ff5fa2}.ove-guide.x{top:0;width:2px;height:1080px;margin-left:-1px}.ove-guide.y{left:0;height:2px;width:1920px;margin-top:-1px}
-.ove-handles{position:absolute;left:0;top:0;width:1920px;height:1080px}
+.ove-world{position:absolute;left:0;top:0;width:100%;height:100%;transform-origin:0 0}
+.ove-sky{position:absolute;left:0;top:0;width:100%;height:55%;background:#55626d}
+.ove-floor{position:absolute;left:0;top:55%;width:100%;height:45%;background:#323b33}
+.ove-layer{position:absolute;left:0;top:0;width:100%;height:100%}
+.ove-guides{position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none}
+.ove-guide{position:absolute;background:#ff5fa2}.ove-guide.x{top:0;width:2px;height:100%;margin-left:-1px}.ove-guide.y{left:0;height:2px;width:100%;margin-top:-1px}
+.ove-handles{position:absolute;left:0;top:0;width:100%;height:100%}
 .ove-handle{position:absolute;border:2px solid transparent;border-radius:6px;cursor:move}
 .ove-handle:hover{border-color:#5bedb9}
 .ove-handle.selected{border:3px solid #27e4a1}
@@ -113,3 +122,41 @@
 .ove-theme.button,.ove-template.button{justify-content:flex-start;text-align:left;font-weight:500}
 .ove-template.button{height:88px;line-height:1.4;align-items:flex-start;flex-direction:column}
 .ove-swatch.button{padding:0;height:26px;border:2px solid #101916}.ove-swatch.button.on{border-color:#eef5f1}
+.ove-data-list { max-height: 280px; overflow: auto; }
+.ove-data-list button { display: block; text-align: left; margin-bottom: 4px; width: 100%; }
+.ove-center { overflow: auto; }
+/* Explicit dimensions keep the studio stable in the embedded view. */
+.ove-top{margin-bottom:12px}
+.ove-bar{margin-bottom:12px}
+.ove-scenes{flex-wrap:nowrap;height:40px;overflow:auto;flex:none}
+.ove-scene{display:flex;flex-direction:row;align-items:center;flex-shrink:0}
+.ove-scene-tag{flex-shrink:0}
+.ove-bar-right{flex-wrap:nowrap;align-items:center;height:44px;margin:0;padding:4px 8px;background:#121a17;border:1px solid #1f2b27;border-radius:8px}
+.ove-bar-right>.button{flex-shrink:0;margin-right:8px}
+.ove-bar-right>.dropdown{width:140px;flex-shrink:0;margin-right:8px}
+.ove-body{position:relative;height:600px;display:block}
+.ove-library{position:absolute;left:0;top:0;width:196px;height:600px;overflow:auto;padding:12px;background:#121a17;border:1px solid #1f2b27;border-radius:8px}
+.ove-center{position:absolute;left:208px;right:332px;top:0;height:600px;padding:0;overflow:auto}
+.ove-inspector{position:absolute;right:0;top:0;width:320px;height:600px;overflow:auto;padding:16px;background:#121a17}
+.ove-line{display:block;margin:8px 0}
+.ove-line-label{display:block;padding:0;margin-bottom:6px;line-height:18px}
+.ove-line-control{display:block;width:100%}
+.ove-line-control>.ove-num{width:100%}
+.ove-line-control>.dropdown{width:100%}
+.ove-note{display:flex;flex-direction:row;align-items:center;background:#121a17;border:1px solid #1f2b27;padding:8px 12px;min-height:40px}
+.ove-note.warn{background:#121a17;border:1px solid #1f2b27;color:#93a69c}
+.ove-note>.actions{margin:0 0 0 16px}
+.ove-library-search{margin-bottom:12px}
+.ove-sky{background:#18231f}
+.ove-floor{background:#121a17}
+.ove-drawer{background:#121a17;border:1px solid #1f2b27}
+.ove-data-list{height:220px;overflow:auto;margin:8px 0}
+.ove-xy{width:62px;flex:none}
+.ove-gear-add{display:flex;flex-direction:column;align-items:flex-start}
+.ove-gear-add .button{display:block}
+.ove-library>.ove-line-label,.ove-drawer>.ove-line-label{flex:none;height:18px;margin:0 0 6px;line-height:18px}
+.ove-bar .dropdown-trigger,.ove-bar-right .dropdown-trigger{height:30px;line-height:28px;font-size:12px}
+.ove-bar-right>.button,.ove-bar-right>.dropdown,.ove-bar-right>.segmented{margin-top:0;margin-bottom:0;align-self:center}
+.ove-bar-right>.dropdown>.dropdown-trigger{margin:0}
+.ove-sky,.ove-floor{background:#0f1714}
+.ove-body,.ove-library,.ove-center,.ove-inspector{height:640px}

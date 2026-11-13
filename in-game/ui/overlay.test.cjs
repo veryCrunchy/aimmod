@@ -18,9 +18,9 @@ test('the in-game view draws the game scene and polls the feed fast while a run 
   const s=page('/cap/overlay','?surface=game');assert.equal(s.requests[0].url,'/cap/overlay-feed?surface=game');
   s.requests[0].finish(200,feed());assert.equal(s.requests[1].url,'/cap/overlay-scenes');s.requests[1].finish(200,store(s.M));
   assert.equal(s.host.className,'');assert.deepEqual(kinds(s.host),['amw-live-stats'],'the menu-only clock is hidden during a run');
-  assert.equal(s.host.children[0].style.left,'10px');assert.equal(s.timers.at(-1).delay,100);
+  assert.equal(s.host.children[0].style.left,'10px');assert.equal(s.timers.at(-1).delay,150);
   s.run();s.requests[2].finish(200,feed({live:{available:true,active:false}}));assert.equal(s.requests.length,3,'same revision: no scene reload');
-  assert.deepEqual(kinds(s.host),['amw-clock'],'in the menu the clock shows instead');assert.equal(s.timers.at(-1).delay,500);
+  assert.equal(s.host.className,'hidden','menu widgets never cover the game menu');assert.equal(s.timers.at(-1).delay,1000);
 });
 test('a switched-off surface draws nothing and keeps polling slowly',()=>{
   const s=page('/cap/overlay','?surface=game');s.requests[0].finish(200,{v:1,enabled:false,storeRevision:7});s.requests[1].finish(200,store(s.M));
@@ -40,9 +40,9 @@ test('a widget source renders one widget at the origin, scaled to the source wid
 });
 test('motion is requested only while a path or input widget shows',()=>{
   const s=page('/obs/scene','?id=stream');s.requests[0].finish(200,feed());s.requests[1].finish(200,store(s.M));
-  const timer=s.timers.find(t=>t.delay===33);assert.ok(timer);timer.fn();const m=s.requests.at(-1);assert.equal(m.url,'/obs/overlay-motion?surface=obs&path=1');
+  const timer=s.timers.find(t=>t.delay===50);assert.ok(timer);timer.fn();const m=s.requests.at(-1);assert.equal(m.url,'/obs/overlay-motion?surface=obs&path=1');
   m.finish(200,{path:[[0,0,0],[100,3,1],[200,6,2]],input:null});const canvas=s.host.find(n=>n.tagName==='CANVAS');assert.ok(canvas.ctx.calls.some(c=>c[0]==='stroke'));
-  const g=page('/cap/overlay','?surface=game');g.requests[0].finish(200,feed());g.requests[1].finish(200,store(g.M));assert.ok(!g.timers.some(t=>t.delay===33),'no path widget, no motion polling');
+  const g=page('/cap/overlay','?surface=game');g.requests[0].finish(200,feed());g.requests[1].finish(200,store(g.M));assert.ok(!g.timers.some(t=>t.delay===50),'no path widget, no motion polling');
 });
 test('native visibility false aborts polling and ignores late responses',()=>{
   const s=page('/cap/overlay','?surface=game');const first=s.requests[0];s.events.AimModVisibility(false);assert.ok(first.aborted);first.finish(200,feed());assert.equal(s.requests.length,1);assert.equal(s.host.className,'hidden');
@@ -51,4 +51,9 @@ test('native visibility false aborts polling and ignores late responses',()=>{
 test('the page never posts, sends credentials or writes to the game',()=>{
   const src=require('node:fs').readFileSync(require('node:path').join(__dirname,'overlay.js'),'utf8');
   assert.doesNotMatch(src,/POST|setRequestHeader|withCredentials|localStorage|engine\.call|engine\.trigger/);
+});
+
+test('paused game runs hide even an always visible setup scene',()=>{
+ const s=page('/cap/overlay','?surface=game');s.requests[0].finish(200,feed({live:{active:true,paused:true}}));const config=store(s.M);config.gameScene='stream';s.requests[1].finish(200,config);
+ assert.equal(s.host.className,'hidden');assert.ok(!s.timers.some(t=>t.delay===50));
 });

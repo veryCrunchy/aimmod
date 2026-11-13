@@ -336,8 +336,12 @@ AimModCore performs these on the game thread, one at a time.
 
 Transport: the service writes `core-command.tsv` (atomically) and AimModCore
 answers in `core-command-result.tsv` (the last 8 results, oldest first, one
-`AIMMOD_CORE_RESULT_1` line each; `GET` also returns them as `results`). Every
-override reset also reloads the scenario's weapons (`LoadWeapons`) when a
+`AIMMOD_CORE_RESULT_1` line each; `GET` also returns them as `results`). A
+request is left over, and never runs, when the file already held it as
+AimModCore started; if the file could not be read then, its last write time
+(before or after start-up) decides at the first read that works. Every other
+request runs once (`CommandIntake`), including the first one after start-up.
+Every override reset also reloads the scenario's weapons (`LoadWeapons`) when a
 weapon was overridden. HTTP (workspace capability URL,
 header `X-AimMod-UI: 1`): `POST <prefix>/game-command` with JSON
 `{"action","scenario","mode","timeScale","targetSize","targetSpeed","mapScale","weapon"}`

@@ -22,6 +22,15 @@ function fixture(){
     Calendar:[{Date:'2026-01-01',Minutes:60,Runs:1}],ScenarioTable:[selected],Blocks:[{Start:'2026-01-01T12:00:00Z',Runs:1,Minutes:60,Scenarios:['A']}]};
   return {Periods:[period,{...period,Key:'7',Days:7,Runs:0}],AvailableRuns:1};
 }
+test('initial period includes history older than the recent windows',()=>{
+  const data=fixture(),all={...data.Periods[0],Key:'all',Days:null,Runs:4320};
+  data.Periods[0]={...data.Periods[0],Runs:0,Selected:{...data.Periods[0].Selected,Runs:0,Points:[]}};
+  data.Periods.push(all);const s=surface();s.api.render(s.root,data);
+  assert.ok(s.all().some(e=>e.tag==='button'&&e.textContent==='All time'&&e.className.includes('primary')));
+  assert.ok(s.all().some(e=>e.textContent.includes('Showing all recorded activity')));
+  s.all().find(e=>e.tag==='button'&&e.textContent==='30 days').onclick();
+  assert.ok(s.all().some(e=>e.textContent==='No runs for this scenario in the last 30 days. Showing all recorded runs.'));
+});
 test('statistics renders literal scenario names, legitimate zero and unknown metrics without Intl',()=>{
   const s=surface();let selected;
   s.api.render(s.root,fixture(),value=>selected=value);
@@ -30,7 +39,7 @@ test('statistics renders literal scenario names, legitimate zero and unknown met
   assert.ok(s.all().some(e=>e.textContent==='0'));
   assert.ok(s.all().some(e=>e.textContent==='—'));
   s.all().find(e=>e.tag==='button'&&e.textContent==='Compare scenarios').onclick();
-  const target=s.all().find(e=>e.tag==='button'&&e.textContent==='<img onerror=alert(1)>');target.onclick();
+  const target=s.all().find(e=>e.tag==='button'&&e.className!=='dropdown-trigger'&&e.textContent==='<img onerror=alert(1)>');target.onclick();
   assert.equal(selected,'<img onerror=alert(1)>');assert.ok(s.drawing()>0);
 });
 test('period and metric controls redraw real supplied series and search filters the scenario table',()=>{
@@ -85,11 +94,11 @@ test('secondary trend information is revealed one section at a time and resize p
  click('Practice pattern');assert.equal(s.all().filter(e=>e.tag==='canvas').length,2);assert.ok(s.all().some(e=>e.textContent==='Practice days'));assert.ok(s.all().some(e=>e.textContent==='Practice blocks'));
  s.api.resize();assert.ok(s.all().some(e=>e.textContent==='Practice blocks'));
  click('Compare scenarios');assert.ok(s.all().some(e=>e.className==='stats-table'));assert.ok(!s.all().some(e=>e.textContent==='Practice blocks'));
- click('Compare scenarios');assert.ok(!s.all().some(e=>e.className==='stats-table'));assert.ok(s.all().some(e=>e.textContent==='Score trend'));
+ click('Compare scenarios');assert.ok(s.all().some(e=>e.className==='stats-table'));click('Overview');assert.ok(!s.all().some(e=>e.className==='stats-table'));assert.ok(s.all().some(e=>e.textContent==='Score trend'));
 });
 test('warm-up filter switches scenario analysis without changing total practice',()=>{const s=surface(),data=fixture();for(const p of data.Periods){p.Warmup={...p.Selected,Runs:2,Best:60,Average:50,Median:50,Points:[{Score:50,RunNumber:1}],Distribution:[{From:50,To:50,Count:2}]};p.Settled={...p.Selected,Runs:4,Best:100};}s.api.render(s.root,data,()=>{});s.all().find(e=>e.tag==='button'&&e.textContent==='Warm-up (2)').onclick();assert.ok(s.all().some(e=>e.textContent==='60'));assert.ok(s.all().some(e=>e.textContent.includes('Warm-up runs are early')));s.api.resize();assert.ok(s.all().find(e=>e.tag==='button'&&e.textContent==='Warm-up (2)').className.includes('primary'));s.all().find(e=>e.tag==='button'&&e.textContent==='All runs').onclick();assert.ok(!s.all().some(e=>e.textContent==='60'));});
 test('scenario comparison shows time in readable units and labels all-scenario practice',()=>{
   const src=fs.readFileSync(path.join(__dirname,'statistics.js'),'utf8');
   assert.match(src,/F\(\)\.hours\(s\.Hours\)/,'comparison time uses F.hours');
-  assert.match(src,/'All practice'/,'the practice card says it covers every scenario');
+  assert.match(src,/'Practice time'/,'the practice card says it covers every scenario');
 });

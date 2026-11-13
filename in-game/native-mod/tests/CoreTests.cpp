@@ -14,6 +14,7 @@
 #include <aimmod/Supervisor.hpp>
 #include <aimmod/Water.hpp>
 
+#include <aimmod/Perf.hpp>
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -281,6 +282,10 @@ static void CommandChecks()
     CHECK(code("AIMMOD_CORE_COMMAND_1\nseq\t9\naction\treset-overrides\nextra\t1\n") == "invalid-command", "unknown fields rejected");
     CHECK(code("AIMMOD_CORE_COMMAND_1\nseq\t9\naction\treset-overrides\n") == "accepted", "reset accepted");
     CHECK(code("AIMMOD_CORE_COMMAND_1\nseq\t9\naction\trefresh-scenarios\n") == "accepted", "refresh accepted");
+    CHECK(code("AIMMOD_CORE_COMMAND_1\nseq\t11\naction\tstart-scenario\nscenario\tAimMod Drill - static - 12345678\nmode\tchallenge\n") == "drills-freeplay-only", "drills cannot start challenges");
+    CHECK(code("AIMMOD_CORE_COMMAND_1\nseq\t11\naction\tstart-scenario\nscenario\tAimMod Drill - static - 12345678\nmode\tfreeplay\nseed\t1\n") == "drills-freeplay-only", "drills cannot use seeds");
+    CHECK(code("AIMMOD_CORE_COMMAND_1\nseq\t11\naction\tstart-scenario\nscenario\tAimMod Drill - static - 12345678\nmode\tfreeplay\n") == "accepted", "unseeded freeplay drill accepted");
+    CHECK(code("AIMMOD_CORE_COMMAND_1\nseq\t11\naction\tstart-scenario\nscenario\tAIMMOD DRILL - static - 12345678\nmode\tchallenge\n") == "drills-freeplay-only", "drill guard ignores name casing");
     auto seeded = parse("AIMMOD_CORE_COMMAND_1\nseq\t11\naction\tstart-scenario\nscenario\tX\nmode\tfreeplay\nseed\t4294967295\n");
     CHECK(std::holds_alternative<GameCommand>(seeded) && std::get<GameCommand>(seeded).seed == 4294967295u, "freeplay seed parsed");
     CHECK(code("AIMMOD_CORE_COMMAND_1\nseq\t11\naction\tstart-scenario\nscenario\tX\nmode\tchallenge\nseed\t1\n") == "seed-not-allowed", "no seeds in ranked challenges");
@@ -319,6 +324,50 @@ static void CommandChecks()
               !IsScenarioFileName("..") && !IsScenarioFileName("a\"b"),
           "paths and reserved names never reach the file system");
     CHECK(FormatCommandResult(7, "error", "challenge-active", "Finish\tit") == "AIMMOD_CORE_RESULT_1\t7\terror\tchallenge-active\tFinish%09it\n", "result line");
+}
+
+static void CommandIntakeChecks()
+{
+    auto text = [](int seq) { return "AIMMOD_CORE_COMMAND_1\nseq\t" + std::to_string(seq) + "\naction\treset-overrides\n"; };
+    auto runs = [](const std::optional<std::variant<GameCommand, CommandError>>& r, std::uint64_t seq) {
+        return r && std::holds_alternative<GameCommand>(*r) && std::get<GameCommand>(*r).sequence == seq;
+    };
+    {
+        CommandIntake intake; // a request left by an earlier session
+        CHECK(!intake.Offer(text(5), false) && intake.primed(), "left-over request never runs");
+        CHECK(!intake.Offer(text(5), true), "left-over request stays ignored");
+        CHECK(runs(intake.Offer(text(6), true), 6), "first request after a left-over one runs");
+        CHECK(!intake.Offer(text(6), true), "unchanged request runs once");
+        CHECK(!intake.Offer(text(5), true) && !intake.Offer(text(6), true), "older or repeated sequence never runs again");
+        CHECK(runs(intake.Offer(text(7), false), 7), "write time only matters for the first contents");
+    }
+    {
+        CommandIntake intake; // no file at start-up
+        intake.Missing();
+        CHECK(runs(intake.Offer(text(3), false), 3), "first request runs when no file was left");
+        intake.Missing();
+        CHECK(!intake.Offer(text(3), true), "request does not run again after the file vanished");
+    }
+    {
+        CommandIntake intake; // the start-up read failed; the file was written afterwards
+        CHECK(!intake.primed() && runs(intake.Offer(text(9), true), 9), "first request runs when it is the first contents read");
+        CHECK(!intake.Offer(text(9), true) && runs(intake.Offer(text(10), true), 10), "and runs once");
+    }
+    {
+        CommandIntake intake; // the start-up read failed; the file is older than this session
+        CHECK(!intake.Offer(text(9), false) && runs(intake.Offer(text(10), true), 10), "late first read still ignores a left-over request");
+    }
+    {
+        CommandIntake intake; // an empty left-over file must not leave the intake undecided
+        CHECK(!intake.Offer("", false) && intake.primed() && runs(intake.Offer(text(4), true), 4), "empty left-over file does not cost the first request");
+    }
+    {
+        CommandIntake intake;
+        intake.Missing();
+        auto bad = intake.Offer("AIMMOD_CORE_COMMAND_1\nseq\t8\naction\tnope\n", true);
+        CHECK(bad && std::holds_alternative<CommandError>(*bad) && std::get<CommandError>(*bad).sequence == 8, "malformed request is answered");
+        CHECK(!intake.Offer(text(8), true) && runs(intake.Offer(text(11), true), 11), "its sequence is spent");
+    }
 }
 
 static void ClipChecks()
@@ -446,6 +495,7 @@ static void LifecycleChecks()
         r.s.indicatorScore = 10533;
         r.Play(0, 59.95);
         r.s.running = false;
+        r.s.indicatorScore = 0;
         r.s.lastScore = 0;
         for (int i = 0; i < 120; ++i) r.Poll();
         CHECK(r.Last(K::Completed) && r.Last(K::Completed)->score == 10533 && r.Last(K::Completed)->scoreSource == "indicator",
@@ -1069,6 +1119,48 @@ static void WaterChecks()
 
 int main(int argc, char** argv)
 {
+    if (argc > 1 && std::string(argv[1]) == "--perf-benchmark") {
+        perf::Frame frame;
+        perf::Active = &frame;
+        constexpr int count = 100000;
+        const auto start = perf::Clock::now();
+        for (int i=0; i<count; ++i) {
+            const double now = static_cast<double>(i)/1000;
+            frame.Begin(now);
+            for(int part=0; part<perf::Count; ++part) { perf::Scope scope(static_cast<perf::Part>(part)); }
+            frame.End(now);
+            frame.Summary(now);
+        }
+        perf::Active = nullptr;
+        std::printf("Perf instrumentation: %.3f microseconds/frame (%d synthetic frames)\n", perf::Ms(perf::Clock::now()-start)*1000/count, count);
+        return 0;
+    }
+    perf::Frame measured;
+    measured.Begin(1); measured.outside=3; measured.Add(perf::Hud,3);
+    CHECK(measured.End(1).find("subsystem=hud")!=std::string::npos, "slow frame names its subsystem");
+    measured.Begin(2); measured.outside=3;
+    CHECK(measured.End(2).empty(), "warnings are rate limited");
+    measured.Begin(6); measured.outside=3;
+    CHECK(!measured.End(6).empty(), "warnings resume after the rate limit");
+    CHECK(measured.Summary(6).find("hud\t1.000000\t3.000000")!=std::string::npos, "summary records mean and peak");
+    CHECK(measured.Summary(7).empty(), "summary is throttled");
+    perf::Frame hitch;
+    hitch.Begin(1); hitch.End(1); hitch.Begin(1.1); hitch.outside=0.5;
+    CHECK(!hitch.End(1.1).empty(), "frame hitch with work produces a warning");
+    perf::Frame protection; protection.protect=true;
+    for(int i=0;i<3;++i) { protection.Begin(1+i*0.01); protection.outside=3; protection.Add(perf::Preview,3); protection.End(1+i*0.01); }
+    CHECK(!protection.Allowed(perf::Preview,1.03) && protection.Allowed(perf::Preview,2.03), "preview cooldown expires");
+    protection.Begin(6);
+    CHECK(protection.End(6).find("preview throttled")!=std::string::npos, "throttle notification survives warning rate limit");
+    perf::Budget budget;
+    CHECK(!budget.Observe(3, 1, true) && !budget.Observe(3, 2, true), "isolated overruns do not throttle");
+    CHECK(budget.Observe(3, 3, true) && !budget.Allowed(3.5) && budget.Allowed(4), "repeated overruns recover after cooldown");
+    perf::Budget critical;
+    for(int i=0;i<100;++i) CHECK(!critical.Observe(100, i, false) && critical.Allowed(i), "critical work is never throttled");
+    perf::Budget reset;
+    reset.Observe(3, 0, true); reset.Observe(1, 1, true);
+    CHECK(!reset.Observe(3, 2, true), "cheap work clears consecutive strikes");
+
     if (argc == 3 && std::strcmp(argv[1], "--write-samples") == 0)
     {
         WriteSamples(argv[2]);
@@ -1096,6 +1188,7 @@ int main(int argc, char** argv)
     LifecycleChecks();
     MatchPlayChecks();
     EndRunChecks();
+    CommandIntakeChecks();
     cosmetics_checks::Run();
     overlay_checks::Run();
     worldtags_checks::Run();

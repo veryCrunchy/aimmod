@@ -21,6 +21,9 @@ param(
     [string]$CosmeticsPaks
 )
 $ErrorActionPreference = 'Stop'
+# Cap both project workers and compiler workers inside third-party projects.
+$env:_CL_ = "$env:_CL_ /MP1"
+$env:CARGO_BUILD_JOBS = '2'
 $native = Resolve-Path (Join-Path $PSScriptRoot '..')
 $inGame = Resolve-Path (Join-Path $native '..')
 $build = Join-Path $native 'build'
@@ -29,7 +32,7 @@ if (-not (Test-Path (Join-Path $build 'AimModNative.sln'))) {
     cmake -S $native -B $build -G 'Visual Studio 17 2022' -A x64
     if ($LASTEXITCODE) { throw 'CMake configure failed.' }
 }
-cmake --build $build --config Game__Shipping__Win64 --target AimModCore aimmod_core_tests
+cmake --build $build --config Game__Shipping__Win64 --target AimModCore aimmod_core_tests --parallel 2
 if ($LASTEXITCODE) { throw 'Build failed.' }
 $tests = Get-ChildItem (Join-Path $build 'Game__Shipping__Win64') -Recurse -Filter aimmod_core_tests.exe | Select-Object -First 1
 & $tests.FullName

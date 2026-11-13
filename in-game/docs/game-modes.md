@@ -2702,3 +2702,19 @@ message types.
 G drops the held primary or pistol. While holding the bomb, G drops the bomb. A death drops the primary (or the pistol when there is no primary), the existing grenade drop, and the defuse kit. Walk over a weapon to fill an empty slot; press E within 80 cm to swap an occupied slot. A swap leaves the previous weapon on the ground. Only Counter-Terrorists pick up kits. Bots automatically exchange a nearby weapon for a more expensive weapon in the same slot and retain the AWP over cheaper primaries. Drops clear at round end. The host retains up to 32 weapon and kit drops, removing the oldest when that limit is reached. The host owns item identities and pickup decisions; clients draw AimMod procedural models on the traced floor. Ammunition is not part of the service inventory.
 
 The CS scoreboard includes ADR (enemy health damage divided by completed rounds, with a minimum divisor of one), HS% (headshot kills as a share of kills), and MVPs. A defuse awards the round MVP to the defuser; otherwise the winning player with most kills receives it, with member order breaking ties. A round without a winning-side kill or defuse has no MVP.
+
+### CS match controls and warmup
+
+The lobby enables a 60-second warmup by default. Players respawn, buy for free anywhere, and practice without a bomb, economy rewards, or CS scoreboard statistics. Everyone can type /ready or use Ready for round 1 in the match panel. Bots are ready automatically. When everyone is ready, or time expires, inventories and money reset and round 1 begins with its normal freeze countdown. The host can disable warmup before starting.
+
+The match panel and chat offer these controls:
+
+- /surrender starts a team vote. All humans must agree on teams of up to three humans; teams with four or five humans may have one dissenting vote. Bots do not vote and do not block surrender.
+- /kickvote name starts a vote to remove a human teammate. A strict majority of the team's humans, including the target in the electorate, must vote yes. The host cannot be vote-kicked. The host's direct kick remains available.
+- F1 or /yes votes yes; F2 or /no votes no. A ballot is final. Votes last 20 seconds, show their threshold and counts on the HUD, and announce results in chat. Only one vote runs at once, with a 60-second cooldown between starts. Existing F1/F2 game binds are listed in the CS key-clash notice; chat is an alternative.
+- /timeout reserves that team's one tactical timeout for the half. It adds 30 seconds before the next freeze countdown. Both teams may reserve one, resulting in 60 seconds. Allowances renew when sides switch, including overtime halves.
+- The host uses /pause and /unpause to stop and resume CS play. Round, bomb, plant, defuse, flash, grenade and buy timers retain their remaining time.
+
+After 60 live seconds without movement or shots, a bot controls a human player's slot. Freeze time, warmup and host pauses do not count. Movement or fire returns control at the bot's current position; /return also works. Bots' own movement does not reset human activity. A third distinct AFK round moves the player to spectator for the remainder of the match. A duel instead forfeits after the lobby's AFK grace (default 90 seconds, configurable from 30 to 600; zero disables it).
+
+Bots preserve an AWP in late, heavily outnumbered rounds or when a planted bomb can no longer be defused. They still attempt a feasible retake and never abandon the bomb merely because they carry an AWP.

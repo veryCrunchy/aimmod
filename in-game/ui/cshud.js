@@ -28,12 +28,13 @@
     var left=node('span','cs-buy-left',typeof c.buyLeft==='number'?'Buy time '+clock(c.buyLeft):'Buy time over');head.appendChild(left);box.timeNode=left;
     var close=node('button','cs-buy-close',c.buyKey+' closes');close.type='button';close.onclick=function(){act('cs-buy-menu','');};head.appendChild(close);
     box.appendChild(head);
-    // Two columns so the whole menu fits at 720p: pistols, SMGs and heavy; rifles and gear.
-    var cols=node('div','cs-buy-cols'),left=node('div','cs-buy-col'),right=node('div','cs-buy-col');cols.appendChild(left);cols.appendChild(right);box.appendChild(cols);
-    CATS.forEach(function(cat){
+    // Explicit rows keep category placement stable in the embedded view.
+    var cols=node('div','cs-buy-cols'),row=null;box.appendChild(cols);
+    CATS.forEach(function(cat,index){
+      if(index%3===0){row=node('div','cs-buy-row');cols.appendChild(row);}
       var items=(c.buy||[]).filter(function(i){return i.category===cat[0];});
       var group=node('div','cs-buy-group');group.appendChild(node('div','cs-buy-cat',cat[1]));
-      if(!items.length)group.appendChild(node('div','cs-buy-none','None in this mode yet'));
+      if(!items.length)group.appendChild(node('div','cs-buy-none','No items'));
       items.forEach(function(i){
         var b=node('button','cs-item'+(i.owned?' owned':i.disabled?' off':i.affordable?' ok':''));b.type='button';
         if(i.disabled&&!i.owned)b.disabled=true;
@@ -45,7 +46,7 @@
         b.onclick=function(){if(!b.disabled&&!i.owned)act('cs-buy',i.id);};
         group.appendChild(b);
       });
-      (cat[0]==='rifle'||cat[0]==='gear'||cat[0]==='grenade'?right:left).appendChild(group);
+      row.appendChild(group);
     });
     return box;
   }
@@ -61,18 +62,24 @@
     else if(menuKey&&layers.menu.firstChild&&layers.menu.firstChild.timeNode)layers.menu.firstChild.timeNode.textContent=typeof c.buyLeft==='number'?'Buy time '+clock(c.buyLeft):'Buy time over';
     if(!c){root2.className='';while(liveTarget.firstChild)liveTarget.removeChild(liveTarget.firstChild);return;}
     root2.className='show';
-    if(c.sessionId&&c.controls&&c.round===1&&c.phase==='freeze'&&!controlsSeen[c.sessionId]){var help=node('div','cs-controls');help.appendChild(node('strong','','Your controls'));for(var binding in c.controls)help.appendChild(node('div','',binding+': '+c.controls[binding]));var dismiss=node('button','button','Got it');dismiss.onclick=function(){controlsSeen[c.sessionId]=true;draw(root2,c,act);};help.appendChild(dismiss);target.appendChild(help);}else if(c.sessionId&&(c.round!==1||c.phase!=='freeze'))controlsSeen[c.sessionId]=true;
+    if(c.sessionId&&c.controls&&c.round===1&&c.phase==='freeze'&&!controlsSeen[c.sessionId]){var help=node('div','cs-controls');help.appendChild(node('strong','','Your controls'));for(var binding in c.controls)help.appendChild(node('div','',binding+': '+c.controls[binding]));var dismiss=node('button','button','Got it');dismiss.onclick=function(){controlsSeen[c.sessionId]=true;draw(root2,c,act);};help.appendChild(dismiss);target.appendChild(help);}else if(c.sessionId&&c.phase!=='warmup'&&(c.round!==1||c.phase!=='freeze'))controlsSeen[c.sessionId]=true;
     // Top: score strip and the clock for this phase.
     var group=node('div','cs-top-group');target.appendChild(group);var top=node('div','cs-top');
     var t=node('div','cs-score t'+(c.side==='T'?' mine':''));t.appendChild(node('span','cs-team','T'));t.appendChild(node('span','cs-points',c.tScore));
     var mid=node('div','cs-clock'+(c.phase==='planted'?' bomb':''));
     // Freeze time here; the buy menu counts the buy window (freeze plus buy time) and says so.
-    var label=c.phase==='freeze'?'Freeze time':c.phase==='planted'?'Bomb planted'+(c.site?' · '+c.site:''):c.phase==='end'?'Round over':'Round '+c.round;
+    var label=c.paused?'Host pause':c.timeout?'Tactical timeout':c.phase==='warmup'?'Warmup':c.phase==='freeze'?'Freeze time':c.phase==='planted'?'Bomb planted'+(c.site?' · '+c.site:''):c.phase==='end'?'Round over':'Round '+c.round;
     mid.appendChild(node('span','cs-clock-label',label));
     mid.appendChild(node('span','cs-clock-time',c.phase==='planted'&&typeof c.bombIn==='number'?clock(c.bombIn):clock(c.left)));
-    mid.appendChild(node('span','cs-clock-round','Round '+c.round+' of '+c.rounds+(typeof c.tAlive==='number'?' · T '+c.tAlive+' · CT '+c.ctAlive:'')));
+    mid.appendChild(node('span','cs-clock-round',(c.phase==='warmup'?'Practice':'Round '+c.round+' of '+c.rounds)+(typeof c.tAlive==='number'?' · T '+c.tAlive+' · CT '+c.ctAlive:'')));
     var ct=node('div','cs-score ct'+(c.side==='CT'?' mine':''));ct.appendChild(node('span','cs-points',c.ctScore));ct.appendChild(node('span','cs-team','CT'));
     top.appendChild(t);top.appendChild(mid);top.appendChild(ct);group.appendChild(top);
+    if(c.afk||c.phase==='warmup'){
+      var hints=node('div','cs-controls');
+      if(c.afk)hints.appendChild(node('div','','A bot is playing your slot. Move or fire to return.'));
+      if(c.phase==='warmup')hints.appendChild(node('div','','Free buys · Type /ready in chat to begin'));
+      target.appendChild(hints);
+    }
     // Bomb sites on a compass under the strip (90 degrees either side; behind clamps to an edge), and
     // the site letter (and callout) while you stand in one.
     if(c.sites&&c.sites.length&&!c.buyOpen){

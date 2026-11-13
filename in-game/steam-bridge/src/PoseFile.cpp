@@ -28,10 +28,9 @@ namespace bridge::posefile
         std::optional<double> Number(std::string_view text)
         {
             if (text.empty() || text.size() > 40) return std::nullopt;
-            const std::string s(text);
-            char* end = nullptr;
-            const double v = std::strtod(s.c_str(), &end);
-            if (!end || *end != '\0' || !std::isfinite(v)) return std::nullopt;
+            double v{};
+            const auto result = std::from_chars(text.data(), text.data() + text.size(), v);
+            if (result.ec != std::errc() || result.ptr != text.data() + text.size() || !std::isfinite(v)) return std::nullopt;
             return v;
         }
 

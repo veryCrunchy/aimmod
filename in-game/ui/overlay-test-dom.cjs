@@ -2,7 +2,7 @@
 // and a vm context that loads the overlay model, widgets and a page script.
 const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
 class Ctx2d{constructor(){this.calls=[];this.globalAlpha=1;}}
-for(const m of ['clearRect','fillRect','strokeRect','beginPath','moveTo','lineTo','stroke','fill','arc','closePath','fillText','drawImage'])Ctx2d.prototype[m]=function(...a){this.calls.push([m,...a]);};
+for(const m of ['quadraticCurveTo','rect','clearRect','fillRect','strokeRect','beginPath','moveTo','lineTo','stroke','fill','arc','closePath','fillText','drawImage'])Ctx2d.prototype[m]=function(...a){this.calls.push([m,...a]);};
 class El{
   constructor(tag,doc){this.tagName=String(tag).toUpperCase();this.children=[];this.style={};this.attrs={};this.className='';this.text='';this.doc=doc;this.parentNode=null;this.listeners={};this.offsetWidth=0;this.offsetHeight=40;this.value='';}
   get childNodes(){return this.children;}
@@ -32,7 +32,7 @@ function makeXhr(log){
     finish(status,data){this.status=status;this.readyState=4;this.responseText=typeof data==='string'?data:JSON.stringify(data);this.onreadystatechange();}};
 }
 const UI=__dirname;
-function load(window,files){const context=vm.createContext({window,Date,Math,JSON});for(const f of files)vm.runInContext(fs.readFileSync(path.join(UI,f),'utf8'),context,{filename:f});return context;}
+function load(window,files){const context=vm.createContext({window,Date,Math,JSON});require('./test-format.cjs').loadFormat(context);for(const f of files)vm.runInContext(fs.readFileSync(path.join(UI,f),'utf8'),context,{filename:f});return context;}
 function makeWindow(extra){
   const document=makeDocument(),requests=[],timers=[];
   const window=Object.assign({document,XMLHttpRequest:makeXhr(requests),location:{pathname:'/cap/ui',search:''},innerWidth:1920,innerHeight:1080,

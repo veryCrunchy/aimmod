@@ -15,7 +15,7 @@ sealed partial class CsMatch
         foreach (var e in Combat.EventsSince(damageCursor))
         {
             damageCursor = Math.Max(damageCursor, e.Id);
-            if (e.Kind == "damage" && e.Attacker is { } attacker && players.TryGetValue(attacker, out var p)
+            if (Phase != "warmup" && e.Kind == "damage" && e.Attacker is { } attacker && players.TryGetValue(attacker, out var p)
                 && players.TryGetValue(e.Member, out var victim) && victim.Team != p.Team) p.EnemyDamage += e.Amount;
         }
     }
@@ -38,7 +38,7 @@ sealed partial class CsMatch
     public string? DropWeapon(string id, long now)
     {
         if (!players.TryGetValue(id, out var p) || !Combat.Alive(id)) return "dead";
-        if (Phase is not ("freeze" or "live" or "planted")) return "not-now";
+        if (Phase is not ("warmup" or "freeze" or "live" or "planted")) return "not-now";
         if (Combat.Position(id) is null) return "no-track";
         var weapon = Holding(p);
         if (weapon.Slot is not (CsRules.PrimarySlot or CsRules.PistolSlot)) return "no-weapon";
@@ -50,7 +50,7 @@ sealed partial class CsMatch
 
     bool TryPickup(string id, long now, bool swap)
     {
-        if (Phase is not ("freeze" or "live" or "planted") || !players.TryGetValue(id, out var p)
+        if (Phase is not ("warmup" or "freeze" or "live" or "planted") || !players.TryGetValue(id, out var p)
             || !Combat.Alive(id) || Combat.Position(id) is not { } at) return false;
         foreach (var d in drops.OrderBy(d => Math.Pow(d.X - at.X, 2) + Math.Pow(d.Y - at.Y, 2)).ToArray())
         {
@@ -65,7 +65,7 @@ sealed partial class CsMatch
             {
                 if (CsRules.Find(d.Weapon) is not { } weapon) continue;
                 var owned = weapon.Slot == CsRules.PrimarySlot ? p.Primary : p.Secondary;
-                if (owned is not null && !swap && (!Bots.Contains(id) || weapon.Price <= owned.Price)) continue;
+                if (owned is not null && !swap && ((!Bots.Contains(id) && !Controlled(id)) || weapon.Price <= owned.Price)) continue;
                 if (owned is not null) AddDrop(p, owned.Id, now);
                 if (weapon.Slot == CsRules.PrimarySlot) p.Primary = weapon; else p.Secondary = weapon;
             }

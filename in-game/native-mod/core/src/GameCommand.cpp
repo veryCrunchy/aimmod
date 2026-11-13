@@ -9,6 +9,17 @@ namespace aimmod
 {
     namespace
     {
+        bool DrillName(std::string_view s)
+        {
+            constexpr std::string_view prefix = "aimmod drill - ";
+            if (s.size() < prefix.size()) return false;
+            for (std::size_t i = 0; i < prefix.size(); ++i) {
+                char c = s[i];
+                if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+                if (c != prefix[i]) return false;
+            }
+            return true;
+        }
         bool SafeName(std::string_view s)
         {
             if (s.empty() || s.size() > 256) return false;
@@ -120,6 +131,8 @@ namespace aimmod
             else if (*mode == "challenge") c.mode = GameCommand::Mode::Challenge;
             else return fail("invalid-mode", "Mode must be freeplay or challenge.");
         }
+        if (DrillName(c.scenario) && (c.mode == GameCommand::Mode::Challenge || get("seed")))
+            return fail("drills-freeplay-only", "Drills are unseeded freeplay only.");
         auto range = [&](const char* key, std::optional<double>& target, double lo, double hi) -> bool {
             const std::string* value = get(key);
             if (!value) return true;
@@ -143,9 +156,9 @@ namespace aimmod
             auto r = std::from_chars(seed->data(), seed->data() + seed->size(), value);
             if (c.action != GameCommand::Action::StartScenario || seed->empty() || r.ec != std::errc() || r.ptr != seed->data() + seed->size() || value > 0xFFFFFFFFull)
                 return fail("invalid-seed", "A seed is a whole number from 0 to 4294967295 on start-scenario.");
-            // Never in ranked play: freeplay, or AimMod's own generated match scenarios.
+            // Never in ranked play: freeplay only.
             if (!SeedAllowed(c.scenario, c.mode == GameCommand::Mode::Challenge))
-                return fail("seed-not-allowed", "Seeds apply to freeplay or AimMod match scenarios only.");
+                return fail("seed-not-allowed", "Seeds apply to freeplay only.");
             c.seed = static_cast<std::uint32_t>(value);
         }
         if (c.action == GameCommand::Action::CaptureThumbnail)
@@ -220,7 +233,7 @@ namespace aimmod
 
     bool MapFixAllowed(std::string_view scenario)
     {
-        return IsScenarioFileName(scenario) && (scenario.starts_with(MatchScenarioPrefix) || scenario.starts_with("AimMod Probe ") || scenario.starts_with("AimMod - "));
+        return IsScenarioFileName(scenario) && (scenario.starts_with("AimMod Drill - ") || scenario.starts_with(MatchScenarioPrefix) || scenario.starts_with("AimMod Probe ") || scenario.starts_with("AimMod - "));
     }
 
     bool SameMapLoaded(std::string_view currentName, double currentScale, std::string_view wantedName, double wantedScale)
@@ -257,6 +270,26 @@ namespace aimmod
     {
         if (count <= 1) return out;
         return out.substr(0, out.size() - 4) + "-" + std::to_string(index + 1) + ".png";
+    }
+
+    std::optional<std::variant<GameCommand, CommandError>> CommandIntake::Offer(std::string_view text, bool sinceStart)
+    {
+        if (m_primed && text == m_text) return std::nullopt;
+        m_text = text;
+        auto parsed = ParseGameCommand(text);
+        const std::uint64_t sequence = std::holds_alternative<GameCommand>(parsed) ? std::get<GameCommand>(parsed).sequence : std::get<CommandError>(parsed).sequence;
+        if (!m_primed)
+        {
+            m_primed = true;
+            if (!sinceStart)
+            {
+                m_sequence = sequence;
+                return std::nullopt;
+            }
+        }
+        if (sequence != 0 && sequence <= m_sequence) return std::nullopt;
+        if (sequence != 0) m_sequence = sequence;
+        return parsed;
     }
 
     std::string FormatCommandResult(std::uint64_t sequence, std::string_view state, std::string_view code, std::string_view message)

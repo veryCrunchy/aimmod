@@ -145,7 +145,6 @@ namespace aimmod
                 return out;
             }
             a.unavailableSince = -1;
-            if (s.indicatorScore) a.indicatorScore = s.indicatorScore;
         }
 
         switch (m_state)
@@ -197,6 +196,8 @@ namespace aimmod
                 a.rewindCandidate = s.elapsed;
                 return out;
             }
+            // Preserve this attempt's score across reset and ending samples.
+            if (s.indicatorScore) a.indicatorScore = s.indicatorScore;
             a.rewindCandidate.reset();
             if (s.elapsed >= a.lastElapsed)
             {

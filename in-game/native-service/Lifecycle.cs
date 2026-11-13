@@ -42,6 +42,15 @@ sealed class Lifecycle : IAsyncDisposable
     LifecycleRequests Requests => ReadJson<LifecycleRequests>(RequestsPath(updatesRoot)) ?? new();
     void UpdateRequests(Func<LifecycleRequests, LifecycleRequests> change) { lock (gate) WriteJson(RequestsPath(updatesRoot), change(Requests)); }
 
+    string NoticePath => Path.Combine(updatesRoot, "notice-dismissals.json");
+    string[] DismissedNotices => ReadJson<string[]>(NoticePath) ?? [];
+    public void DismissNotice(string key)
+    {
+        if (key.Length > 160 || !(key.StartsWith("update:", StringComparison.Ordinal) || key.StartsWith("game:", StringComparison.Ordinal))
+            || key.Any(c => !char.IsAsciiLetterOrDigit(c) && c != ':' && c != '.' && c != '-' && c != '+')) throw new JsonException("Invalid notice.");
+        lock (gate) WriteJson(NoticePath, DismissedNotices.Append(key).Distinct().TakeLast(128).ToArray());
+    }
+
     InstallManifest? Installed()
     {
         if (win64 is null) return null;
@@ -152,6 +161,7 @@ sealed class Lifecycle : IAsyncDisposable
             game = new { steamBuildId = report?.Game.SteamBuildId, tested = report?.Game.Tested ?? false, testedVersion = report?.Game.TestedVersion, warning = report?.Game.Warning },
             rollback = new { available = rollback is not null, version = rollback },
             last = result is { Seen: false } ? result : null,
+            dismissedNotices = DismissedNotices,
         };
     }
     static string State(UpdateState state) => state switch
@@ -195,6 +205,14 @@ sealed class Lifecycle : IAsyncDisposable
             var before = settings.Current;
             var next = settings.ApplyJson(bytes);
             if (next.Channel != before.Channel || (next.AutoUpdate && !before.AutoUpdate)) CheckNow();
+            return Snapshot();
+        }, token));
+        routes.MapPost(prefix + "/lifecycle/dismiss", (HttpRequest request, CancellationToken token) => Post(request, bytes =>
+        {
+            using var document = JsonDocument.Parse(bytes, new JsonDocumentOptions { MaxDepth = 2 });
+            if (document.RootElement.ValueKind != JsonValueKind.Object || document.RootElement.EnumerateObject().Count() != 1
+                || !document.RootElement.TryGetProperty("key", out var value) || value.ValueKind != JsonValueKind.String) throw new JsonException("Invalid notice.");
+            DismissNotice(value.GetString()!);
             return Snapshot();
         }, token));
         routes.MapPost(prefix + "/lifecycle/action", (HttpRequest request, CancellationToken token) => Post(request, bytes =>
@@ -265,7 +283,7 @@ sealed class Lifecycle : IAsyncDisposable
         var output = Arg(args, "--output") is { } o ? Path.GetFullPath(o) : DefaultOutput;
         var updatesRoot = Path.Combine(output, "updates");
         Directory.CreateDirectory(updatesRoot);
-        var running = gameRunningOverride ?? InstallLayout.GameRunning;
+        var running = gameRunningOverride ?? InstallLayout.InstallBusy;
         using var log = new Log(Path.Combine(updatesRoot, "install.log"));
         using var mutex = new Mutex(false, MutexName);
         bool owned;

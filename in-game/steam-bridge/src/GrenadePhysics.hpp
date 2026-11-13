@@ -34,6 +34,9 @@
 
 namespace bridge::grenades
 {
+    // Visibility fails closed on a failed trace or an origin inside geometry. No wall penetration.
+    inline bool Occluded(bool called, bool hit, bool inside) { return !called || hit || inside; }
+
     constexpr double Unit = 4.4;                   // cm per CS unit on the ports
     constexpr double Gravity = 800 * 0.4 * Unit;   // CS grenades: 0.4 of sv_gravity 800
     constexpr double Elasticity = 0.45, SlideNormal = 120, StopSpeed = 90, SlideDecel = 700, FloorNz = 0.7, Lift = 2, SlideProbe = 24, SlideWallLift = 6;

@@ -81,7 +81,7 @@ test('home: personal multiplayer settings fold to a summary, but key conflicts s
   assert.ok(s.text().includes('F6 is also KovaaK’s reset key.'),'a conflict is never folded away');
   assert.ok(s.button('Multiplayer settings'));s.api.enterPreferences(s.container);s.last().finish(200,view({prefs:{hotkey:'F6',sounds:true,spectatePrivacy:'ask'}}));assert.ok(s.text().includes('Ready when I join'));
   assert.ok(s.text().includes('Bomb and round sounds')&&s.text().includes('Gunfire and footsteps'),'other players’ gunfire has its own volume');
-  s.button('Done').onclick();assert.ok(!s.text().includes('Ready when I join'));
+  assert.ok(!s.button('Done'));assert.ok(s.text().includes('Changes save automatically.'),'settings keep save behavior visible');
 });
 test('wording: no bridge or hash jargon, and small files read in KB',()=>{
   const off=setup().open(view({transport:{kind:'none',online:false},friends:{source:'unavailable',items:[]}}));
@@ -121,4 +121,52 @@ test('settings editor: the settings that define a mode are basics, the rest stay
   assert.ok(track.text().includes('Always one against one in this mode.'));
   const sum=setup().open(view({lobby:lobby({settings:Object.assign({},settings,{mode:'vampiric',fragLimit:12,lifesteal:60,timeLimit:300})})}));
   assert.ok(sum.text().includes('12 kills')&&sum.text().includes('60 %')&&sum.text().includes('Match length'),'the summary card shows the mode settings');
+});
+
+
+test('play home places briefing beside modes and friends beside the play flow',()=>{
+  const s=setup().open(view());
+  assert.equal(s.find('mp-play-tiles').parentNode,s.find('mp-play-detail').parentNode);
+  assert.equal(s.button('Create lobby').parentNode.parentNode,s.find('mp-play-detail'));
+  assert.equal(s.find('mp-friends').parentNode,s.find('mp-play-social'));
+  assert.ok(s.button('Map library')&&s.button('History'));
+  assert.equal(s.text().split('never touch').length-1,1);
+});
+test('bot quick play creates, fills, and starts only a ready lobby',()=>{
+  for(const mode of ['cs','deathmatch','vampiric','instagib','team-deathmatch']){
+    const s=setup().open(view());
+    s.all().find(e=>e.tag==='button'&&e.children.some(c=>c.textContent===({'cs':'CS competitive','deathmatch':'Deathmatch','vampiric':'Vampiric duel','instagib':'Instagib','team-deathmatch':'Team deathmatch'})[mode])).onclick();
+    s.button('Play vs bots').onclick();assert.deepEqual(JSON.parse(s.last().body),{action:'create',mode});
+    const l=lobby({settings:Object.assign({},settings,{mode}),blockers:[]});
+    s.last().finish(200,view({lobby:l}));assert.deepEqual(JSON.parse(s.last().body),{action:'add-bot',skill:'normal',fill:true});
+    s.last().finish(200,view({lobby:l}));assert.deepEqual(JSON.parse(s.last().body),{action:'start'});
+  }
+});
+test('bot quick play stops on failed creation or map blockers',()=>{
+  const s=setup().open(view());
+  s.all().find(e=>e.tag==='button'&&e.children.some(c=>c.textContent==='Deathmatch')).onclick();
+  s.button('Play vs bots').onclick();s.last().finish(409,{error:'Try again'});
+  assert.equal(s.button('Play vs bots').disabled,false);
+  s.button('Play vs bots').onclick();const l=lobby({settings:Object.assign({},settings,{mode:'deathmatch'}),blockers:[{code:'map',text:'Choose a map'}]});
+  s.last().finish(200,view({lobby:l}));s.last().finish(200,view({lobby:l}));
+  assert.equal(JSON.parse(s.last().body).action,'add-bot');
+  assert.ok(s.button('Start match').disabled);
+});
+test('home invites create a lobby first and missing installs are explicit',()=>{
+  const s=setup().open(view());s.button('Invite').onclick();assert.equal(JSON.parse(s.last().body).action,'create');
+  s.last().finish(200,view({lobby:lobby()}));assert.deepEqual(JSON.parse(s.last().body),{action:'invite-friend',friend:'f1'});
+  const t=setup().open(view({friends:{source:'steam',items:[{id:'f2',name:'Synthetic Friend',status:'online',detail:'Online'}]}}));
+  assert.ok(t.text().includes("Doesn't have AimMod"));assert.ok(!t.button('Invite'));
+});
+test('cosmetic preview has an explicit retry after image failure',()=>{
+  const s=setup().open(view());s.button('Cosmetics').onclick();
+  const img=s.find('mp-look-img');img.onerror();assert.ok(s.text().includes('Preview unavailable'));
+  s.button('Retry preview').onclick();assert.ok(s.text().includes('Loading the preview'));
+  assert.equal(s.last().url,'/private/cosmetic-preview');assert.equal(JSON.parse(s.last().body).open,true);
+});
+test('lobby retains team changes, bot filling and a map briefing',()=>{
+  const l=lobby({settings:Object.assign({},settings,{mode:'cs'}),members:[member('p1','Synthetic One',{team:1}),member('p2','Synthetic Two',{team:2})]});
+  const s=setup().open(view({lobby:l}));assert.ok(s.find('mp-summary').children.some(c=>/mp-ms-thumb/.test(c.className)));
+  s.button('CT').onclick();assert.deepEqual(JSON.parse(s.last().body),{action:'team',member:'p1',team:2});
+  s.button('Fill with bots').onclick();assert.deepEqual(JSON.parse(s.last().body),{action:'add-bot',skill:'normal',fill:true});
 });

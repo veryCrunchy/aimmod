@@ -2,6 +2,7 @@
 // lobby keys, join strings, launch command lines and the AMP1 wire format.
 // Synthetic ids only.
 #include "AvatarImage.hpp"
+#include "../mod/FileMailbox.hpp"
 #include "AvatarPath.hpp"
 #include "AvatarState.hpp"
 #include "BotOrders.hpp"
@@ -521,6 +522,9 @@ int main()
                                    "pose\t1759300000100\t1.5\t-2\t160\t-10\t90\t0\t103\n"
                                    "pose\t1759300000116\t1.6\t-2\t161\t-10\t91\t0\t103\n"
                                    "target\t7\t500\t0\t90\t34\t88\n";
+        auto malformed = sample;
+        malformed.replace(malformed.find("1.5"), 3, std::string("1\0x", 3));
+        Check(!Parse(malformed), "rejects embedded null in pose numbers");
         auto parsed = Parse(sample);
         Check(parsed && parsed->sequence == 42 && parsed->scenario == "AimMod - aim_map (CSS) - CS Movement" && parsed->map == "aimmod_aim_map_css.map" &&
                   parsed->scale == 4 && parsed->rows.size() == 2 && parsed->rows[1].ms == 1759300000116 && parsed->rows[1].v[4] == 91 &&
@@ -1584,6 +1588,7 @@ int main()
         Check(wall && inside && ordered && exact && keys.back().motion == Rest, "A grenade bounces off a wall, stays in the room and each key follows from the last");
         const auto lost = Simulate({0, 0, 100}, {100, 0, 0}, [](const Vec&, const Vec&) { return std::optional<Hit>{}; });
         Check(lost.back().motion == Rest && std::fabs(lost.back().t - MaxSeconds * 1000) < 20, "With nothing to hit, a path ends after 8 s");
+        Check(Occluded(false, false, false) && Occluded(true, false, true) && Occluded(true, true, false) && !Occluded(true, false, false), "Shot sight fails closed and blocks geometry including an embedded origin");
         const auto r = ParseSim("AIMMOD_GRENADESIM_1\t7\nthrow\t3\the\t1\t2\t3\t10\t0\t-5\nthrow\tx\the\t1\t2\t3\t4\t5\t6\nlos\t9\t0\t0\t0\t5\t5\t5\nnoise\n");
         Check(r && r->sequence == 7 && r->throws.size() == 1 && r->throws[0].id == 3 && r->throws[0].kind == "he" && r->throws[0].velocity[2] == -5 && r->los.size() == 1 && r->los[0].tag == 9 &&
                   r->los[0].to[1] == 5 && !ParseSim("AIMMOD_BOTS_1\t1\n"),
@@ -1623,6 +1628,28 @@ int main()
         walker.PlanRoute({500, 0, 1100}, 100, floor, clear);
         Check(walker.Cache().links.contains({0, 0, 10, 50, 0, 10}) && walker.Cache().links.contains({0, 0, 110, 50, 0, 110}),
               "stacked routes retain both vertical link identities");
+    }
+    {
+        const auto dir=std::filesystem::temp_directory_path()/("aimmod-mailbox-test-"+std::to_string(GetCurrentProcessId()));
+        std::filesystem::create_directories(dir);
+        const auto source=dir/"input.tsv", destination=dir/"output.tsv";
+        { std::ofstream out(source); out<<"synthetic"; }
+        {
+            aimmod::FileMailbox mailbox(source,destination,1,10);
+            auto wait=[&](auto predicate) {
+                for(int i=0;i<200;++i) { if(predicate()) return true; std::this_thread::sleep_for(std::chrono::milliseconds(10)); }
+                return false;
+            };
+            Check(wait([&]{auto text=mailbox.Read();return text && *text=="synthetic";}),"mailbox publishes a worker snapshot");
+            mailbox.Write("answer");
+            Check(wait([&]{std::ifstream in(destination);std::string text;in>>text;return text=="answer";}),"mailbox writes outside the caller");
+            std::filesystem::last_write_time(source,std::filesystem::file_time_type::clock::now()-std::chrono::seconds(5));
+            Check(wait([&]{auto text=mailbox.Read();return text && text->empty();}),"mailbox expires stale inputs");
+            {std::ofstream out(source);out<<std::string(65537,'x');}
+            std::this_thread::sleep_for(std::chrono::milliseconds(30));
+            Check(mailbox.Read()->empty(),"mailbox rejects oversized inputs");
+        }
+        std::filesystem::remove_all(dir);
     }
     std::printf("%d/%d checks passed\n", checks - failures, checks);
     return failures == 0 ? 0 : 1;

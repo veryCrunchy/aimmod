@@ -33,7 +33,7 @@ sealed partial class MultiplayerService
     public bool BotDebug { get; set; }
     public LobbyResult SetBotDebug(bool on) { lock (gate) { BotDebug = on; lastBotOrders = null; return LobbyResult.Success; } }
 
-    static bool IsBot(LobbyMember m) => m.Bot is not null;
+    bool IsBot(LobbyMember m) => m.Bot is not null || (core is not null ? core.ControlledSlot(m.Id) : mirror?.Match?.Cs?.Players.Any(p => p.Member == m.Id && p.Afk) == true);
     // Members that have no machine of their own (simulated players, bots): no network, no camera.
     static bool Offline(LobbyMember m) => m.Simulated || m.Bot is not null;
 
@@ -65,7 +65,7 @@ sealed partial class MultiplayerService
                 return new BotPlayer(id, tag, s.X, s.Y, BotEye(s), team, alive, s.Speed ?? (positions.TryGetValue(id, out var ps) ? ps.Speed : 0), s.Crouch);
             return positions.TryGetValue(id, out var p) ? new BotPlayer(id, tag, p.At.X, p.At.Y, p.At.Z, team, alive, p.Speed) : null;
         }).Where(p => p is not null).Select(p => p!).ToList();
-        var bots = lobby.Members.Where(m => IsBot(m) && match.Players.Contains(m.Id)).Select(m => (m.Id, m.Bot!)).ToList();
+        var bots = lobby.Members.Where(m => IsBot(m) && match.Players.Contains(m.Id)).Select(m => (m.Id, m.Bot ?? BotSkills.Normal)).ToList();
         // Smoke takes sight away (BotVision: through the cloud as it grows, both ways), a flash is the
         // brain's (BotTactics); they hear everyone's shots (the shot log); bot grenades go after the
         // brain's own step, its calls first.
@@ -76,7 +76,7 @@ sealed partial class MultiplayerService
         LastBotStep = step;
         LogBots(step, now);
         SayBots(match, world, step, now);
-        foreach (var a in step.Actions) core.Apply(a.Bot, a.Action, JsonSerializer.SerializeToElement(a.Args, Protocol.Json), library);
+        foreach (var a in step.Actions) core.ApplyBot(a.Bot, a.Action, JsonSerializer.SerializeToElement(a.Args, Protocol.Json), library);
         RecordBotFire(match, step, now); // before the hits: a killing shot still sounds
         foreach (var shot in step.Shots) core.BotShot(shot.Bot, shot.Victim, shot.Head, shot.Slot, shot.Dir);
         if (step.Shots.Count > 0) PushCombat();
@@ -243,9 +243,9 @@ sealed partial class MultiplayerService
         if (core is null) return;
         foreach (var (member, s) in botSight)
         {
-            if (!match.Players.Contains(member) || now - s.At > BotBrain.SightFreshMs || botTrackFed.GetValueOrDefault(member) == s.At) continue;
+            if (!match.Players.Contains(member) || Current?.Members.FirstOrDefault(m => m.Id == member) is not { } owner || !IsBot(owner) || now - s.At > BotBrain.SightFreshMs || botTrackFed.GetValueOrDefault(member) == s.At) continue;
             botTrackFed[member] = s.At;
-            core.Track(member, new TrackBatch(match.Id, match.Round, [new TrackSample(now, s.X, s.Y, BotEye(s), 0, s.Yaw)], [], BotBody(member, s)));
+            core.Track(member, new TrackBatch(match.Id, match.Round, [new TrackSample(now, s.X, s.Y, BotEye(s), 0, s.Yaw)], [], BotBody(member, s)), automated: true);
         }
     }
 

@@ -39,6 +39,17 @@ sealed record TeamPlan(string Side, int Round, string Style, int Site, long Exec
 
 static class BotStrategy
 {
+    public static bool SaveAwp(CsView cs, CsPlayerView me, long now)
+    {
+        if (!me.Alive || me.Primary != "awp" || cs.Phase is not ("live" or "planted") || cs.Bomb.Carrier == me.Member) return false;
+        var allies = cs.Players.Count(p => p.Alive && p.Team == me.Team);
+        var enemies = cs.Players.Count(p => p.Alive && p.Team != me.Team);
+        if (enemies == 0) return false;
+        if (cs.Phase == "planted" && me.Side == CsRules.CT)
+            return (cs.Bomb.ExplodesAt ?? cs.PhaseEndsAt) - now < (me.Kit ? CsRules.KitDefuseMs : CsRules.DefuseMs) + 2000
+                || enemies - allies >= 2 && cs.PhaseEndsAt - now < 20_000 && cs.Bomb.Defuser is null;
+        return cs.Phase == "live" && enemies - allies >= 2 && cs.PhaseEndsAt - now < 25_000;
+    }
     public const long RushCallMs = 0, DefaultCallMinMs = 20_000, DefaultCallMaxMs = 35_000;
     public const double SiteAlertCm = 2600; // a sighting this close to a site pulls the defence there
 

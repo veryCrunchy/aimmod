@@ -58,6 +58,7 @@ sealed partial class MultiplayerService : IDisposable
     bool autoDownload, simulatedMissing;
     long manifestAskedAt;
     string? trackedRound, lastContentKey; HashSet<string> knownRuns = new(StringComparer.Ordinal); double lastFrameSeconds = -1; long lastFrameAt; ScoreFrame? lastFrame;
+    int timerBusy;
     public MultiplayerSimulation? Simulation { get; private set; }
     public string SelfId => transport.LocalPeer;
 
@@ -86,7 +87,13 @@ sealed partial class MultiplayerService : IDisposable
         // The bot chat contract (MultiplayerService.Chat.cs): the bot AI posts its callouts through it.
         BotSay = SayAsBot;
         // A failure in one tick must never take the whole service down: log it and keep going.
-        if (autoTick) timer = new Timer(_ => { try { Tick(); } catch (Exception ex) { Console.Error.WriteLine("Multiplayer tick failed: " + ex.GetType().Name + ": " + ex.Message); } }, null, 100, 100);
+        if (autoTick) timer = new Timer(_ =>
+        {
+            // Skip a beat instead of stacking thread-pool threads behind a slow tick.
+            if (Interlocked.Exchange(ref timerBusy, 1) == 1) return;
+            try { Tick(); } catch (Exception ex) { Console.Error.WriteLine("Multiplayer tick failed: " + ex.GetType().Name + ": " + ex.Message); }
+            finally { Volatile.Write(ref timerBusy, 0); }
+        }, null, 100, 100);
     }
 
     // The simulation is a developer tool: on in Debug builds, and in Release only with
@@ -361,7 +368,7 @@ sealed partial class MultiplayerService : IDisposable
         character = new { preset = s.CharacterProfile.Preset, custom = s.CharacterProfile.Custom },
         targetSpeed = s.TargetSpeed, targetSize = s.TargetSize, privacy = s.Privacy, countdown = s.Countdown, lateJoin = s.LateJoin, autoStart = s.AutoStart, voting = s.Voting,
         fragLimit = s.FragLimit, lifesteal = s.Lifesteal, requireFire = s.RequireFire, halfRounds = s.HalfRounds, overtime = s.Overtime, adsZoom = s.AdsZoom, adsSensitivity = s.AdsSensitivity,
-        dynamicCrosshair = s.DynamicCrosshair,
+        dynamicCrosshair = s.DynamicCrosshair, csWarmup = s.CsWarmup, duelAfkSeconds = s.DuelAfkSeconds,
     };
     PresetStore LoadPresets()
     {
@@ -517,15 +524,15 @@ sealed partial class MultiplayerService : IDisposable
                     try
                     {
                         var hash = m.Body.GetProperty("hash").GetString() ?? "";
-                        var transfer = m.Body.TryGetProperty("transfer", out var tr) && tr.TryGetInt32(out var tv) && transport.BulkChunkBytes > 0 ? tv : 0;
-                        var chunk = m.Body.TryGetProperty("chunk", out var ch) && ch.TryGetInt32(out var cv) ? Math.Min(cv, transport.BulkChunkBytes) : 0;
+                        var transfer = m.Body.TryGetProperty("transfer", out var tr) && PacketJson.Int32(tr, out var tv) && transport.BulkChunkBytes > 0 ? tv : 0;
+                        var chunk = m.Body.TryGetProperty("chunk", out var ch) && PacketJson.Int32(ch, out var cv) ? Math.Min(cv, transport.BulkChunkBytes) : 0;
                         var problem = mine is null ? "not-offered" : watchServer.Request(peer, mine, hash, m.Body.GetProperty("offset").GetInt64(), m.Body.GetProperty("length").GetInt64(), transfer, chunk);
                         if (problem is not null) Send(peer, "content.error", new { hash, code = problem });
                     }
                     catch (Exception ex) when (ex is KeyNotFoundException or InvalidOperationException or FormatException) { }
                     return true;
                 case "content.done":
-                    if (m.Body.TryGetProperty("transfer", out var dt) && dt.TryGetInt32(out var done)) { watchServer.Ended(peer, done); transport.BulkCancel(peer, done, "complete"); }
+                    if (m.Body.TryGetProperty("transfer", out var dt) && PacketJson.Int32(dt, out var done)) { watchServer.Ended(peer, done); transport.BulkCancel(peer, done, "complete"); }
                     return true;
             }
         }
@@ -737,7 +744,7 @@ sealed partial class MultiplayerService : IDisposable
             using var doc = JsonDocument.Parse(File.ReadAllText(sessionPath));
             var root = doc.RootElement;
             if (root.TryGetProperty("token", out var t) && t.ValueKind == JsonValueKind.String && t.GetString() is { Length: > 0 and <= 64 } token
-                && root.TryGetProperty("at", out var a) && a.TryGetInt64(out var at) && clock() - at is >= 0 and < 15 * 60_000)
+                && root.TryGetProperty("at", out var a) && PacketJson.Int64(a, out var at) && clock() - at is >= 0 and < 15 * 60_000)
                 rejoin = (token, at);
         }
         catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException) { }
@@ -1048,6 +1055,7 @@ sealed partial class MultiplayerService : IDisposable
             var duel = DuelHud();
             var combat = CombatHud();
             var cs = CsHud();
+            var vote = VoteHud();
             var (board, boardFull) = NoticeBoards();
             var play = PlayRequest(clock());
             var chat = ChatHud();
@@ -1068,7 +1076,7 @@ sealed partial class MultiplayerService : IDisposable
                 swallowMenu = CsSwallowMenu(clock()) ? true : (bool?)null,
                 actions = notice?.Actions, interactive = notice?.Actions is { Count: > 0 } || menu || typing,
                 // cursor: the CS buy menu or a radio menu is open, so AimModNativeUI shows the cursor in game (and hands input back after).
-                cursor = menu, typing = typing ? true : (bool?)null, play, volume = prefs.Sounds ? prefs.Volume : 0, duel, combat, cs, board, boardFull,
+                cursor = menu, typing = typing ? true : (bool?)null, play, volume = prefs.Sounds ? prefs.Volume : 0, duel, combat, cs, vote, board, boardFull,
                 chat = chat is null ? null : page ? chat : (object)new { open = chat.Open, session = chat.Session, lines = chat.Lines.Count, radio = chat.Radio is not null },
             }, Protocol.Json);
         }
@@ -1253,11 +1261,11 @@ sealed partial class MultiplayerService : IDisposable
     }
     void Hello() { if (hostPeer is null) return; helloAt = clock(); Send(hostPeer, "hello", new { name = selfName, proto = Protocol.Version, app = "aimmod-kovaaks", bridge = transport.BridgeVersion, avatar = myAvatar }); }
 
-    void Send(string peer, string type, object body)
+    bool Send(string peer, string type, object body)
     {
         var lobby = Current?.Id ?? "";
-        try { transport.Send(peer, Protocol.Encode(Protocol.Create(type, lobby, SelfId, ++seq, clock(), body)), Protocol.Reliable(type)); }
-        catch (InvalidOperationException) { }
+        try { transport.Send(peer, Protocol.Encode(Protocol.Create(type, lobby, SelfId, ++seq, clock(), body)), Protocol.Reliable(type)); return true; }
+        catch (InvalidOperationException) { Console.Error.WriteLine("[multiplayer] Frame encode/send failed: " + type); return false; }
     }
 
     void TakeSimulatedInvites()
@@ -1290,7 +1298,8 @@ sealed partial class MultiplayerService : IDisposable
     {
         lock (gate)
         {
-            foreach (var e in transport.Drain()) Handle(e);
+            if (core is not null) core.TraceShot = TraceShot;
+            foreach (var e in transport.Drain()) HandleSafely(e);
             TakeSimulatedInvites();
             MapTick();
             var now = clock();
@@ -1366,6 +1375,7 @@ sealed partial class MultiplayerService : IDisposable
             StepScoreBots();
             StepGrenades();
             StepChat();
+            StepMatchControls();
             TrackLocalRun();
             PushShots();
             Remember();
@@ -1401,14 +1411,56 @@ sealed partial class MultiplayerService : IDisposable
         return map;
     }
 
+    long HostClockOffset(string oldHost)
+    {
+        return clocks.TryGetValue(oldHost, out var sync) && sync.Samples > 0 ? sync.Offset : mirror is { } last ? last.Now - mirrorAt : 0;
+    }
+    readonly Dictionary<string, (string Lobby, HashSet<long> Ids)> chatSent = new();
+    bool SendSnapshot(string peer, string type, LobbySnapshot snapshot)
+    {
+        var visible = MatchChat.For(snapshot, peer);
+        if (!SendState(peer, type, visible with { Chat = [] })) return false;
+        // Small independent frames keep even escaped Unicode chat within the envelope budget.
+        var last = chatSent.GetValueOrDefault(peer);
+        if (last.Lobby != snapshot.Id || type == "welcome") last = (snapshot.Id, new HashSet<long>());
+        last.Ids.IntersectWith(snapshot.Chat.Select(l => l.Id));
+        foreach (var line in visible.Chat.Where(l => !last.Ids.Contains(l.Id)))
+        {
+            if (!Send(peer, "chat", new { lines = new[] { line } })) return false;
+            last.Ids.Add(line.Id);
+        }
+        chatSent[peer] = last;
+        return true;
+    }
+
     void Broadcast(LobbySnapshot snapshot, bool force)
     {
         var now = clock();
         if (!force && (snapshot.Revision == lastBroadcast || now - broadcastAt < 250)) return;
-        lastBroadcast = snapshot.Revision; broadcastAt = now;
+        broadcastAt = now;
+        var sent = true;
         // Each member gets only the chat lines they may see (team chat, CS dead chat: MatchChat.cs).
-        foreach (var peer in RemotePeers(snapshot)) Send(peer, "snapshot", new { snapshot = MatchChat.For(snapshot, peer) });
+        foreach (var peer in RemotePeers(snapshot)) sent &= SendSnapshot(peer, "snapshot", snapshot);
+        if (sent) lastBroadcast = snapshot.Revision;
         transport.Advertise(snapshot);
+    }
+
+    readonly Dictionary<string, (long Start, int Count)> malformed = new();
+    void HandleSafely(TransportEvent e)
+    {
+        if (malformed.TryGetValue(e.Peer, out var prior) && prior.Count >= 8 && clock() - prior.Start < 60_000) return;
+        try { Handle(e); }
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException or FormatException or OverflowException or KeyNotFoundException or ArgumentException or NullReferenceException or IndexOutOfRangeException)
+        {
+            var now = clock();
+            var entry = malformed.GetValueOrDefault(e.Peer);
+            if (now - entry.Start >= 60_000) entry = (now, 0);
+            entry.Count++;
+            if (malformed.Count >= 256 && !malformed.ContainsKey(e.Peer)) malformed.Clear();
+            malformed[e.Peer] = entry;
+            if (entry.Count == 1 || entry.Count == 8) Console.Error.WriteLine("[multiplayer] Dropped malformed packet from peer " + Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(e.Peer)))[..8] + "; strikes: " + entry.Count);
+            if (entry.Count >= 8) { core?.Leave(e.Peer); transport.Kick(e.Peer); transport.Close(e.Peer); }
+        }
     }
 
     void Handle(TransportEvent e)
@@ -1473,12 +1525,13 @@ sealed partial class MultiplayerService : IDisposable
         if (e.Kind != TransportEvent.Message || e.Frame is null) return;
         var m = Protocol.Decode(e.Frame);
         // The transport authenticates peers; a frame claiming another sender is dropped.
-        if (m is null || m.From != e.Peer) return;
+        if (m is null || m.From != e.Peer) throw new JsonException("Invalid envelope");
+        PacketJson.Validate(m);
         var now = clock();
-        if (m.T == "ping") { Send(e.Peer, "pong", new { t0 = m.Body.TryGetProperty("t0", out var t0) && t0.TryGetInt64(out var v) ? v : 0, t1 = now }); return; }
+        if (m.T == "ping") { Send(e.Peer, "pong", new { t0 = m.Body.TryGetProperty("t0", out var t0) && PacketJson.Int64(t0, out var v) ? v : 0, t1 = now }); return; }
         if (m.T == "pong")
         {
-            if (!m.Body.TryGetProperty("t0", out var a) || !a.TryGetInt64(out var sent) || !m.Body.TryGetProperty("t1", out var b) || !b.TryGetInt64(out var remote)) return;
+            if (!m.Body.TryGetProperty("t0", out var a) || !PacketJson.Int64(a, out var sent) || !m.Body.TryGetProperty("t1", out var b) || !PacketJson.Int64(b, out var remote)) return;
             if (!clocks.TryGetValue(e.Peer, out var sync)) clocks[e.Peer] = sync = new ClockSync();
             sync.Add(sent, remote, now);
             if (core is not null) core.SetLink(e.Peer, transport.Link(e.Peer)?.Route, sync.Rtt);
@@ -1500,7 +1553,7 @@ sealed partial class MultiplayerService : IDisposable
         {
             case "hello":
                 var name = m.Body.TryGetProperty("name", out var n) && n.ValueKind == JsonValueKind.String ? n.GetString() : null;
-                var proto = m.Body.TryGetProperty("proto", out var p) && p.TryGetInt32(out var pv) ? pv : 0;
+                var proto = m.Body.TryGetProperty("proto", out var p) && PacketJson.Int32(p, out var pv) ? pv : 0;
                 if (proto != Protocol.Version) { Send(peer, "reject", new { code = "version", message = "Update AimMod to join this lobby." }); return; }
                 if (core!.Settings.Privacy == LobbyPrivacy.Invite && !transport.Invited(peer) && core.Members.All(x => x.Id != peer)) { Send(peer, "reject", new { code = "invite", message = "This lobby is invite only." }); return; }
                 var version = m.Body.TryGetProperty("bridge", out var bv) && bv.ValueKind == JsonValueKind.String ? bv.GetString() : null;
@@ -1508,10 +1561,10 @@ sealed partial class MultiplayerService : IDisposable
                 if (joined.Ok && m.Body.TryGetProperty("avatar", out var av) && av.ValueKind == JsonValueKind.String) core.Apply(peer, "avatar", JsonSerializer.SerializeToElement(new { avatar = av.GetString() }), library);
                 if (!joined.Ok) { Send(peer, "reject", new { code = joined.Code, message = joined.Message }); transport.Close(peer); return; }
                 core.SetLink(peer, transport.Link(peer)?.Route ?? "relay", transport.Link(peer)?.Ping);
-                Send(peer, "welcome", new { member = peer, snapshot = MatchChat.For(core.Snapshot(), peer) });
+                SendSnapshot(peer, "welcome", core.Snapshot());
                 break;
             case "command":
-                var id = m.Body.TryGetProperty("id", out var i) && i.TryGetInt64(out var iv) ? iv : 0;
+                var id = m.Body.TryGetProperty("id", out var i) && PacketJson.Int64(i, out var iv) ? iv : 0;
                 var action = m.Body.TryGetProperty("action", out var a) && a.ValueKind == JsonValueKind.String ? a.GetString() ?? "" : "";
                 var args = m.Body.TryGetProperty("args", out var g) ? g : default;
                 var result = core!.Apply(peer, action, args, library);
@@ -1522,12 +1575,16 @@ sealed partial class MultiplayerService : IDisposable
                 break;
             case "finish":
                 if (ReadFinish(m.Body) is { } run) core!.Finish(peer, run);
+                else throw new JsonException("Invalid finish");
                 break;
             case "track":
                 if (TrackBatch.Read(m.Body) is { } batch) { core!.Track(peer, batch); if (ConfirmClaims()) PushCombat(); }
+                else throw new JsonException("Invalid track");
                 break;
             case "hit":
+                core!.TraceShot = TraceShot;
                 if (HitClaim.Read(m.Body) is { } claim) { core!.Claim(peer, claim); ConfirmClaims(); PushCombat(); }
+                else throw new JsonException("Invalid hit");
                 break;
             case "fired":
                 ReceiveFired(peer, m.Body);
@@ -1540,8 +1597,8 @@ sealed partial class MultiplayerService : IDisposable
                 try
                 {
                     var hash = m.Body.GetProperty("hash").GetString() ?? "";
-                    var transfer = m.Body.TryGetProperty("transfer", out var tr) && tr.TryGetInt32(out var tv) && transport.BulkChunkBytes > 0 ? tv : 0;
-                    var chunk = m.Body.TryGetProperty("chunk", out var ch) && ch.TryGetInt32(out var cv) ? Math.Min(cv, transport.BulkChunkBytes) : 0;
+                    var transfer = m.Body.TryGetProperty("transfer", out var tr) && PacketJson.Int32(tr, out var tv) && transport.BulkChunkBytes > 0 ? tv : 0;
+                    var chunk = m.Body.TryGetProperty("chunk", out var ch) && PacketJson.Int32(ch, out var cv) ? Math.Min(cv, transport.BulkChunkBytes) : 0;
                     var problem = server.Request(peer, core!.Settings, hash, m.Body.GetProperty("offset").GetInt64(), m.Body.GetProperty("length").GetInt64(), transfer, chunk);
                     if (problem is not null) Send(peer, "content.error", new { hash, code = problem });
                 }
@@ -1559,7 +1616,7 @@ sealed partial class MultiplayerService : IDisposable
                 }
                 break;
             case "content.done":
-                if (m.Body.TryGetProperty("transfer", out var dt) && dt.TryGetInt32(out var done)) { server.Ended(peer, done); transport.BulkCancel(peer, done, "complete"); }
+                if (m.Body.TryGetProperty("transfer", out var dt) && PacketJson.Int32(dt, out var done)) { server.Ended(peer, done); transport.BulkCancel(peer, done, "complete"); }
                 break;
             case "bye":
                 server.Forget(peer);
@@ -1573,17 +1630,23 @@ sealed partial class MultiplayerService : IDisposable
         if (peer != hostPeer) return;
         switch (m.T)
         {
+            case "state-part":
+                ReceiveState(peer, m); return;
+            case "chat":
+                if (mirror is not null && m.Body.GetProperty("lines").Deserialize<ChatLine[]>(Protocol.Json) is { Length: <= 60 } lines)
+                    mirror = mirror with { Chat = mirror.Chat.Concat(lines).DistinctBy(l => l.Id).OrderBy(l => l.Id).TakeLast(60).ToArray() };
+                return;
             case "welcome" or "snapshot":
                 if (!m.Body.TryGetProperty("snapshot", out var body)) return;
                 LobbySnapshot? snapshot;
                 try { snapshot = body.Deserialize<LobbySnapshot>(Protocol.Json); } catch (JsonException) { return; }
                 if (snapshot is null || !LobbyRules.Plausible(snapshot.Settings) || snapshot.Members.Count > LobbySettings.MaxPlayerLimit + LobbySettings.MaxSpectators) return;
                 if (snapshot.Members.All(x => x.Id != SelfId)) { Leave("removed"); notice = ("error", "The host removed you from the lobby.", clock()); return; }
-                mirror = snapshot; mirrorAt = clock(); pendingHeir = null; reconnectSince = null;
+                mirror = snapshot with { Chat = mirror?.Id == snapshot.Id ? mirror.Chat : [] }; mirrorAt = clock(); pendingHeir = null; reconnectSince = null;
                 if (snapshot.HostId == SelfId)
                 {
                     // The host handed the lobby to us.
-                    core = LobbyCore.Restore(snapshot, SelfId, clock); hostPeer = null; mirror = null;
+                    core = LobbyCore.Restore(mirror, SelfId, clock, HostClockOffset(peer)); hostPeer = null; mirror = null;
                     transport.Advertise(core.Snapshot());
                 }
                 else if (snapshot.HostId != peer && snapshot.Members.Any(x => x.Id == snapshot.HostId)) { transport.Close(peer); Connect(snapshot.HostId); }
@@ -1662,7 +1725,7 @@ sealed partial class MultiplayerService : IDisposable
         if (heir is null) { Leave("closed"); notice = ("error", oldName + " left and the lobby closed.", clock()); return; }
         if (heir.Id == SelfId)
         {
-            core = LobbyCore.Restore(last, SelfId, clock); mirror = null; hostPeer = null;
+            core = LobbyCore.Restore(last, SelfId, clock, HostClockOffset(hostPeer ?? last.HostId)); mirror = null; hostPeer = null;
             notice = ("info", oldName + " left. You’re the host now.", clock());
             transport.Advertise(core.Snapshot());
             return;
@@ -1957,7 +2020,7 @@ sealed partial class MultiplayerService : IDisposable
             var lastSpawn = view.Events.LastOrDefault(e => e.Member == SelfId && e.Kind is "respawn");
             var extra = PhaseLines(match).ToList();
             if (match.Cs is { } csv && csv.Spawns?.GetValueOrDefault(SelfId) is { Length: 4 } rs)
-                lastSpawn = new CombatEvent(1_000_000 + csv.Round, "respawn", 0, SelfId, null, 0, false, 100, null, rs); // one teleport per CS round
+                lastSpawn = new CombatEvent(1_000_000 + (csv.Players.FirstOrDefault(p => p.Member == SelfId)?.SpawnSerial ?? csv.Round), "respawn", 0, SelfId, null, 0, false, 100, null, rs); // round starts, warmup respawns and control handbacks
             // The match scenario's exact name: AimModCore applies play state only there.
             var scenario = plan is { } pl && pl.Key == PlanKey(match) ? pl.Scenario : Current is { } cur ? MatchScenario.Name(cur.Settings) : match.Scenario;
             var hostNow = clock() + HostOffset();
@@ -2037,7 +2100,7 @@ sealed partial class MultiplayerService : IDisposable
     void WriteAvatarState(MatchSnapshot match, CombatView view, CombatPlayerView self)
     {
         if (outputFolder is null) return;
-        var rows = view.Players.Where(p => p.Member != SelfId).Select(p =>
+        var rows = view.Players.Where(p => p.Member != SelfId || match.Cs?.Players.Any(x => x.Member == p.Member && x.Afk) == true).Select(p =>
         {
             var died = view.Events.LastOrDefault(e => e.Member == p.Member && e.Kind == "death");
             var friend = self.Team != 0 && p.Team == self.Team;
@@ -2045,7 +2108,8 @@ sealed partial class MultiplayerService : IDisposable
                 + "\t" + (p.Alive ? 0 : died?.T ?? 0) + "\t" + (p.Alive ? 0 : p.RespawnAt ?? 0)
                 + (match.Cs is { } cs ? "\t" + AvatarWeapon(cs, p.Member) : "");
         });
-        var body = "match\t" + Uri.EscapeDataString(match.Id) + "\n" + string.Join("\n", rows) + "\n";
+        var hidden = match.Cs?.Players.Where(p => p.Afk && p.Member != SelfId).Select(p => "peer\t" + p.Member + "\t0\tenemy\t0\t0\t0\t-") ?? [];
+        var body = "match\t" + Uri.EscapeDataString(match.Id) + "\n" + string.Join("\n", rows.Concat(hidden)) + "\n";
         var now = clock();
         if (!AvatarStateDue(body, lastAvatarState, avatarWrittenAt, now)) return;
         lastAvatarState = body; avatarWrittenAt = now;
@@ -2077,6 +2141,7 @@ sealed partial class MultiplayerService : IDisposable
         if (Current is not { Match: { } match } || !match.Players.Contains(SelfId)) { trackedRound = null; return; }
         var restarted = DetectRestart(match);
         ReadLockPresses();
+        if (match.Mode == LobbyModes.Duel) StreamTracking(match);
         if (match.Mode == LobbyModes.Tracking) { StreamTracking(match); WriteRoundState(match, null, PhaseLines(match)); return; }
         if (LobbyModes.Shooting(match.Mode)) { StreamCombat(match); if (match.Cs is not null) CsInput(match); return; }
         // Score modes: frozen before go-live in a generated scenario (AimModCore ignores it elsewhere).

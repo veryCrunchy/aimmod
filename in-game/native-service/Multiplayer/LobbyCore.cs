@@ -6,7 +6,7 @@ namespace AimMod.InGame.Multiplayer;
 // The host's authoritative lobby. Every change comes in as a command from a
 // member id and is validated here, whether it came from this machine, a
 // simulated member or a remote peer. Clients only mirror snapshots.
-sealed class LobbyCore
+sealed partial class LobbyCore
 {
     public const int ChatLimit = 60;
     public const long RoundGraceMs = 10_000, ResultsMs = 8_000, MemberGraceMs = 30_000, HostGraceMs = 10_000, RematchMs = 20_000, AutoStartMs = 3_000;
@@ -18,6 +18,7 @@ sealed class LobbyCore
         // A bot the host runs (its difficulty: easy, normal or hard); null for people.
         public string? Bot;
         public readonly Queue<long> ChatTimes = new();
+        public readonly Queue<long> ControlTimes = new();
         public LobbyMember View() => new(Id, Name, Role, Ready, Ping, Scenario, Map, Profiles, Connection, Link, JoinedAt, Simulated, Avatar, Version, Away, Cosmetics, Team, Bot);
     }
     sealed class Line
@@ -40,6 +41,7 @@ sealed class LobbyCore
         // Combat modes: the host's health, frags and respawns for the whole match.
         public CombatMatch? Combat; public long CombatEvents = -1;
         // CS: the round machine, economy and bomb (its CombatMatch validates the hits).
+        public MatchSnapshot? EndedCs;
         public CsMatch? Cs; public string? CsKey;
     }
     bool Combat => match is not null && LobbyModes.Shooting(match.Settings.Mode);
@@ -191,9 +193,9 @@ sealed class LobbyCore
     // friendly fire, armour.
     public LobbyResult BotShot(string bot, string victim, bool head, int slot, double[]? dir)
     {
-        if (Find(bot) is not { Bot: not null }) return LobbyResult.Fail("not-bot", "Not a bot.");
+        if (Find(bot) is not { Bot: not null } && match?.Cs?.Controlled(bot) != true) return LobbyResult.Fail("not-bot", "Not a bot.");
         if (match is not { Phase: MatchPhases.Live, Combat: { } combat } m || !m.Players.Contains(bot)) return LobbyResult.Fail("stale", "No match is running.");
-        if (m.Cs is { Phase: not ("live" or "planted") }) return LobbyResult.Fail("round-phase", "No shooting between rounds.");
+        if (m.Cs is { Paused: true } or { Phase: not ("warmup" or "live" or "planted") }) return LobbyResult.Fail("round-phase", "No shooting between rounds.");
         var refused = combat.BotHit(bot, victim, head, clock(), slot, dir);
         UpdateCombat(m, combat);
         if (m.Cs is null && combat.Leader is not null) CloseRound();
@@ -203,7 +205,7 @@ sealed class LobbyCore
     // trade paths and line-of-sight traces with this machine's game; a change is broadcast.
     public void WithCsGrenades(Action<CsGrenadeField> act)
     {
-        if (match is not { Phase: MatchPhases.Live, Cs: { } cs }) return;
+        if (match is not { Phase: MatchPhases.Live, Cs: { Paused: false } cs }) return;
         var before = cs.Grenades.Revision;
         act(cs.Grenades);
         if (cs.Grenades.Revision != before) { UpdateCombat(match, cs.Combat); Changed(); }
@@ -211,7 +213,7 @@ sealed class LobbyCore
     // A bot's grenade (BotGrenades): one it carries, at the velocity its logic aimed.
     public LobbyResult BotThrow(string bot, string kind, double[] from, double[] velocity)
     {
-        if (Find(bot) is not { Bot: not null }) return LobbyResult.Fail("not-bot", "Not a bot.");
+        if (Find(bot) is not { Bot: not null } && match?.Cs?.Controlled(bot) != true) return LobbyResult.Fail("not-bot", "Not a bot.");
         if (match is not { Phase: MatchPhases.Live, Cs: { } cs } m || !m.Players.Contains(bot)) return LobbyResult.Fail("stale", "No CS round is running.");
         var refused = cs.BotThrow(bot, kind, from, velocity, clock());
         if (refused is null) Changed();
@@ -227,7 +229,7 @@ sealed class LobbyCore
     public LobbyResult Join(string id, string name, bool simulated = false, string? version = null)
     {
         if (Closed) return LobbyResult.Fail("closed", "This lobby has closed.");
-        if (banned.Contains(id)) return LobbyResult.Fail("kicked", "The host removed you from this lobby.");
+        if (banned.Contains(id)) return LobbyResult.Fail("kicked", "You were removed from this lobby.");
         if (Find(id) is { } existing)
         {
             if (version is not null && existing.Version != version) { existing.Version = version; Changed(); }
@@ -265,7 +267,7 @@ sealed class LobbyCore
         members.Remove(member);
         if (match is not null && match.Live.TryGetValue(id, out var line) && line.Status is LineStates.Waiting or LineStates.Playing) line.Status = LineStates.Left;
         match?.Rematch.Remove(id);
-        System(member.Name + (reason == "kicked" ? " was removed by the host." : reason == "timeout" ? " lost connection." : " left."));
+        System(member.Name + (reason == "kicked" ? " was removed by the host." : reason == "vote-kicked" ? " was removed by a team vote." : reason == "timeout" ? " lost connection." : " left."));
         if (members.Count == 0) { Closed = true; Changed(); return LobbyResult.Success; }
         if (id == HostId) Migrate(member.Name);
         // Combat: a player leaving drops out; the match ends when fewer than two remain.
@@ -328,6 +330,8 @@ sealed class LobbyCore
         LobbyResult HostOnly() => LobbyResult.Fail("not-host", "Only the host can do that.");
         switch (action)
         {
+            case "match-control":
+                return MatchControl(member, Text("command") ?? "", Text("member"));
             case "ready":
                 if (Flag("ready") is not { } ready) return LobbyResult.Fail("invalid", "Ready must be true or false.");
                 if (member.Role != MemberRoles.Player) return LobbyResult.Fail("spectator", "Spectators don’t ready up.");
@@ -382,6 +386,8 @@ sealed class LobbyCore
                 while (member.ChatTimes.Count > 0 && now - member.ChatTimes.Peek() > 5000) member.ChatTimes.Dequeue();
                 if (member.ChatTimes.Count >= 5) return LobbyResult.Fail("slow", "Slow down a little.");
                 member.ChatTimes.Enqueue(now);
+                if (text.StartsWith("/", StringComparison.Ordinal))
+                { var parts = text[1..].Split(' ', 2, StringSplitOptions.RemoveEmptyEntries); if (parts.Length > 0) return MatchControl(member, parts[0].ToLowerInvariant(), parts.Length > 1 ? parts[1] : null); }
                 if (MatchLine(member, Text("scope"), Flag("radio") == true) is { } said) { AddLine(said with { Id = ++chatId, Text = text, At = now }); return LobbyResult.Success; }
                 AddChat(member.Id, member.Name, text, false);
                 return LobbyResult.Success;
@@ -582,6 +588,7 @@ sealed class LobbyCore
             m.Cs = new CsMatch(csPlayers, m.StartsAt.Value, m.Settings.HalfRounds, m.Settings.Overtime, csObjectives, LobbyRules.ResolveTeams(csPlayers.Select(id => (id, Find(id)!.Team)).ToList()));
             m.Combat = m.Cs.Combat;
             m.Cs.Bots.UnionWith(csPlayers.Where(id => Find(id)?.Bot is not null));
+            if (m.Settings.CsWarmup) m.Cs.BeginWarmup(m.StartsAt.Value);
             m.Combat.TeamDamage = m.Settings.EffectiveFriendlyFire ? CombatMatch.CsTeamDamage : 0;
         }
         if (LobbyModes.Combat(m.Settings.Mode))
@@ -636,6 +643,7 @@ sealed class LobbyCore
         if (!Sane(frame.Score, frame.Seconds, frame.Shots, frame.Hits, frame.Kills, m.Settings.EffectiveTimeLimit)) return LobbyResult.Fail("invalid", "Impossible score frame.");
         if (line.Seconds is { } seen && frame.Seconds < seen) return LobbyResult.Success;
         line.Score = frame.Score; line.Seconds = frame.Seconds; line.Remaining = frame.Remaining is { } r && double.IsFinite(r) ? Math.Max(0, r) : null;
+        if (frame.Shots > line.Shots) HumanActivity(from);
         line.Shots = frame.Shots; line.Hits = frame.Hits; line.Kills = frame.Kills; line.Status = LineStates.Playing;
         Changed();
         return LobbyResult.Success;
@@ -666,12 +674,16 @@ sealed class LobbyCore
 
     // Tracking duel samples from a player's own client (or this machine). Only the
     // current round's two players are accepted, and only while it counts down or runs.
-    public LobbyResult Track(string from, TrackBatch batch)
+    public LobbyResult Track(string from, TrackBatch batch, bool automated = false)
     {
+        if (match is { Phase: MatchPhases.Live } duel && duel.Settings.Mode == LobbyModes.Duel && batch.MatchId == duel.Id && batch.Round == duel.Round && duel.Players.Contains(from))
+        { HumanTrack(from, batch); return LobbyResult.Success; }
         if (match is { Phase: MatchPhases.Live or MatchPhases.Countdown, Combat: { } combat } cm && batch.MatchId == cm.Id && batch.Round == cm.Round)
         {
             if (!cm.Players.Contains(from)) return LobbyResult.Fail("not-playing", "Not playing this match.");
-            combat.Track(from, batch);
+            if (cm.Cs?.Paused == true || Find(from)?.Role == MemberRoles.Spectator) return LobbyResult.Success;
+            if (!automated && !HumanTrack(from, batch)) return LobbyResult.Success;
+            combat.Track(from, batch, clock());
             // Claims that waited for this player's camera samples are decided now.
             if (cm.Phase == MatchPhases.Live && combat.PendingClaims > 0)
             {
@@ -683,6 +695,7 @@ sealed class LobbyCore
         }
         if (match is not { Phase: MatchPhases.Live or MatchPhases.Countdown, Tracking: { } tracking } m || batch.MatchId != m.Id || batch.Round != m.Round) return LobbyResult.Fail("stale", "Not the current round.");
         if (from != tracking.First && from != tracking.Second) return LobbyResult.Fail("not-playing", "Not playing this round.");
+        HumanTrack(from, batch);
         tracking.Add(from, batch);
         return LobbyResult.Success;
     }
@@ -690,6 +703,7 @@ sealed class LobbyCore
     // A hit the shooter's game registered. The host validates it and applies the damage; a claim
     // whose shooter track hasn't arrived yet waits for it (Code "pending"). Every decision is in
     // TakeClaimVerdicts, for the shooter's confirmation.
+    public Func<string, HitClaim, double[], double[], bool?>? TraceShot { get; set; }
     public LobbyResult Claim(string from, HitClaim claim)
     {
         LobbyResult Refuse(string code, string message)
@@ -699,8 +713,12 @@ sealed class LobbyCore
             return LobbyResult.Fail(code, message);
         }
         if (match is not { Phase: MatchPhases.Live, Combat: { } combat } m || claim.MatchId != m.Id || claim.Round != m.Round) return Refuse("stale", "Not the current match.");
-        if (m.Cs is { Phase: not ("live" or "planted") } csm) return Refuse("round-phase", "No shooting between rounds (" + csm.Phase + ").");
+        if (m.Cs is { } csm && (csm.Paused || csm.Phase is not ("warmup" or "live" or "planted"))) return Refuse("round-phase", "No shooting between rounds (" + csm.Phase + ").");
+        if (Find(from)?.Role != MemberRoles.Player) return Refuse("spectator", "Not playing this round.");
+        if (m.Cs?.Controlled(from) == true) return Refuse("controlled", "Return to play first.");
+        combat.TraceShot = TraceShot;
         var refused = combat.Claim(from, claim, clock(), Find(from)?.Ping);
+        if (refused is null or "pending") HumanActivity(from);
         UpdateCombat(m, combat);
         if (m.Cs is null && combat.Leader is not null) CloseRound();
         return refused is null ? LobbyResult.Success : refused == "pending" ? new LobbyResult(true, "pending", null) : LobbyResult.Fail(refused, "Hit not accepted (" + refused + ").");
@@ -795,9 +813,10 @@ sealed class LobbyCore
 
     // CS actions from a player's own client: buy an item, hold or release the use key, drop the bomb,
     // which weapon slot they hold (what the others see in their hands), and throw a grenade.
-    LobbyResult CsAction(Member member, string action, JsonElement args)
+    LobbyResult CsAction(Member member, string action, JsonElement args, bool automated = false)
     {
         if (match is not { Phase: MatchPhases.Live, Cs: { } cs } m || !m.Players.Contains(member.Id)) return LobbyResult.Fail("invalid", "No CS round is running.");
+        if (member.Role != MemberRoles.Player || cs.Paused || (!automated && cs.Controlled(member.Id))) return LobbyResult.Fail("not-now", "Return to play first.");
         string? refused;
         if (action == "buy")
             refused = args.ValueKind == JsonValueKind.Object && args.TryGetProperty("item", out var item) && item.ValueKind == JsonValueKind.String ? cs.Buy(member.Id, item.GetString() ?? "", clock()) : "unknown-item";
@@ -867,6 +886,7 @@ sealed class LobbyCore
     public void Tick()
     {
         var now = clock();
+        TickControls(now);
         foreach (var m in members.Where(m => m.LostAt is not null).ToArray())
             if (now - m.LostAt!.Value >= (IsHost(m.Id) ? HostGraceMs : MemberGraceMs)) Leave(m.Id, "timeout");
         // A ready check closes once everyone is ready, after 30 s, or when the match starts.
@@ -903,7 +923,7 @@ sealed class LobbyCore
         if (match.Phase == MatchPhases.Live && match.Cs is { } cs)
         {
             cs.Tick(now);
-            cs.Combat.ProcessPending(now);
+            if (!cs.Paused) cs.Combat.ProcessPending(now);
             UpdateCombat(match, cs.Combat);
             var csKey = cs.Round + "|" + cs.Phase + "|" + cs.View().Events.LastOrDefault()?.Id + "|" + cs.Grenades.Revision;
             if (csKey != match.CsKey) { match.CsKey = csKey; Changed(); }
@@ -1026,17 +1046,19 @@ sealed class LobbyCore
     MatchSnapshot? MatchView()
     {
         if (match is not { } m) return null;
+        if (m.EndedCs is { } ended) return ended;
         var s = m.Settings;
         return new MatchSnapshot(m.Id, m.Phase, s.Mode, s.Scenario?.Name ?? "", s.EffectiveTimeLimit, m.Round, s.TotalRounds,
             s.Mode == LobbyModes.Duel ? s.FirstTo : null, m.StartsAt, m.EndsAt, m.NextAt, m.Players.ToArray(),
             m.Live.Select(kv => kv.Value.View(kv.Key)).ToArray(), m.Rounds.ToArray(), Standings(m), m.WinnerId, m.Rematch.ToArray(), m.RematchDeadline, m.Loaded.ToArray(),
             null, m.Tracking is { } t && m.TrackLast is { } r ? [TrackView.Of(t.First, r.First), TrackView.Of(t.Second, r.Second)] : null,
-            m.Combat?.View(), m.Cs?.View(), m.LoadIssues.Count > 0 ? new Dictionary<string, string>(m.LoadIssues) : null, m.LoadFailed, m.LoadAttempt);
+            m.Combat?.View(), m.Cs?.View(), m.LoadIssues.Count > 0 ? new Dictionary<string, string>(m.LoadIssues) : null, m.LoadFailed, m.LoadAttempt, matchVote?.View());
     }
 
     // A client that becomes host rebuilds the authority from the last snapshot it mirrored.
-    public static LobbyCore Restore(LobbySnapshot snapshot, string newHostId, Func<long> clock)
+    public static LobbyCore Restore(LobbySnapshot snapshot, string newHostId, Func<long> clock, long hostOffset = 0)
     {
+        snapshot = SnapshotClock.Rebase(snapshot, hostOffset);
         var self = snapshot.Members.FirstOrDefault(m => m.Id == newHostId) ?? throw new InvalidOperationException("New host is not a member.");
         var core = new LobbyCore(self.Id, self.Name, snapshot.Settings, clock, snapshot.Id, snapshot.Code) { Revision = snapshot.Revision + 1 };
         core.members.Clear(); core.chat.Clear();
@@ -1045,7 +1067,7 @@ sealed class LobbyCore
                 // Everyone else must reconnect to the new host, so they start as reconnecting.
                 Connection = m.Id == newHostId || m.Bot is not null ? Connections.Connected : Connections.Reconnecting, Link = m.Id == newHostId ? "local" : m.Link, Bot = BotSkills.Parse(m.Bot),
                 JoinedAt = m.JoinedAt, Simulated = m.Simulated, LostAt = m.Id == newHostId || m.Bot is not null ? null : clock(), Avatar = AvatarProfiles.Find(m.Avatar)?.Id ?? AvatarProfiles.Default, Version = m.Version, Away = m.Away, Cosmetics = (m.Cosmetics ?? []).Take(CosmeticsCatalog.MaxEquipped).ToArray(), Team = m.Team is 1 or 2 ? m.Team : 0 });
-        core.chat.AddRange(snapshot.Chat); core.chatId = snapshot.Chat.Count > 0 ? snapshot.Chat.Max(c => c.Id) : 0; core.readyCheck = snapshot.ReadyCheck;
+        core.chat.AddRange(snapshot.Chat); core.chatId = snapshot.Chat.Count > 0 ? snapshot.Chat.Max(c => c.Id) : 0; core.readyCheck = snapshot.ReadyCheck; core.autoStartAt = snapshot.AutoStartAt;
         foreach (var s in snapshot.Suggestions ?? []) core.suggestions.Add((s.Scenario, s.By, s.Votes.ToHashSet()));
         if (snapshot.Match is { } ms)
         {
@@ -1067,6 +1089,17 @@ sealed class LobbyCore
             // A tracking round in progress restarts its scoring on the new host (the old host's samples are gone); the short coverage marks it disputed.
             if (snapshot.Settings.Mode == LobbyModes.Tracking && ms.StartsAt is { } startsAt && ms.Phase is MatchPhases.Countdown or MatchPhases.Live && ms.Players.Count >= 2)
                 match.Tracking = new TrackingRound(ms.Players[0], ms.Players[1], startsAt, startsAt + (long)(snapshot.Settings.EffectiveTimeLimit * 1000), snapshot.Settings.RequireFire);
+            if (snapshot.Settings.Mode == LobbyModes.Cs)
+            {
+                // Public snapshots omit private economy and combat history, so retain the published result.
+                match.Phase = MatchPhases.Final; match.Over = true;
+                match.EndedCs = ms with { Phase = MatchPhases.Final, NextAt = null, RematchDeadline = null, Vote = null,
+                    Cs = ms.Cs is { } cs ? cs with { Phase = "final", Grenades = [], Drops = [], Paused = false, TimeoutUntil = null, Ready = [],
+                        Players = cs.Players.Select(p => p with { Afk = false }).ToArray(),
+                        Bomb = cs.Bomb with { Planter = null, Defuser = null, ExplodesAt = null, PlantDoneAt = null, DefuseDoneAt = null } } : null };
+                var score = ms.Cs?.Score ?? [0, 0];
+                core.System($"The host left. The match ended at {score[0]}–{score[1]}.");
+            }
             core.match = match;
             // Over is not in the snapshot: between rounds, decide again so the last results end the match.
             if (ms.Phase == MatchPhases.Round) match.Over = core.Decided(match);

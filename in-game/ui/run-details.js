@@ -1,6 +1,6 @@
 (function(global){
   'use strict';
-  var host,transport,runId,data,preview,tab='summary',page=0,generation=0,metric='ScorePerMinute';
+  var host,transport,runId,data,preview,tab='summary',page=0,generation=0,metric='ScorePerMinute',disposePractice=null;
   var METRICS=[['ScorePerMinute','Pace','Score per minute'],['Accuracy','Accuracy','Accuracy (%)'],['KillsPerSecond','Kills/sec','Kills per second'],['DamageEfficiency','Damage efficiency','Damage efficiency']];
   var COLORS={line:'#27e4a1',avg:'#f0b45a',good:'#173b2f',weak:'#3a2f1c',grid:'#22302a',text:'#a7bab0',amber:'#f0b45a',cyan:'#66ccff'};
   function F(){return global.AimModFormat}
@@ -11,7 +11,7 @@
   function seconds(ms){return F().known(ms)?F().fixed(ms/1000,2)+'s':'—'}
   function label(kind){return typeof kind==='string'&&kind?kind.replace(/_/g,' '):'—'}
   function button(text,fn,primary){var e=node('button',text,'button'+(primary?' primary':''));e.type='button';e.onclick=fn;return e}
-  function card(parent,title,value,note){var e=add(parent,node('div',undefined,'metric'));add(e,node('div',title,'metric-label'));add(e,node('div',value,'metric-value'));if(note)add(e,node('div',note,'metric-note'))}
+  function card(parent,title,value,note){if(value==='—')return;var e=add(parent,node('div',undefined,'metric'));add(e,node('div',title,'metric-label'));add(e,node('div',value,'metric-value'));if(note)add(e,node('div',note,'metric-note'))}
   function panel(title){var e=node('div',undefined,'panel run-panel');add(e,node('h2',title));return e}
   function text(parent,value){return add(parent,node('p',value,'run-muted'))}
   function legend(parent,items){var row=add(parent,node('div',undefined,'run-legend'));items.forEach(function(item){var entry=add(row,node('span',undefined,'run-legend-item'));var swatch=add(entry,node('span',undefined,'run-legend-swatch'+(item[2]?' '+item[2]:'')));swatch.style.background=item[1];add(entry,node('span',item[0]))})}
@@ -64,21 +64,23 @@
   function moments(parent,windows,run){if(!windows.length)return;var row=add(parent,node('div',undefined,'run-moments'));windows.forEach(function(w){var good=strong(w,run),item=add(row,node('div',undefined,'run-moment'+(good?' good':' weak')));add(item,node('span',good?'Went well':'Room to improve','run-moment-tag'));add(item,node('h3',w.Label||label(w.Kind)));add(item,node('p',seconds(w.StartMs)+' – '+seconds(w.EndMs)+(w.Target?' · '+w.Target:''),'run-muted'));
       var bar=add(item,node('div',undefined,'run-bar'));var fill=add(bar,node('div',undefined,'run-bar-fill'));fill.style.width=(F().known(w.Accuracy)?Math.max(0,Math.min(100,w.Accuracy)):0)+'%';
       add(item,node('p',F().percent(w.Accuracy)+' accuracy · '+n(w.Hits,0)+' of '+n(w.Fired,0)+' shots · '+n(w.ScorePerMinute,0)+' pace','run-moment-stats'))})}
-  function render(){host.textContent='';var run=data.Run;var head=add(host,node('div',undefined,'run-header'));var identity=add(head,node('div',undefined,'run-identity'));add(identity,node('h2',run.Scenario||'Unknown scenario'));
+  function render(){if(disposePractice){disposePractice();disposePractice=null;}host.textContent='';var run=data.Run;var head=add(host,node('div',undefined,'run-header'));var identity=add(head,node('div',undefined,'run-identity'));add(identity,node('h2',run.Scenario||'Unknown scenario'));
     add(identity,node('p',[F().dateTime(run.Timestamp),F().known(run.Duration)?F().duration(run.Duration)+' run':''].filter(function(v){return v&&v!=='—'}).join(' · '),'run-muted'));
     // Ways out: this run's replay, when it was recorded, and the scenario's statistics.
     var W=global.AimModWorkspace,links=node('div',undefined,'actions run-links'),linkCount=0;
     if(W&&W.openReplay&&typeof data.ReplayId==='string'&&data.ReplayId){add(links,button('Watch replay',function(){W.openReplay(data.ReplayId)},true));linkCount++}
     if(W&&W.openScenario&&run.Scenario){add(links,button('Scenario statistics',function(){W.openScenario(run.Scenario)}));linkCount++}
     if(linkCount)add(identity,links);
-    var score=add(head,node('div',undefined,'run-score'));add(score,node('span','Score','metric-label'));add(score,node('strong',n(run.Score)));
+    var score=add(head,node('div',undefined,'run-score'));add(score,node('span','Score','metric-label'));add(score,node('strong',run.Score>0?n(run.Score):'No score'));
     if(data.MissingTelemetry)add(host,node('p','No detailed telemetry was recorded for this run.','notice run-notice'));
-    var tabs=add(host,node('div',undefined,'segmented run-tabbar'));tabs.setAttribute('role','tablist');[['summary','Summary'],['responses','Target responses'],['shots','Shots']].forEach(function(item){var b=add(tabs,button(item[1],function(){tab=item[0];render()},tab===item[0]));b.setAttribute('role','tab');b.setAttribute('aria-selected',String(tab===item[0]))});
+    var tabs=add(host,node('div',undefined,'segmented run-tabbar'));tabs.setAttribute('aria-label','Run details');tabs.setAttribute('role','tablist');[['summary','Summary'],['responses','Target responses'],['shots','Shots'],['flicks','Flicks'],['tracking','Tracking']].forEach(function(item,index){var b=add(tabs,button(item[1],function(){tab=item[0];render()},tab===item[0]));b.setAttribute('role','tab');b.setAttribute('aria-selected',String(tab===item[0]));b.setAttribute('tabindex',tab===item[0]?'0':'-1');b.id='run-tab-'+item[0];b.onkeydown=function(e){var next=e.keyCode===39?(index+1)%5:e.keyCode===37?(index+4)%5:e.keyCode===36?0:e.keyCode===35?4:-1;if(next<0)return;e.preventDefault();tab=['summary','responses','shots','flicks','tracking'][next];render();var selected=global.document&&global.document.getElementById('run-tab-'+tab);if(selected)selected.focus();}});
     if(tab==='windows')tab='summary';
+    if(tab==='flicks'||tab==='tracking'){var practice=add(host,node('div',undefined,'panel run-panel'));if(global.AimModPractice)disposePractice=global.AimModPractice.run(practice,runId,tab,transport,data.ReplayId);return;}
     if(tab==='summary'){
       var s=data.Details&&data.Details.Summary||{};var metrics=add(host,node('div',undefined,'metrics run-kpis'));
       card(metrics,'Accuracy',F().percent(run.Accuracy),F().known(s.ShotsHit)&&F().known(s.ShotsFired)?n(s.ShotsHit,0)+' hits of '+n(s.ShotsFired,0)+' shots':undefined);card(metrics,'Kill rate',n(s.KillsPerSecond,2),'Kills per second');card(metrics,'Shots per hit',n(s.AverageShotsToHit,2),'Lower means fewer extra shots');
       card(metrics,'Shot-to-hit interval',F().millis(s.AverageFireToHitMs),'Shot to registered hit · not input latency');card(metrics,'Corrective shots',F().known(s.CorrectiveShotRatio)?F().percent(s.CorrectiveShotRatio*100):'—','Follow-up shots after a miss');if(F().known(s.PeakScorePerMinute))card(metrics,'Peak pace',n(s.PeakScorePerMinute,0),'Best score-per-minute moment');else card(metrics,'Duration',F().duration(run.Duration));
+      if(!(data.Details&&data.Details.Timeline&&data.Details.Timeline.length)){text(host,'No timeline was recorded. Choose Flicks or Tracking to check replay measurements, or open another run.');return;}
       var p=add(host,panel('Run timeline'));var controls=add(p,node('div',undefined,'run-tabs'));
       METRICS.forEach(function(item){var b=add(controls,button(item[1],function(){metric=item[0];render()},metric===item[0]));b.className='button compact'+(metric===item[0]?' primary':'');b.setAttribute('aria-pressed',String(metric===item[0]))});
       var windows=data.Windows||[];var selected=METRICS.filter(function(m){return m[0]===metric})[0]||METRICS[0];
@@ -101,5 +103,5 @@
       var pages=Math.max(1,data.ShotPages||1);if(pages>1){var paging=add(host,node('div',undefined,'run-tabs run-pager'));var previous=add(paging,button('Previous',function(){page--;load()}));previous.disabled=data.ShotPage<=0;add(paging,node('span','Page '+((data.ShotPage||0)+1)+' of '+pages,'run-muted'));var next=add(paging,button('Next',function(){page++;load()}));next.disabled=(data.ShotPage||0)+1>=pages}
     }
   }
-  global.AimModRunDetails={open:function(container,id,request,historyEntry){host=container;runId=id;transport=request;preview=historyEntry;data=null;page=0;tab='summary';load()},leave:function(){generation++},resize:function(){if(data&&host)render()}};
+  global.AimModRunDetails={open:function(container,id,request,historyEntry){host=container;runId=id;transport=request;preview=historyEntry;data=null;page=0;tab='summary';metric='ScorePerMinute';if(disposePractice){disposePractice();disposePractice=null;}load()},leave:function(){generation++;if(disposePractice){disposePractice();disposePractice=null;}},resize:function(){if(data&&host)render()}};
 })(window);

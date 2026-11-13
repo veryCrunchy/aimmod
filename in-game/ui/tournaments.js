@@ -8,7 +8,7 @@
 (function(root){
   'use strict';
   var F=root.AimModFormat;
-  var container=null,timer=null,generation=0,view=null,lastKey='',inflight=false,busy=false,toastNode=null,toastTimer=null,reason='',bracketOpen=true;
+  var container=null,timer=null,generation=0,view=null,lastKey='',inflight=false,busy=false,toastNode=null,toastTimer=null,reason='',bracketOpen=true,revision=0;
   var STATE={pending:'Waiting for an earlier match',ready:'Ready to play',veto:'Picks and bans',live:'Live',awaiting_confirmation:'Awaiting confirmation',disputed:'Disputed',complete:'Complete',skipped:'Not needed'};
   var STATUS={draft:'Draft',registration:'Registration open',check_in:'Check-in',in_progress:'In progress',completed:'Completed',cancelled:'Cancelled'};
   var FORMAT={single_elimination:'Single elimination',double_elimination:'Double elimination',round_robin:'Round robin',swiss:'Swiss'};
@@ -32,14 +32,14 @@
     x.send(body?JSON.stringify(body):null);
   }
   function poll(){
-    if(!container||inflight)return;inflight=true;
-    xhr('GET',null,function(ok,data){inflight=false;if(ok&&data&&data.v===1)accept(data);else if(!view)renderError();schedule();});
+    if(!container||inflight||busy)return;inflight=true;
+    var ticket=revision;xhr('GET',null,function(ok,data){inflight=false;if(ticket!==revision){schedule();return;}if(ok&&data&&data.v===1)accept(data);else if(!view)renderError();schedule();});
   }
   function fast(){var a=active();return !!(a&&(a.match.state==='live'||a.match.state==='veto'||a.match.state==='ready'));}
   function schedule(){clearTimeout(timer);if(container)timer=setTimeout(poll,fast()?1000:3000);}
   function act(body,done){
-    busy=true;render();
-    xhr('POST',body,function(ok,data){busy=false;if(ok&&data&&data.v===1){accept(data,true);if(done)done(true);}else{render();toast(data&&data.error?data.error:'That didn’t work. Try again.');if(done)done(false);}});
+    if(busy)return;revision++;busy=true;render();
+    xhr('POST',body,function(ok,data){busy=false;schedule();if(ok&&data&&data.v===1){accept(data,true);if(done)done(true);}else{render();toast(data&&data.error?data.error:'That didn’t work. Try again.');if(done)done(false);}});
   }
   function accept(data,force){view=data;var key=JSON.stringify(data)+'|'+bracketOpen;if(force||key!==lastKey){lastKey=key;render();}}
   function toast(text){if(!toastNode)return;toastNode.textContent=text;toastNode.style.display='block';clearTimeout(toastTimer);toastTimer=setTimeout(function(){if(toastNode)toastNode.style.display='none';},3500);}
@@ -194,7 +194,7 @@
     var a=active();if(a)container.appendChild(matchCard(a));
     var others=view.matches.filter(function(m){return !m.active;});
     if(others.length){var o=card('Also open','Your matches');for(var j=0;j<others.length;j++)o.appendChild(node('p','',others[j].match.label+' vs '+safe(others[j].opponent.name)+' · '+safe(others[j].tournamentName,'Tournament')+' · '+(STATE[others[j].match.state]||'')));container.appendChild(o);}
-    if(!a&&view.linked&&!view.checkIn.length){var e=card('No matches right now','Your matches');e.appendChild(node('p','subtle','AimMod tells you when one is ready.'));container.appendChild(e);}
+    if(!a&&view.linked&&!view.checkIn.length){var e=card('No matches right now','Your matches');e.appendChild(node('p','subtle','Enter a tournament at aimmod.app/tournaments. Your check-in and next opponent will appear here.'));container.appendChild(e);}
     if(view.open)container.appendChild(tournamentCard(view.open));
     if(view.mine&&view.mine.length){
       var list=card('Your tournaments','');
@@ -205,8 +205,8 @@
   }
 
   root.AimModTournaments={
-    enter:function(el){container=el;generation++;lastKey='';poll();},
-    leave:function(){generation++;container=null;clearTimeout(timer);timer=null;inflight=false;},
+    enter:function(el){container=el;generation++;revision++;busy=false;inflight=false;view=null;lastKey='';container.textContent='Loading tournaments…';poll();},
+    leave:function(){generation++;revision++;busy=false;view=null;clearTimeout(toastTimer);container=null;clearTimeout(timer);timer=null;inflight=false;},
     _bracket:bracket,_state:function(){return view;}
   };
 })(window);

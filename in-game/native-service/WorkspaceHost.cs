@@ -14,12 +14,16 @@ sealed class WorkspaceHost : IAsyncDisposable
     readonly GameCommands gameCommands;
     readonly CancellationTokenSource startLoop = new();
     ReplayCatalog? replayCatalog;
+    readonly PracticePipeline practice;
+    PracticeDrillHost? drills;
     readonly ReplayKeyboard keyboard;
     readonly RendererAcknowledgement renderer;
     readonly OverlaySettings overlaySettings;
     readonly OpponentData opponents;
     readonly ObsOverlayHost obs;
     readonly OverlayService overlays;
+    public OverlayAnalysisSource OverlayAnalysis => overlays.Analysis;
+    readonly ObsSceneSwitching obsSwitching;
     readonly OverlayHistory overlayHistory = new();
     Tournaments.TournamentService? tournaments;
     public Tournaments.TournamentService? TournamentsService => tournaments;
@@ -55,9 +59,19 @@ sealed class WorkspaceHost : IAsyncDisposable
         var acknowledgement = renderer.Read();
         return new { playback = playback.Status, rendererReady = acknowledgement.Ready, rendererReason = acknowledgement.Reason, start = startGate.Status };
     }
-    string data = "{}";
+    // The panel polls /data every few seconds. Each snapshot carries a content
+    // tag as its first member; a poll that already holds that tag gets 204
+    // instead of the whole history again.
+    internal sealed record Snapshot(byte[] Bytes, string Tag);
+    internal static Snapshot Encode(string json)
+    {
+        if (json.Length <= 2 || json[0] != '{') return new(Encoding.UTF8.GetBytes(json), "");
+        var tag = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(json)), 0, 8).ToLowerInvariant();
+        return new(Encoding.UTF8.GetBytes("{\"snapshot\":\"" + tag + "\"," + json[1..]), tag);
+    }
+    Snapshot data = Encode("{}");
     public string Url { get; private set; } = "";
-    public void Update(string json) => Volatile.Write(ref data, json);
+    public void Update(string json) => Volatile.Write(ref data, Encode(json));
     readonly Multiplayer.MultiplayerService multiplayer;
     public Multiplayer.MultiplayerService MultiplayerLobby => multiplayer;
     public WorkspaceHost(Hub hub, string output, string? historyPath = null, NativeSettings? settings = null, CsvHistory? csvHistory = null, DiscordSettings? discordSettings = null, Func<object>? discordStatus = null, string[]? args = null, Lifecycle? lifecycle = null, HubSharingSettings? hubSharing = null, Func<object>? hubSharingStatus = null, string? gameFolder = null)
@@ -102,6 +116,11 @@ sealed class WorkspaceHost : IAsyncDisposable
         new CoachingFeedback(output).MapEndpoints(app, prefix);
         multiplayer = Multiplayer.MultiplayerHosting.Create(hub, output, args, () => liveFeed.Read(outputFolder, Volatile.Read(ref overlayRuns)), () => Volatile.Read(ref overlayRuns));
         multiplayer.MapEndpoints(app, prefix);
+        overlays.MultiplayerSource = multiplayer.OverlayView;
+        overlays.AvatarSource = multiplayer.OverlayAvatar;
+        overlays.ReplaySource = playback.OverlayView;
+        obsSwitching = new ObsSceneSwitching(output, () => new ObsSwitchState(multiplayer.OverlayView().Match is { Phase: not "final" }, ReadLive().Active, playback.Visible));
+        obsSwitching.Map(app, prefix);
         // A pending replay's scenario loads by itself, through the lobby's load path (ScenarioLoader).
         var lobby = multiplayer;
         autoLoad = new ReplayAutoLoad(startGate, new Multiplayer.CoreGameControl(output), () => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), lobby.Library, lobby.SourceOf);
@@ -151,6 +170,13 @@ sealed class WorkspaceHost : IAsyncDisposable
         var html = reader.ReadToEnd();
         var replays = new ReplayCatalog(output);
         replayCatalog = replays;
+        practice = new PracticePipeline(output, replays, () => { var snapshot = ReadLive(); return snapshot.Active || !snapshot.Available; });
+        app.MapGet(prefix + "/run-details/{id}/practice", (string id) => Results.Json(practice.Read(id), PracticePipeline.Json));
+        app.MapGet(prefix + "/practice", () => Results.Json(practice.Summary(), PracticePipeline.Json));
+        app.MapGet(prefix + "/practice.js", () => Results.Stream(typeof(WorkspaceHost).Assembly.GetManifestResourceStream("AimMod.PracticeScript")!, "application/javascript"));
+        drills = new(lobby.Library, new Multiplayer.CoreGameControl(output), output);
+        drills.Map(app, prefix, replays);
+        app.MapGet(prefix + "/practice-drills.js", () => Results.Stream(typeof(WorkspaceHost).Assembly.GetManifestResourceStream("AimMod.PracticeDrillsScript")!, "application/javascript"));
         var library = new ReplayLibrary(replays, output);
         var inbox = new ReplayInbox(output, replays);
         app.MapGet(prefix + "/ui", () => Results.Content(html, "text/html", Encoding.UTF8));
@@ -158,6 +184,7 @@ sealed class WorkspaceHost : IAsyncDisposable
         app.MapGet(prefix + "/coaching.js", () => Results.Stream(typeof(WorkspaceHost).Assembly.GetManifestResourceStream("AimMod.CoachingScript")!, "application/javascript"));
         app.MapGet(prefix + "/coaching.css", () => Results.Stream(typeof(WorkspaceHost).Assembly.GetManifestResourceStream("AimMod.CoachingStyle")!, "text/css"));
         app.MapGet(prefix + "/workspace-theme.css", () => Results.Stream(typeof(WorkspaceHost).Assembly.GetManifestResourceStream("AimMod.WorkspaceTheme")!, "text/css"));
+        app.MapGet(prefix + "/shared-components.css", () => Results.Stream(typeof(WorkspaceHost).Assembly.GetManifestResourceStream("AimMod.SharedComponents")!, "text/css"));
         app.MapGet(prefix + "/mechanics.js", () => Results.Stream(typeof(WorkspaceHost).Assembly.GetManifestResourceStream("AimMod.MechanicsScript")!, "application/javascript"));
         app.MapGet(prefix + "/benchmarks.js", () => Results.Stream(typeof(WorkspaceHost).Assembly.GetManifestResourceStream("AimMod.BenchmarksScript")!, "application/javascript"));
         app.MapGet(prefix + "/benchmarks.css", () => Results.Stream(typeof(WorkspaceHost).Assembly.GetManifestResourceStream("AimMod.BenchmarksStyle")!, "text/css"));
@@ -329,7 +356,10 @@ sealed class WorkspaceHost : IAsyncDisposable
             var replay = replays.Read(id);
             return replay is null ? Results.NotFound() : Results.Json(replay);
         });
-        app.MapGet(prefix + "/data", () => Results.Content(Volatile.Read(ref data), "application/json", Encoding.UTF8));
+        app.MapGet(prefix + "/data", (string? have) => {
+            var snapshot = Volatile.Read(ref data);
+            return snapshot.Tag.Length > 0 && have == snapshot.Tag ? Results.NoContent() : Results.Bytes(snapshot.Bytes, "application/json; charset=utf-8");
+        });
         app.MapPost(prefix + "/command", async (HttpContext context) =>
         {
             // Capability URL + non-simple header and no CORS prevent arbitrary web
@@ -346,6 +376,7 @@ sealed class WorkspaceHost : IAsyncDisposable
     public async Task Start(CancellationToken token)
     {
         await app.StartAsync(token);
+        obsSwitching.Start();
         playback.Start();
         keyboard.Start();
         _ = Task.Run(async () => {
@@ -361,6 +392,7 @@ sealed class WorkspaceHost : IAsyncDisposable
                             playback.Load(ready, compareWith is not null && compareWith.Scenario == ready.Scenario ? compareWith : null);
                         }
                         else autoLoad.Tick();
+                        drills?.Tick();
                     } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException) { }
                 }
             } catch (OperationCanceledException) { }
@@ -381,6 +413,8 @@ sealed class WorkspaceHost : IAsyncDisposable
         // Stop accepting requests first, then publish a closed replay frame and
         // retract this process's overlay URL so the game never loads a dead port.
         startLoop.Cancel();
+        await obsSwitching.DisposeAsync();
+        practice.Dispose();
         tournaments?.Dispose();
         multiplayer.Dispose();
         await keyboard.DisposeAsync();

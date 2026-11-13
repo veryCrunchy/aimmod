@@ -77,3 +77,5 @@ html.input,body.input,body.input #notice,.toast.has-actions{pointer-events:auto}
 /* Mouse event counts while the buy menu is open (diagnostics). */
 .pointer-debug{position:absolute;right:8px;bottom:6px;padding:2px 8px;border-radius:4px;background:#0b1110;color:#7f968a;font-size:11px;pointer-events:none}
 @media(max-height:760px){#notice.cs-on.cs-buying{padding-bottom:40px}}
+
+.match-vote{display:flex;flex-direction:column;align-items:center;height:auto;max-width:460px;padding:10px 16px;border-radius:8px}.match-vote span{margin-top:4px}

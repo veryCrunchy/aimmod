@@ -20,7 +20,15 @@ static class OverlayScenesChecks
 
     public static async Task Run()
     {
+        await OverlayStudioChecks.Run();
         count = 0;
+        var catalog = OverlayDataCatalog.Read(new { enabled = true, live = new { score = 0, active = false }, session = new { runs = 0 } });
+        Check(catalog.Single(f => f.Path == "live.score").Value.GetInt32() == 0, "catalog preserves zero");
+        Check(catalog.Single(f => f.Path == "live.accuracy").Type == "number" && catalog.Single(f => f.Path == "live.accuracy").Unit == "%", "nullable catalog types stay stable");
+        Check(catalog.Select(f => f.Path).Distinct().Count() == catalog.Length, "catalog paths are unique");
+        Check(OverlayDataCatalog.Event(new { label = "line\nbreak" }).Split('\n').Length == 3, "stream escapes embedded newlines");
+        var bound = OverlayScenes.CleanWidget(JsonNode.Parse("""{"id":"sample","type":"html","locked":true,"weight":700,"opts":{"path":"live.score","template":"<b>{{live.score}}</b>"}}"""));
+        Check(bound is not null && (bool)bound["locked"]! && (double)bound["weight"]! == 700 && (string)bound["opts"]!["path"]! == "live.score", "bound widget style and options survive validation");
         Store(); Migration(); History(); Settings(); Motion();
         await Routes();
         Console.WriteLine($"PASS {count} overlay scene checks");
@@ -190,6 +198,19 @@ static class OverlayScenesChecks
             await host.Start(CancellationToken.None);
             using var client = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false, UseProxy = false }) { Timeout = TimeSpan.FromSeconds(5) };
             var root = host.Url[..^3];
+            using (var catalogResponse = JsonDocument.Parse(await client.GetStringAsync(root + "/overlay-data")))
+                Check(catalogResponse.RootElement.GetProperty("fields").EnumerateArray().Any(f => f.GetProperty("path").GetString() == "live.score"), "catalog endpoint lists binding paths");
+            using (var streamTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(5)))
+            using (var response = await client.GetAsync(root + "/overlay-stream", HttpCompletionOption.ResponseHeadersRead, streamTimeout.Token))
+            {
+                Check(response.Content.Headers.ContentType?.MediaType == "text/event-stream", "stream has event content type");
+                using var reader = new StreamReader(await response.Content.ReadAsStreamAsync(streamTimeout.Token));
+                var line = await reader.ReadLineAsync(streamTimeout.Token);
+                Check(line?.StartsWith("data: ") == true, "stream emits a snapshot immediately");
+                using var streamed = JsonDocument.Parse(line![6..]);
+                Check(streamed.RootElement.GetProperty("enabled").GetBoolean(), "stream uses presentation feed");
+                Check(streamed.RootElement.TryGetProperty("multiplayer", out _) && streamed.RootElement.TryGetProperty("replay", out _) && streamed.RootElement.TryGetProperty("mouse", out _), "stream carries extended sources");
+            }
             using (var scenes = JsonDocument.Parse(await client.GetStringAsync(root + "/overlay-scenes")))
                 Check(scenes.RootElement.GetProperty("scenes").GetArrayLength() == 3 && scenes.RootElement.GetProperty("gameScene").GetString() == "game", "first start serves the migrated scenes");
             Check(File.Exists(Path.Combine(folder, "overlay-scenes.json")), "the migrated scenes are saved");
@@ -206,6 +227,27 @@ static class OverlayScenesChecks
                 Check(!feed.RootElement.GetProperty("enabled").GetBoolean() && !feed.RootElement.TryGetProperty("kovaaks", out _), "the in-game surface is off until switched on, and then sends nothing");
             using (var motion = JsonDocument.Parse(await client.GetStringAsync(root + "/overlay-motion?surface=game&input=1")))
                 Check(motion.RootElement.GetProperty("input").ValueKind == JsonValueKind.Null, "motion off with its surface");
+            async Task SetSurface(bool enabled)
+            {
+                using var request = new HttpRequestMessage(HttpMethod.Post, root + "/overlay-settings"); request.Headers.Add("X-AimMod-UI", "1");
+                request.Content = new StringContent(enabled ? "{\"gameEnabled\":true,\"obsEnabled\":false}" : "{\"gameEnabled\":false}", Encoding.UTF8, "application/json");
+                using var response = await client.SendAsync(request); Check(response.IsSuccessStatusCode, "HUD master setting saves");
+            }
+            await SetSurface(true);
+            Check(new OverlaySettings(folder).Current.GameEnabled, "HUD master setting survives reload");
+            using (var enabledGame = JsonDocument.Parse(await client.GetStringAsync(root + "/overlay-feed?surface=game")))
+                Check(enabledGame.RootElement.GetProperty("enabled").GetBoolean(), "game feed enabled independently of OBS");
+            await SetSurface(false);
+            using (var config = JsonDocument.Parse(await client.GetStringAsync(root + "/overlay-obs-settings")))
+                Check(!config.RootElement.GetProperty("enabled").GetBoolean() && !config.RootElement.TryGetProperty("password", out _), "OBS control defaults off without password response");
+            using (var response = await client.PostAsync(root + "/overlay-obs-settings", new StringContent("{}", Encoding.UTF8, "application/json")))
+                Check(response.StatusCode == HttpStatusCode.Forbidden, "OBS control requires workspace UI header");
+            using (var request = new HttpRequestMessage(HttpMethod.Post, root + "/overlay-obs-settings"))
+            {
+                request.Headers.Add("X-AimMod-UI", "1"); request.Content = new StringContent("{\"password\":\"synthetic-password\",\"runStart\":\"Practice\"}", Encoding.UTF8, "application/json");
+                using var response = await client.SendAsync(request); var body = await response.Content.ReadAsStringAsync();
+                Check(response.IsSuccessStatusCode && body.Contains("\"hasPassword\":true") && !body.Contains("synthetic-password"), "OBS control saves without returning secret");
+            }
             var store = await client.GetStringAsync(root + "/overlay-scenes");
             using (var response = await client.PostAsync(root + "/overlay-scenes", new StringContent(store, Encoding.UTF8, "application/json")))
                 Check(response.StatusCode == HttpStatusCode.Forbidden, "saving requires the UI header");
@@ -225,6 +267,7 @@ static class OverlayScenesChecks
             // OBS: the same reads on the OBS listener, off until the OBS switch is on, never writable.
             using var setup = JsonDocument.Parse(await client.GetStringAsync(root + "/overlay-setup"));
             var obsBase = setup.RootElement.GetProperty("obsBase").GetString()!;
+            using (var response = await client.GetAsync(obsBase + "/overlay-obs-settings")) Check(!response.IsSuccessStatusCode, "OBS browser capability cannot read connection settings");
             Check(setup.RootElement.GetProperty("obsUrl").GetString() == obsBase + "/overlay?surface=obs" && setup.RootElement.GetProperty("tournamentUrl").GetString() == obsBase + "/tournament", "setup lists the OBS base and the earlier links");
             using (var response = await client.GetAsync(obsBase + "/scene?id=game")) Check(response.StatusCode == HttpStatusCode.OK && response.Content.Headers.ContentType?.MediaType == "text/html", "scene sources served on OBS");
             using (var response = await client.GetAsync(obsBase + "/overlay?surface=obs")) Check(response.StatusCode == HttpStatusCode.OK, "the earlier OBS link still works");

@@ -15,7 +15,8 @@
 .dev-status{display:flex;flex-direction:row;align-items:flex-start;padding:9px 0;border-top:1px solid #22302a}
 .dev-status:first-child{border-top:0}
 .dev-value{flex:1;min-width:0;font-size:13px;color:#dcebe3;line-height:1.45}.dev-value.ok{color:#27e4a1}.dev-value.warn{color:#f0b45a}
-.dev-toast{display:none;position:fixed;right:24px;top:84px;max-width:420px;padding:11px 16px;background:#1d2b26;border:1px solid #2c6b52;border-radius:8px;color:#eef5f1;font-size:13px;z-index:40}
+#developer{position:relative}
+.dev-toast{display:none;position:absolute;right:0;top:0;max-width:420px;padding:11px 16px;background:#1d2b26;border:1px solid #2c6b52;border-radius:8px;color:#eef5f1;font-size:13px;z-index:40}
 .dev-field{display:block;min-width:0}.dev-wide{flex:1;margin-right:8px}
 .dev-line .actions{margin-top:0}.dev-line .actions>.button{margin:0}
 .dev-replay{display:flex;flex-direction:row;align-items:center;padding:8px 0;border-top:1px solid #22302a}
@@ -27,3 +28,23 @@
 .dev-log{max-height:260px;overflow-y:auto;padding:8px 10px;background:#0b1210;border:1px solid #22302a;border-radius:6px}
 .dev-log-line{font-family:Consolas,monospace;font-size:11px;line-height:1.5;color:#a7bab0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .dev-bots{margin:-4px 0 12px}.dev-bot{display:flex;flex-direction:column;padding:6px 0;border-top:1px solid #22302a;font-size:12px}.dev-bot strong{color:#dcebe3}.dev-bot-senses{color:#9fb4aa}
+
+#developer .dev-main{width:52%}
+#developer .dev-side{width:48%}
+#developer .dev-card{background:#121a17;border:1px solid #1f2b27;border-radius:8px}
+#developer .dev-card h2{font-size:16px;font-weight:700}
+#developer .dev-timings{font-family:Consolas,monospace;font-size:13px;line-height:20px;white-space:pre;overflow:auto;max-height:360px;padding:12px;background:#0b1110;border-radius:4px}
+#developer .dev-log-line{font-size:12px;line-height:20px;white-space:pre-wrap;word-wrap:break-word;overflow:visible}
+#developer .dev-log{max-height:320px}
+#developer .dev-line{display:block}
+#developer .dev-line>.dev-label{width:auto;margin-bottom:8px}
+#developer .dev-line>.segmented{display:flex;flex-wrap:wrap}
+#developer .dev-timings{font-family:Roboto,Arial,sans-serif;white-space:normal}
+#developer .dev-timing-row{display:flex;border-bottom:1px solid #1f2b27;padding:4px 0;font-size:13px;line-height:20px}
+#developer .dev-timing-row>span{display:block;width:26%;text-align:right}
+#developer .dev-timing-row>span:first-child{width:48%;text-align:left}
+#developer .dev-timing-row.head{color:#93a69c;font-size:12px;font-weight:700}
+#developer .dev-row{margin:0}
+#developer .dev-col{padding:0}
+#developer .dev-main{width:51%;margin-right:2%}
+#developer .dev-side{width:47%}

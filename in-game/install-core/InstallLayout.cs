@@ -130,6 +130,30 @@ static class InstallLayout
         finally { foreach (var process in processes) process.Dispose(); }
     }
 
+    // Any process (other than this one) running from this installation's Mods folder, such as
+    // the AimMod service still shutting down or restarted: its files are locked, so nothing may be
+    // replaced or restored while it runs. A process whose path cannot be read does not count.
+    public static bool ModProcessRunning(string win64)
+    {
+        var mods = Path.GetFullPath(Path.Combine(win64, "ue4ss", "Mods")).TrimEnd('\\') + "\\";
+        var self = Environment.ProcessId;
+        foreach (var process in System.Diagnostics.Process.GetProcesses())
+        {
+            try
+            {
+                if (process.Id == self) continue;
+                string? path = null;
+                try { path = process.MainModule?.FileName; } catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or NotSupportedException) { }
+                if (path is not null && path.StartsWith(mods, StringComparison.OrdinalIgnoreCase)) return true;
+            }
+            finally { process.Dispose(); }
+        }
+        return false;
+    }
+
+    // The game or anything running from this installation's mods: either keeps files locked.
+    public static bool InstallBusy(string win64) => GameRunning(win64) || ModProcessRunning(win64);
+
     // <library>\steamapps\common\FPSAimTrainer\FPSAimTrainer\Binaries\Win64
     // -> <library>\steamapps\appmanifest_824270.acf "buildid".
     public static long? SteamBuildId(string win64)
@@ -247,6 +271,12 @@ static class ModList
         {
             if (names.Contains(name) || remove.Contains(name, StringComparer.OrdinalIgnoreCase)) continue;
             if (Directory.Exists(Path.Combine(modsDir, name)) && names.Add(name)) entries.Add((name, enabled));
+        }
+        foreach (var probe in new[] { "AimModModesProbe", "AimModDump", "AimModCosmetics" })
+        {
+            var index = entries.FindIndex(e => e.Name.Equals(probe, StringComparison.OrdinalIgnoreCase));
+            if (index >= 0) { if (entries[index].Enabled) Console.WriteLine("Disabled developer mod: " + probe); entries[index] = (entries[index].Name, false); }
+            else if (Directory.Exists(Path.Combine(modsDir, probe))) { entries.Add((probe, false)); Console.WriteLine("Disabled developer mod: " + probe); }
         }
         Directory.CreateDirectory(modsDir);
         AtomicFile.WriteText(Path.Combine(modsDir, "mods.txt"), string.Join("\r\n", entries.Select(e => $"{e.Name} : {(e.Enabled ? 1 : 0)}")) + "\r\n");

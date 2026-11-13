@@ -106,32 +106,57 @@
     x.onerror=x.ontimeout=function(){finish(false,null);};
     x.send(body?JSON.stringify(body):null);return x;
   }
-  var pollFailures=0;
+  var pollFailures=0,actionRevision=0,pendingActions={};
   function poll(){
-    if(!container)return;if(inflight){again=true;return;}inflight=true;
+    if(!container)return;if(Object.keys(pendingActions).length){schedule();return;}if(inflight){again=true;return;}inflight=true;
     // The library refreshes with the main view while it's open (installs and Workshop listings change).
     if(mapsOpen)loadMaps();
-    xhr('GET','/multiplayer',null,function(ok,data){inflight=false;if(ok&&data&&data.v===1){var stale=pollFailures>=3;pollFailures=0;accept(data,stale);if(stale)render();}else{pollFailures++;if(!view)renderError();else if(pollFailures===3)render();}schedule();if(again){again=false;poll();}});
+    var revision=actionRevision;
+    xhr('GET','/multiplayer',null,function(ok,data){inflight=false;if(revision!==actionRevision){schedule();return;}if(ok&&data&&data.v===1){var stale=pollFailures>=3;pollFailures=0;accept(data,stale);if(stale)render();}else{pollFailures++;if(!view)renderError();else if(pollFailures===3)render();}schedule();if(again){again=false;poll();}});
   }
   function fast(){var m=view&&view.lobby&&view.lobby.match;return !!(view&&(view.joining||view.watch||(m&&(m.phase==='countdown'||m.phase==='live'))));}
-  function schedule(){clearTimeout(timer);if(container)timer=setTimeout(poll,fast()?250:1000);}
+  function schedule(){clearTimeout(timer);if(container)timer=setTimeout(poll,fast()?500:3000);}
   function act(action,extra,done){
     if(pollFailures>=3&&action!=='leave'&&action!=='cancel-join'){toast('Reconnecting. Lobby status may be out of date.');return;}
+    if(pendingActions[action])return;pendingActions[action]=true;var revision=++actionRevision;
     var body={action:action};if(extra)for(var k in extra)if(Object.prototype.hasOwnProperty.call(extra,k))body[k]=extra[k];
-    xhr('POST','/multiplayer',body,function(ok,data){if(ok&&data&&data.v===1){accept(data,true);if(done)done(true);}else{toast(data&&data.error?data.error:'That didn’t work. Try again.');if(done)done(false);}});
+    xhr('POST','/multiplayer',body,function(ok,data){delete pendingActions[action];if(revision!==actionRevision){if(done)done(false);schedule();return;}if(ok&&data&&data.v===1){accept(data,true);if(done)done(true);}else{toast(data&&data.error?data.error:'That didn’t work. Try again.');if(done)done(false);}});
   }
   function setting(key,value){var s={};s[key]=value;act('settings',{settings:s});}
   function loadLibrary(){if(libraryAsked)return;libraryAsked=true;xhr('GET','/multiplayer?part=library',null,function(ok,data){if(ok&&data){library=data;if(library.scenarios)library.scenarios=library.scenarios.filter(function(s){return !/^AimMod Match - /i.test(s.name);});render();}else libraryAsked=false;});}
 
   function accept(data,force){
-    view=data;receivedAt=Date.now();
+    var previous=view;view=data;receivedAt=Date.now();
+    if(previous&&previous.lobby&&(!view.lobby||previous.lobby.id!==view.lobby.id)){editing=false;picker=null;drafts.chat='';focused=null;}
     if(!view.lobby)editing=false;
     if(view.lobby&&!view.lobby.isHost)editing=false;
     // Re-render only when something visible changed (the server clock always moves).
     var copy={};for(var k in data)if(k!=='now')copy[k]=data[k];
+    if(preferencesOnly)copy={prefs:data.prefs,keys:data.keys};
     var key=JSON.stringify(copy)+'|'+editing+'|'+(picker||'')+'|'+(library?1:0);
     // While the player types, fold view changes (pings, chat) into one re-render every few seconds.
-    if(key!==lastKey){lastKey=key;var since=Date.now()-lastRender;if(focused&&!force&&since<3000){clearTimeout(deferred);deferred=setTimeout(function(){deferred=null;render();},3000-since);}else render();}
+    if(key!==lastKey){lastKey=key;if(!force&&(patchHome(previous,data)||patchScores(previous,data)))return;var since=Date.now()-lastRender;if(focused&&!force&&since<3000){clearTimeout(deferred);deferred=setTimeout(function(){deferred=null;render();},3000-since);}else render();}
+  }
+  // Live score packets replace only the compact score list, keeping controls stable.
+  function patchScores(before,after){
+    if(!before||!before.lobby||!after.lobby||editing||modalOpen||!container.querySelector)return false;
+    var a=before.lobby.match,b=after.lobby.match;if(!a||!b||a.phase!=='live'||b.phase!=='live')return false;
+    function stable(v){var c=JSON.parse(JSON.stringify(v));delete c.now;delete c.lobby.revision;delete c.lobby.match.live;return JSON.stringify(c);}
+    if(stable(before)!==stable(after))return false;
+    var old=container.querySelector('.mp-hud');if(!old||!old.parentNode)return false;
+    if(JSON.stringify(a.live)===JSON.stringify(b.live))return true;
+    countNodes=countNodes.filter(function(c){return !old.contains||!old.contains(c.node);});
+    old.parentNode.replaceChild(hud(after.lobby,b),old);tick();return true;
+  }
+  // Polls update independent home panels without disturbing mode or code entry.
+  function patchHome(before,after){
+    if(!before||preferencesOnly||tab!=='play'||mapsOpen||historyOpen||before.lobby||after.lobby||before.joining||after.joining||touring||!container.querySelector||modalOpen)return false;
+    function stable(v){var c={};for(var k in v)if(['now','friends','recent','prefs','keys'].indexOf(k)<0)c[k]=v[k];return JSON.stringify(c);}
+    if(stable(before)!==stable(after))return false;
+    var changes=[['friends','.mp-friends',function(){return friendsPanel(false);}],['recent','.mp-recent',recentPanel],['prefs','.mp-prefs',prefsPanel]];
+    if(JSON.stringify(before.keys)!==JSON.stringify(after.keys))return false;
+    for(var i=0;i<changes.length;i++){var c=changes[i];if(JSON.stringify(before[c[0]])!==JSON.stringify(after[c[0]])){var old=container.querySelector(c[1]);if(!old||!old.parentNode)return false;old.parentNode.replaceChild(c[2](),old);}}
+    return true;
   }
   // The page scrolls inside the workspace, and absolute layers sit at the top of the
   // content. Toasts and the invite card move down by the scroll so they're always seen.
@@ -204,7 +229,7 @@
     else if(touring||(view.prefs&&view.prefs.onboarded===false&&!l&&!view.joining&&!tourSkipped))container.appendChild(onboarding());
     toastNode=node('div','mp-toast');toastNode.setAttribute('role','status');container.appendChild(toastNode);
     if(oldInput&&container.querySelectorAll){var replacements=container.querySelectorAll('input');for(var ri=0;ri<replacements.length;ri++){var replacement=replacements[ri];if(replacement.getAttribute('data-draft')===oldInput.getAttribute('data-draft')&&replacement.parentNode){reuseInput(oldInput,replacement);replacement.parentNode.replaceChild(oldInput,replacement);break;}}}
-    if(container.querySelectorAll){var newButtons=container.querySelectorAll('button'),usedButtons=[];for(var bi=0;bi<newButtons.length;bi++){var freshButton=newButtons[bi];for(var oi=0;oi<oldButtons.length;oi++){var oldButton=oldButtons[oi];if(!usedButtons[oi]&&oldButton.className===freshButton.className&&oldButton.textContent===freshButton.textContent){usedButtons[oi]=true;oldButton.onclick=freshButton.onclick;oldButton.disabled=freshButton.disabled;if(freshButton.parentNode)freshButton.parentNode.replaceChild(oldButton,freshButton);break;}}}}
+    if(container.querySelectorAll){var newButtons=container.querySelectorAll('button'),usedButtons=[];for(var bi=0;bi<newButtons.length;bi++){var freshButton=newButtons[bi];for(var oi=0;oi<oldButtons.length;oi++){var oldButton=oldButtons[oi];if(!usedButtons[oi]&&oldButton.className===freshButton.className&&oldButton.textContent===freshButton.textContent){usedButtons[oi]=true;oldButton.onclick=freshButton.onclick;oldButton.disabled=freshButton.disabled;['aria-checked','aria-pressed','aria-selected','aria-expanded','aria-label'].forEach(function(attr){var v=freshButton.getAttribute(attr);if(v!==null&&v!==undefined)oldButton.setAttribute(attr,v);});if(freshButton.parentNode)freshButton.parentNode.replaceChild(oldButton,freshButton);break;}}}}
     restoreFocus();modalFocus(activeInput);if(pollFailures>=3){var controls=container.getElementsByTagName('button');for(var ci=0;ci<controls.length;ci++)controls[ci].disabled=true;}rendering=false;tick();
   }
   function reuseInput(input,fresh){
@@ -236,28 +261,31 @@
     // The rejoin offer can be put away for this session (the service keeps it for 15 minutes).
     var rejoinKey=view.rejoin?safe(view.rejoin.hostName,'host'):'';
     if(view.rejoin&&rejoinHidden!==rejoinKey)page.appendChild(add(node('div','panel mp-rejoin'),add(node('div','mp-rejoin-text'),node('strong','','Rejoin '+safe(view.rejoin.hostName,'your host')+'’s lobby?'),node('span','','You left it '+(view.rejoin.minutes<1?'just now':view.rejoin.minutes+' min ago')+' when KovaaK’s closed.')),actions(button('Not now',function(){rejoinHidden=rejoinKey;render();},'quiet'),button('Rejoin',function(){act('rejoin');},'primary'))));
-    var hero=node('div','panel mp-hero');page.appendChild(hero);
-    var left=node('div','mp-hero-main');
-    add(left,node('h2','','Play KovaaK’s together'),node('p','mp-lead','Results stay in AimMod and never touch KovaaK’s leaderboards.'));
-    left.appendChild(modePicker(quickMode,function(id){quickMode=id;render();},false));
-    left.appendChild(modeHero(quickMode));
+    var hero=node('div','mp-play-home');page.appendChild(hero);
+    var left=node('div','panel mp-play-main');
+    add(left,add(node('div','mp-play-heading'),add(node('div',''),node('div','eyebrow','Multiplayer'),node('h2','','Your next match')),actions(button('Map library',openMaps,'compact quiet'),button('History',openHistory,'compact quiet'))));
+    var selection=node('div','mp-play-selection'),tiles=node('div','mp-play-tiles'),detail=node('div','mp-play-detail');
+    add(selection,tiles,detail);left.appendChild(selection);
+    tiles.appendChild(modePicker(quickMode,function(id){quickMode=id;render();},false));
+    detail.appendChild(modeHero(quickMode));
     var create=button('Create lobby',function(){act('create',{mode:quickMode});},'primary mp-big');
-    left.appendChild(actions(create));
+    detail.appendChild(actions(create));
+    if(mode(quickMode).group==='pvp'){var bots=button('Play vs bots',function(){var chosen=quickMode;bots.disabled=true;act('create',{mode:chosen},function(ok){if(ok&&view.lobby&&view.lobby.isHost&&view.lobby.settings.mode===chosen)act('add-bot',{skill:botSkill,fill:true},function(filled){var l=view.lobby;if(filled&&l&&l.isHost&&l.settings.mode===chosen&&l.settings.scenario&&l.blockers&&l.blockers.length===0)act('start');});else if(!ok)bots.disabled=false;});});bots.disabled=!botsAllowed({mode:quickMode});detail.appendChild(actions(bots));detail.appendChild(node('p','mp-note',bots.disabled?'Tracking duel needs another player.':'Start with bots. If a map is needed, choose it in your lobby.'));}
+    detail.appendChild(node('p','mp-note','Results stay in AimMod and never touch KovaaK’s leaderboards.'));
     if(!view.library.available)left.appendChild(node('p','mp-note','Couldn’t find your KovaaK’s scenarios. You can still join lobbies.'));
-    var right=node('div','mp-hero-side');
-    add(right,node('h3','','Join a friend'),view.transport.online?node('p','subtle','Or use Join on a friend below.'):null);
+    var right=node('div','mp-play-social');var join=node('div','panel mp-join-card');right.appendChild(join);
+    add(join,node('h3','','Join with a code'));
     var input=trackInput(node('input','mp-code'),'code');input.setAttribute('data-draft','code');input.setAttribute('maxlength','7');input.setAttribute('autocomplete','off');
     input.onkeydown=function(e){if((e||root.event).keyCode===13)joinCode();};
     var codeRow=node('div','mp-code-row');add(codeRow,field(input,'Room code','mp-code-field'),actions(button('Join',joinCode)));
-    right.appendChild(codeRow);
-    right.appendChild(steamState());
-    right.appendChild(add(node('div','mp-hero-link'),actions(button('Map library',openMaps,'compact'))));
+    join.appendChild(codeRow);
+    join.appendChild(steamState());
+    right.appendChild(friendsPanel(false));
     hero.appendChild(left);hero.appendChild(right);
     var row=node('div','mp-row');page.appendChild(row);
     var main=node('div','mp-col mp-main'),side=node('div','mp-col mp-side');row.appendChild(main);row.appendChild(side);
     if((view.watchers&&view.watchers.length)||(view.watchAsks&&view.watchAsks.length))side.appendChild(watchersPanel());
-    main.appendChild(friendsPanel(false));
-    side.appendChild(recentPanel());
+    main.appendChild(recentPanel());
     side.appendChild(prefsPanel());
     if(view.simulation)page.appendChild(devPanel(false));
   }
@@ -426,7 +454,7 @@
     var spec={friends:'Friends can spectate you',ask:'Spectating asks you first',off:'Nobody can spectate you'};
     add(text,node('h2','','Your multiplayer settings'),prefsOpen?null:node('p','','Lobby key '+(pr.hotkey||'F7')+' · Sounds '+(pr.sounds?'on':'off')+' · '+(spec[pr.spectatePrivacy]||spec.friends)));head.appendChild(text);
     if(!preferencesOnly){head.appendChild(actions(button('Multiplayer settings',function(){if(root.AimModWorkspace)root.AimModWorkspace.open('settings');},'compact')));p.appendChild(head);((view.keys&&view.keys.conflicts)||[]).forEach(function(c){p.appendChild(node('p','mp-warn-text',safe(c,'')));});return p;}
-    head.appendChild(actions(button(prefsOpen?'Done':'Change',function(){prefsOpen=!prefsOpen;render();},'compact')));p.appendChild(head);
+    prefsOpen=true;p.appendChild(node('p','saved-note','Changes save automatically.'));
     if(!prefsOpen){p.className+=' folded';((view.keys&&view.keys.conflicts)||[]).forEach(function(c){p.appendChild(node('p','mp-warn-text mp-prefs-warn',safe(c,'')));});return p;}
     var body=node('div','mp-prefs-body');p.appendChild(body);
     function pref(key,value){var o={};o[key]=value;act('prefs',{prefs:o});}
@@ -468,7 +496,7 @@
     x.send(JSON.stringify({discordPresenceEnabled:on}));
   }
   function finishTour(){touring=false;tourSkipped=true;tourStep=0;if(view.prefs&&!view.prefs.onboarded)act('prefs',{prefs:{onboarded:true}});render();}
-  function openAccount(){finishTour();var nav=root.document.getElementById('nav-account');if(nav&&nav.click)nav.click();}
+  function openAccount(){finishTour();if(root.AimModWorkspace)root.AimModWorkspace.open('account');}
   var TOUR=[
     {title:'Play KovaaK’s together',text:'Compare scores or fight each other. ',points:[
       ['Lobbies','Invite Steam friends or share the room code. Missing content is sent for you.'],
@@ -526,10 +554,12 @@
     items.slice(0,inLobby?8:12).forEach(function(f){
       var row=node('div','mp-friend');var info=node('div','mp-friend-info');
       add(info,node('strong','',safe(f.name,'Friend')),node('span','',safe(f.detail,'')));
+      if(!inLobby&&f.status!=='aimmod'&&f.status!=='aimmod-lobby')info.appendChild(node('span','',"Doesn't have AimMod"));
       add(row,avatar(f.name,true,f.avatar),info,friendStatus(f));
       var b=null;
       if(inLobby&&f.status!=='aimmod-lobby')b=button('Invite',function(){act('invite-friend',{friend:f.id},function(ok){if(ok)toast('Invite sent to '+safe(f.name,'your friend')+'.');});},'compact');
       else if(!inLobby&&f.joinable)b=button('Join',function(){act('join-friend',{friend:f.id});},'compact primary');
+      else if(!inLobby&&f.status==='aimmod')b=button('Invite',function(){act('create',{mode:quickMode},function(ok){if(ok&&view.lobby&&view.lobby.isHost)act('invite-friend',{friend:f.id});});},'compact');
       // Spectating would leave your own lobby, so the invite list only invites.
       if(!inLobby&&f.spectatable&&!(view.watch&&view.watch.peer===f.id)){var spec=button('Spectate',function(){act('watch',{friend:f.id},function(ok){if(ok)toast('Asking '+safe(f.name,'your friend')+' to let you watch…');});},'compact quiet');row.appendChild(actions(spec));}
       if(b&&inLobby&&f.status!=='aimmod'&&f.status!=='aimmod-lobby'){b.disabled=true;info.appendChild(node('span','',"Doesn't have AimMod"));row.appendChild(actions(button('Copy install link',function(){var input=node('input','');input.value='https://aimmod.app/app/kovaaks';row.appendChild(input);input.focus();input.select();var copied=false;try{copied=!!(root.document.execCommand&&root.document.execCommand('copy'));}catch(e){}if(copied){row.removeChild(input);toast('Install link copied.');}else toast('Select and copy the install link.');},'compact quiet')));}if(b)row.appendChild(actions(b));
@@ -541,7 +571,7 @@
     var p=node('div','panel mp-recent');var head=node('div','panel-head');add(head,node('h2','','Recent matches'));p.appendChild(head);
     var items=view.recent||[];
     if(items.length)head.appendChild(actions(button('All matches',openHistory,'compact quiet')));
-    if(!items.length){p.appendChild(node('div','mp-empty','No matches yet.'));return p;}
+    if(!items.length){p.appendChild(node('div','mp-empty','Your completed matches will appear here. Create a lobby or join a friend to play.'));return p;}
     var list=node('div','mp-list');p.appendChild(list);
     items.slice(0,6).forEach(function(r){
       var row=node('div','mp-recent-row');var info=node('div','mp-recent-info');
@@ -732,8 +762,7 @@
     // No frame yet: AimModCore is starting the preview, or it is off (it logs why). The page can't
     // tell those apart, so it never claims a reason; it only says the look still saves.
     var waiting=Date.now()-(preview.openedAt||0)<6000;
-    var note=node('div','mp-look-wait');add(note,node('strong','',waiting?'Loading the preview…':'Preview unavailable'),
-      node('span','',waiting?'':'Your look still saves. The preview is drawn by AimModCore in KovaaK’s menus and never runs in challenges, benchmarks or the editor.'));
+    var note=node('div','mp-look-wait');note.setAttribute('role','status');add(note,node('strong','',waiting?'Loading the preview…':'Preview unavailable'),node('span','',waiting?'':'Your look still saves.'));
     preview.img=img;preview.note=note;previewShow();
     add(shot,img,note);stage.appendChild(shot);
     var turn=function(by){preview.yaw=((preview.yaw+by+180)%360+360)%360-180;preview.fastUntil=Date.now()+2000;previewSend();};
@@ -741,7 +770,7 @@
     var right=button('',function(){turn(45);},'compact quiet icon');right.appendChild(turnArt(1));right.setAttribute('aria-label','Turn right');
     var bar=node('div','mp-look-bar');
     add(bar,actions(left,right),node('span','mp-look-hint','Drag to turn'),segmented([{id:'body',label:'Full body'},{id:'close',label:'Close-up'}],preview.close?'close':'body',function(id){preview.close=id==='close';render();},false,'view'));
-    stage.appendChild(bar);
+    stage.appendChild(bar);stage.appendChild(actions(button('Retry preview',function(){preview.frame=0;preview.openedAt=Date.now();render();previewSend();},'compact quiet')));
     return stage;
   }
   function wornLine(){var d=cosmeticsData;var n=d&&d.items?d.items.filter(function(i){return i.equipped;}).length:0;return n?n+(n===1?' item':' items')+' on':'No items on';}
@@ -795,7 +824,7 @@
     if(rival)lh.appendChild(actions(button('Show all',function(){rivalFilter=null;render();},'compact quiet')));
     list.appendChild(lh);
     var shown=(history.matches||[]).filter(function(m){return !rivalFilter||(m.standings||[]).some(function(p){return p.key===rivalFilter;});});
-    if(!shown.length)list.appendChild(node('div','mp-empty','No matches yet.'));
+    if(!shown.length)list.appendChild(node('div','mp-empty','Your completed matches will appear here. Create a lobby or join a friend to play.'));
     shown.slice(0,100).forEach(function(m){list.appendChild(historyRow(m));});
     side.appendChild(rivalsPanel());
   }
@@ -845,7 +874,7 @@
   // Map Library: AimMod map ports here and on the Steam Workshop --------------
   var mapsOpen=false,maps=null,mapsBusy=false,mapsFilter='all';
   function openMaps(){mapsOpen=true;historyOpen=false;tab='play';picker=null;drafts.maps='';loadMaps();render();}
-  function loadMaps(){if(mapsBusy)return;mapsBusy=true;xhr('GET','/multiplayer?part=maps',null,function(ok,data){mapsBusy=false;if(!ok||!data)return;var changed=JSON.stringify(data)!==JSON.stringify(maps);maps=data;if(changed&&(mapsOpen&&!focused||picker==='scenario'))render();});}
+  function loadMaps(){if(mapsBusy)return;mapsBusy=true;xhr('GET','/multiplayer?part=maps',null,function(ok,data){mapsBusy=false;if(!ok||!data)return;var changed=JSON.stringify(data)!==JSON.stringify(maps);maps=data;if(changed&&(mapsOpen&&!focused||picker==='scenario'||view&&view.lobby&&!focused))render();});}
   function shiftText(p){return p.shift==='walk'?'Shift walks':p.shift==='sprint'?'Shift sprints':'No Shift ability';}
   function portState(p){
     if(p.download)return p.download.state==='queued'?'Queued…':'Downloading '+(p.download.total>0?Math.floor(p.download.done*100/p.download.total)+'%':'…');
@@ -967,6 +996,7 @@
     return head;
   }
   function lobbyRoom(page,lobby){
+    if(!maps&&!mapsBusy)loadMaps();
     connectionBanners(page,lobby);
     var mine=member(lobby.self);
     if(lobby.autoStartAt){var auto=banner('info','Everyone’s ready. Starting in 3 s…');page.appendChild(auto);countNodes.push({node:auto.children[1],at:lobby.autoStartAt,format:function(ms){return 'Everyone’s ready. Starting in '+Math.max(1,seconds(ms))+' s…';}});}
@@ -982,15 +1012,13 @@
     if(lobby.settings.mode==='cs'){main.appendChild(node('p','mp-note','If the host leaves, the match ends.'));main.appendChild(teamsPanel(lobby));}
     main.appendChild(chatPanel(lobby));
     if(view.simulation)main.appendChild(devPanel(true));
-    // Side column: who's watching, then the match, then extras. While the host is alone,
-    // inviting comes first.
+    // Keep the match briefing ahead of invitations and cosmetic controls.
     if((view.watchers&&view.watchers.length)||(view.watchAsks&&view.watchAsks.length))side.appendChild(watchersPanel());
     var invite=view.friends.items&&view.friends.items.length?friendsPanel(true):null;
-    var alone=lobby.members.length<2;
-    if(alone&&invite)side.appendChild(invite);
+
     side.appendChild(summaryCard(lobby));
     var sug=suggestionsPanel(lobby);if(sug)side.appendChild(sug);
-    if(!alone&&invite)side.appendChild(invite);
+    if(invite)side.appendChild(invite);
     side.appendChild(lookPanel(lobby));
   }
   function connectionBanners(page,lobby){
@@ -1122,8 +1150,9 @@
   function summaryCard(lobby){
     var s=lobby.settings;var p=node('div','panel mp-summary');var head=node('div','panel-head');var text=node('div','head-text');
     add(text,node('h2','','Match settings'));
-    head.appendChild(text);if(lobby.isHost)head.appendChild(actions(button('Edit',function(){editing=true;loadLibrary();render();},'compact')));
+    head.appendChild(text);if(lobby.isHost)head.appendChild(add(node('div','mp-host-tools'),node('span','mp-host-label','Host controls'),actions(button('Edit',function(){editing=true;loadLibrary();render();},'compact'))));
     p.appendChild(head);
+    if(s.scenario){var entry={name:s.scenario.name,scen:s.scenario,port:null};((maps&&maps.ports)||[]).forEach(function(m){if(m.scenario===entry.name)entry.port=m;});p.appendChild(mapThumb(entry,true));}
     var rows=node('div','mp-kv');p.appendChild(rows);
     function kv(k,v,note){var r=node('div','mp-kv-row');add(r,node('span','mp-k',k),node('span','mp-v',v));if(note)r.appendChild(node('span','mp-kv-note',note));rows.appendChild(r);return r;}
     kv('Mode',mode(s.mode).label);
@@ -1215,9 +1244,11 @@
     var oneOnOne=s.mode==='duel'||s.mode==='tracking-duel'||s.mode==='vampiric';
     if(s.mode==='cs')pl.appendChild(settingRow('Team size','',segmented([{id:'6',label:'3v3'},{id:'8',label:'4v4'},{id:'10',label:'5v5'}],String(s.maxPlayers),function(id){setting('maxPlayers',Number(id));},false,'team size')));
     else pl.appendChild(settingRow('Max players',oneOnOne?'Always one against one in this mode.':'Including you.',stepper(s.maxPlayers,2,8,1,function(v){return F.number(v,0);},function(v){setting('maxPlayers',v);},oneOnOne,'max players')));
+    if(oneOnOne)pl.appendChild(settingRow('AFK grace','Seconds without movement or shots before forfeiting. Zero turns this off.',stepper(s.duelAfkSeconds==null?90:s.duelAfkSeconds,0,600,30,function(v){return v?v+' s':'Off';},function(v){setting('duelAfkSeconds',v);},false,'AFK grace')));
     if(s.mode==='duel')pl.appendChild(settingRow('First to','',stepper(s.firstTo,1,7,1,function(v){return F.number(v,0)+(v===1?' win':' wins');},function(v){setting('firstTo',v);},false,'first to')));
     else if(s.mode==='cs'){
       pl.appendChild(settingRow('Rounds per half','Sides switch after this many (CS2: 12).',stepper(s.halfRounds||12,6,15,1,function(v){return F.number(v,0);},function(v){setting('halfRounds',v);},false,'rounds per half')));
+      pl.appendChild(settingRow('Warmup','60 seconds, or until everyone types /ready. Free buys and respawns.',toggleSwitch(s.csWarmup!==false,'Warmup',function(){setting('csWarmup',s.csWarmup===false);})));
       pl.appendChild(settingRow('Overtime','A tie goes to overtime halves of 3 rounds with $12,500.',toggleSwitch(s.overtime!==false,'Overtime',function(){setting('overtime',s.overtime===false);})));
       pl.appendChild(settingRow('ADS zoom','Right mouse zoom. CS-style: only the AWP scopes, as in CS2.',segmented([{id:'off',label:'Off'},{id:'cs',label:'CS-style'},{id:'all',label:'All weapons'}],s.adsZoom||'cs',function(id){setting('adsZoom',id);},false,'ADS zoom')));
       if((s.adsZoom||'cs')!=='off')pl.appendChild(settingRow('Zoom sensitivity','Sensitivity while zoomed, against hip fire (1.0 keeps it).',stepper(typeof s.adsSensitivity==='number'?s.adsSensitivity:1,0.2,2,0.05,function(v){return F.number(v,2)+'x';},function(v){setting('adsSensitivity',v);},false,'zoom sensitivity')));
@@ -1320,7 +1351,7 @@
     var mode=lobby&&lobby.settings&&lobby.settings.mode,own=null,list=(library&&library.scenarios)||[];
     for(var i=0;i<list.length;i++)if(list[i].name===name){own=list[i].modes&&list[i].modes[mode];break;}
     var e=lobby&&lobby.eligibility,r=e&&e[name],v=own||r;
-    if(!v)return {ok:true,reason:null,players:r&&r.players?safe(r.players,''):null};
+    if(!v)return {ok:mode!=='cs',reason:mode==='cs'?'CS map required':null,players:r&&r.players?safe(r.players,''):null};
     return {ok:v.ok!==false,reason:v.ok===false?safe(v.reason,'Doesn’t fit this mode'):null,players:r&&r.players?safe(r.players,''):null};
   }
   function mapEntries(){
@@ -1370,12 +1401,12 @@
       if(gl.length>1)bar.appendChild(segmented(gl,mapSel.game,function(id){mapSel.game=id;mapSel.focus=0;filters();fill();},false,'game'));
       var fit=node('button','mp-ms-fit'+(mapSel.fits?' on':''));fit.type='button';fit.setAttribute('role','switch');fit.setAttribute('aria-checked',String(mapSel.fits));
       add(fit,node('span','mp-ms-box'),node('span','','Fits '+modeName));fit.onclick=function(){mapSel.fits=!mapSel.fits;mapSel.focus=0;filters();fill();};
-      bar.appendChild(fit);
+      if(s.mode==='cs'){fit.disabled=true;fit.setAttribute('aria-checked','true');fit.className='mp-ms-fit on';}bar.appendChild(fit);
     }
     function matches(x,q){
       if(mapSel.source!=='all'&&!(mapSel.source==='ports'?!!x.port:mapSel.source==='workshop'?!!(x.port&&x.port.workshop):!x.port))return false;
       if(mapSel.game!=='all'&&!(x.port&&x.port.game===mapSel.game))return false;
-      if(mapSel.fits&&!mapFit(lobby,x.name).ok)return false;
+      if((s.mode==='cs'||mapSel.fits)&&!mapFit(lobby,x.name).ok)return false;
       if(!q)return true;
       // Searched by its own words: the AimMod port prefix would match every port for "aim".
       var hay=(String(x.name).replace(/^AimMod - /,'')+' '+mapTitle(x)+' '+(x.port?gameLabel(x.port.game)+' '+(x.port.variant||''):'')+' '+(x.scen?String(x.scen.map).replace(/^aimmod_/i,''):'')).toLowerCase();
@@ -1417,7 +1448,7 @@
       section(q?'Results':'All maps',all,q?60:48);
       if(mapSel.fits)hidden=all.filter(function(x){return !mapFit(lobby,x.name).ok;}).length;
       if(!visible.length)gridBox.appendChild(add(node('div','mp-ms-empty'),node('strong','','Nothing matches'),node('span','',q?'Try a shorter search or another filter.':'No maps in this filter yet.')));
-      if(hidden)gridBox.appendChild(add(node('div','mp-ms-hidden'),node('span','',hidden+(hidden===1?' map doesn’t':' maps don’t')+' fit '+modeName+'. '),actions(button('Show them',function(){mapSel.fits=false;filters();fill();},'compact quiet'))));
+      if(hidden)gridBox.appendChild(add(node('div','mp-ms-hidden'),node('span','',hidden+(hidden===1?' map doesn’t':' maps don’t')+' fit '+modeName+'. '),s.mode==='cs'?null:actions(button('Show them',function(){mapSel.fits=false;filters();fill();},'compact quiet'))));
       if(mapSel.key){for(var i=0;i<visible.length;i++)if(visible[i].name===mapSel.key){mapSel.focus=i;break;}}
       if(mapSel.focus>=visible.length)mapSel.focus=Math.max(0,visible.length-1);
       showDetails(visible[mapSel.focus]||null);
@@ -1593,6 +1624,20 @@
     if(lobby.isHost)head.appendChild(actions(button('End match',function(){act('end');},'compact quiet danger')));p.appendChild(head);
     var body=node('div','mp-live-body');body.appendChild(hud(lobby,match));p.appendChild(body);main.appendChild(p);
     var playing=match.players.indexOf(lobby.self)>=0;
+    if(match.cs||match.mode==='team-deathmatch'){
+      var controls=node('div','panel mp-card');controls.appendChild(node('h2','','Match controls'));
+      function control(label,command,target){return button(label,function(){act('match-control',{command:command,member:target});},'compact quiet');}
+      if(playing){
+        if(match.cs&&match.cs.phase==='warmup')controls.appendChild(actions(control('Ready for round 1','ready')));
+        else if(match.cs)controls.appendChild(actions(control('Vote to surrender','surrender'),control('Tactical timeout','timeout')));
+        var roster=match.cs?match.cs.players:match.combat?match.combat.players:[],self=roster.filter(function(p){return p.member===lobby.self;})[0];
+        roster.forEach(function(p){var m=member(p.member);if(self&&p.team===self.team&&p.member!==lobby.self&&p.member!==lobby.hostId&&m&&!m.bot&&m.role==='player')controls.appendChild(actions(control('Vote to kick '+safe(m.name),'kickvote',p.member)));});
+      }
+      if(lobby.isHost&&match.cs)controls.appendChild(actions(control(match.cs.paused?'Resume match':'Pause match',match.cs.paused?'unpause':'pause')));
+      if(match.vote&&match.vote.eligible.indexOf(lobby.self)>=0){controls.appendChild(node('p','',match.vote.label+' · '+match.vote.yes.length+' / '+match.vote.required+' yes'));controls.appendChild(actions(control('F1 Yes','yes'),control('F2 No','no')));}
+      controls.appendChild(node('p','subtle','Chat: /surrender, /timeout, /kickvote name, /yes, /no. Host: /pause, /unpause.'));
+      side.appendChild(controls);
+    }
     if(playing){var you=node('div','panel mp-card');add(you,node('h2','','Your run'));var plan=planBox(lobby);if(plan)you.appendChild(plan);else you.appendChild(node('p','subtle','Play the round in KovaaK’s.'));
       side.appendChild(you);}
     var others=match.players.filter(function(id){var m=member(id);return id!==lobby.self&&m&&!m.simulated;});
@@ -1647,7 +1692,7 @@
     if(match.rematchDeadline)countNodes.push({node:closes,at:match.rematchDeadline,format:function(ms){return votes+' of '+needed+' want a rematch · starts in '+seconds(ms)+' s with whoever confirmed.';}});
     page.appendChild(hero);
     var row=node('div','mp-row');page.appendChild(row);var main=node('div','mp-col mp-main'),side=node('div','mp-col mp-side');row.appendChild(main);row.appendChild(side);
-    var st=node('div','panel');var sh=node('div','panel-head');var shText=node('div','head-text');add(shText,node('h2','','Final standings'),node('p','','KovaaK’s leaderboards are never changed.'));sh.appendChild(shText);st.appendChild(sh);var sb=node('div','panel-body');sb.appendChild(standingsTable(match));st.appendChild(sb);main.appendChild(st);
+    var st=node('div','panel');var sh=node('div','panel-head');var shText=node('div','head-text');add(shText,node('h2','','Final standings'));sh.appendChild(shText);st.appendChild(sh);var sb=node('div','panel-body');sb.appendChild(standingsTable(match));st.appendChild(sb);main.appendChild(st);
     var rounds=node('div','panel');var rh=node('div','panel-head');add(rh,node('h2','','Rounds'));rounds.appendChild(rh);var list=node('div','mp-list');
     match.rounds.forEach(function(r){var best=r.results[0];var line=node('div','mp-round-line');
       add(line,node('span','mp-round-no','R'+r.round),avatar(r.winnerId?nameOf(r.winnerId):best?best.name:'?',true,pic(r.winnerId||best&&best.memberId)),node('span','mp-round-win',r.winnerId?nameOf(r.winnerId):practice&&best?safe(best.name)+' (best run)':'Draw'),node('span','mp-round-score',best&&best.score!==null?F.number(best.score,0):'—'));list.appendChild(line);});
@@ -1664,6 +1709,6 @@
   }
 
   function enter(element){leave();preferencesOnly=false;container=element;generation++;if(!container)return;clear();var p=node('div','panel mp-card mp-joining');add(p,node('div','mp-spinner'),node('p','subtle','Loading multiplayer…'));container.appendChild(p);lastKey='';poll();}
-  function leave(){previewStop();generation++;mapsBusy=false;libraryAsked=!!library;clearTimeout(deferred);deferred=null;clearTimeout(timer);clearTimeout(ticker);timer=null;ticker=null;inflight=false;again=false;if(container)clear();container=null;toastNode=null;}
+  function leave(){previewStop();generation++;actionRevision++;pendingActions={};view=null;lastKey='';pollFailures=0;editing=false;picker=null;focused=null;modalOpen=false;modalReturn=null;mapsOpen=false;historyOpen=false;clearTimeout(toastTimer);mapsBusy=false;libraryAsked=!!library;clearTimeout(deferred);deferred=null;clearTimeout(timer);clearTimeout(ticker);timer=null;ticker=null;inflight=false;again=false;if(container)clear();container=null;toastNode=null;}
   root.AimModMultiplayer={enter:enter,enterPreferences:function(element){enter(element);preferencesOnly=true;prefsOpen=true;},leave:leave,resize:function(){if(container&&view)render();},_state:function(){return {view:view,editing:editing,picker:picker};}};
 })(window);

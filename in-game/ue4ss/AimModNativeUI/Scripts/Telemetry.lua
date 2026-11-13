@@ -368,7 +368,7 @@ function M.start()
     observe('cancel', BROADCAST .. 'Send_PlayTypeChanged', broadcastTransition)
     local useFallback=#lifecycle.start==0
     if type(LoopInGameThreadWithDelay)=='function'then LoopInGameThreadWithDelay(100,function()
-        if M.coreActive('telemetry') then state.completing=nil;live=coreLive();return end
+        if M.coreActive('telemetry') then state.completing=nil;if not M.coreActive('hud') then live=coreLive() end;return end
         local c=state.completing
         if c then c.polls=c.polls+1;if c.polls>=COMPLETION_POLLS then pcall(finalize,'broadcast-timeout') end end
         if useFallback then pcall(nativeFallback) end

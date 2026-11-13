@@ -7,13 +7,17 @@ CultureInfo.CurrentCulture = CultureInfo.InvariantCulture;
 // Install, repair, update hand-off and uninstall (Install/Repair-AimMod.cmd).
 if (args.Contains("--verify-release")) { Environment.ExitCode = Lifecycle.VerifyRelease(args); return; }
 if (Lifecycle.Commands.Any(args.Contains)) { Environment.ExitCode = Lifecycle.RunCommand(args); return; }
+if (args.Contains("--self-test-replays")) { ReplayLibraryChecks.Run(); ReplayChecks.Run(); ReplayKeyboardChecks.Run(); await NativeReplayPlaybackChecks.Run(); return; }
 if (args.Contains("--self-test-lifecycle")) { await LifecycleChecks.Run(); return; }
 if (args.Contains("--self-test-overlays")) { await OverlayScenesChecks.Run(); return; }
+if (args.Contains("--self-test-analysis")) { AimMod.InGame.Analysis.AnalysisChecks.Run(); return; }
 if (args.Contains("--self-test-multiplayer")) { AimMod.InGame.Multiplayer.MultiplayerChecks.Run(); return; }
 if (args.Contains("--discord-test")) { Environment.ExitCode = await DiscordDiagnostics.Run(args); return; }
-if (args.Contains("--self-test")) { Checks.Run(); HistoryCompletenessChecks.Run(); CsvHistoryChecks.Run(); await HubChecks.Run(); await HubLiveChecks.Run(); HubPaginationChecks.Run(); await HubLeaderboardChecks.Run(); Coaching.SelfTest(); CoachingFeedbackChecks.Run(); StatsChecks.Run(); WarmupChecks.Run(); RunInspectionChecks.Run(); NativeSettingsChecks.Run(); LiveOverlayChecks.Run(); LiveOverlayFeedChecks.Run(); OverlaySettingsChecks.Run(); await ObsOverlayChecks.Run(); await OverlayScenesChecks.Run(); BenchmarkChecks.Run(); ReplayLibraryChecks.Run(); await WorkspaceChecks.Run(); ReplayChecks.Run(); ReplayKeyboardChecks.Run(); await NativeReplayPlaybackChecks.Run(); await HardeningChecks.Run(); CoreFormatChecks.Run(); ScenarioLoaderChecks.Run(); await DiscordPresenceChecks.Run(); AimMod.InGame.Multiplayer.MultiplayerChecks.Run(); await LifecycleChecks.Run(); return; }
+if (args.Contains("--self-test")) { RuntimeStateChecks.Run(); Checks.Run(); PracticePipelineChecks.Run(); PracticeDrillChecks.Run(); HistoryCompletenessChecks.Run(); CsvHistoryChecks.Run(); await HubChecks.Run(); await HubLiveChecks.Run(); HubPaginationChecks.Run(); await HubLeaderboardChecks.Run(); Coaching.SelfTest(); CoachingFeedbackChecks.Run(); StatsChecks.Run(); WarmupChecks.Run(); RunInspectionChecks.Run(); NativeSettingsChecks.Run(); LiveOverlayChecks.Run(); LiveOverlayFeedChecks.Run(); OverlaySettingsChecks.Run(); await ObsOverlayChecks.Run(); await OverlayScenesChecks.Run(); BenchmarkChecks.Run(); ReplayLibraryChecks.Run(); await WorkspaceChecks.Run(); ReplayChecks.Run(); ReplayKeyboardChecks.Run(); await NativeReplayPlaybackChecks.Run(); await HardeningChecks.Run(); CoreFormatChecks.Run(); ScenarioLoaderChecks.Run(); AimMod.InGame.Analysis.AnalysisChecks.Run(); await DiscordPresenceChecks.Run(); AimMod.InGame.Multiplayer.MultiplayerChecks.Run(); await LifecycleChecks.Run(); return; }
 if (args.Length == 5 && args[0] == "--compare-spawns") { Environment.ExitCode = ReplayCompare.Spawns(args[1], args[2], args[3], args[4]); return; }
 if (args.Length == 4 && args[0] == "--compare-replays") { Environment.ExitCode = ReplayCompare.Run(args[1], args[2], args[3]); return; }
+// Developer diagnostic: --analyze-replays [--output <folder>] [--id <replay id>] [--flicks] prints the practice analysis of the local replays (console only).
+if (args.Length >= 1 && args[0] == "--analyze-replays") { Environment.ExitCode = AimMod.InGame.Analysis.ReplayAnalysisCli.Run(args); return; }
 // Diagnostic: --generate-arena <base .sce> <mode> <out .sce> writes the match scenario a lobby in that mode would build.
 if (args.Length == 4 && args[0] == "--generate-arena") { Environment.ExitCode = AimMod.InGame.Multiplayer.MatchScenario.GenerateFile(args[1], args[2], args[3]); return; }
 // Diagnostic: --bisect-arena <base .sce> <mode> <out folder> writes "AimMod Probe" variants that each add one part of the arena.
@@ -51,6 +55,8 @@ for (int i = 0; i < args.Length; i++)
     else if (args[i] == "--instance" && i + 1 < args.Length) instance = new string(args[++i].Where(char.IsAsciiLetterOrDigit).Take(32).ToArray());
 }
 Directory.CreateDirectory(output);
+using var outputLease = OutputLease.TryAcquire(output);
+if (outputLease is null) { Console.Error.WriteLine("Another AimMod worker owns this output directory."); return; }
 // The real service may play CS round sounds (self-tests never open an audio device).
 AimMod.InGame.Multiplayer.BombAudio.DeviceAllowed = true;
 using var singleton = new Mutex(true, "Local\\AimMod.KovaaksNative.History" + (instance.Length > 0 ? "." + instance : ""), out var ownsMutex);
@@ -130,7 +136,7 @@ try
             await hub.Tick(cancellation.Token);
             var journal = Path.Combine(output, "completed.tsv");
             var files = string.Join('|', new[] { database, database + "-wal", journal, Path.Combine(output, "imported-history.json") }.Select(p => File.Exists(p) ? $"{new FileInfo(p).Length}:{File.GetLastWriteTimeUtc(p).Ticks}" : "missing"));
-            var next = hub.Revision + "|" + files;
+            var next = hub.Revision + "|" + files + "|" + DateTime.Today.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
             if (next != fingerprint)
             {
                 if (files != localFingerprint)

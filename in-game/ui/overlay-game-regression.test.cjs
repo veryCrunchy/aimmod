@@ -1,0 +1,37 @@
+const {test}=require('node:test');
+const assert=require('node:assert/strict');
+const {makeWindow,load}=require('./overlay-test-dom.cjs');
+test('game surface renders Live stats and PB pace by polling without accessing EventSource',()=>{
+  const s=makeWindow(),w=s.window,host=w.document.createElement('main');host.id='scene';host.className='hidden';w.document.roots.push(host);
+  w.location.pathname='/cap/overlay';w.location.search='?surface=game';w.innerWidth=1920;w.innerHeight=1080;
+  const handlers={};w.engine={on:(key,fn)=>{handlers[key]=fn;}};
+  Object.defineProperty(w,'EventSource',{get(){throw new Error('Game surface must not use streaming');}});
+  load(w,['overlay-model.js','overlay-widgets.js']);const M=w.AimModOverlayModel,W=w.AimModOverlayWidgets;
+  load(w,['overlay.js']);
+  const feed=W.sample(1000);feed.enabled=true;feed.storeRevision=1;
+  s.requests.find(r=>r.url==='/cap/overlay-feed?surface=game').finish(200,feed);
+  s.requests.find(r=>r.url==='/cap/overlay-scenes').finish(200,M.defaultStore());
+  assert.equal(w.AimModLiveOverlay.surface,'game');assert.equal(host.className,'');
+  assert.equal(host.children.length,2);assert.match(host.textContent,/Score/);assert.match(host.textContent,/Personal best/i);
+  handlers.AimModVisibility(false);assert.equal(host.className,'hidden');
+  handlers.AimModVisibility(true);
+  s.requests.filter(r=>r.url==='/cap/overlay-feed?surface=game').at(-1).finish(200,feed);
+  assert.equal(host.className,'');assert.equal(host.children.length,2);
+});
+test('game polling switches automatic scenes and applies each canvas size',()=>{
+  const s=makeWindow(),w=s.window,host=w.document.createElement('main');host.id='scene';w.document.roots.push(host);
+  w.location.pathname='/cap/overlay';w.location.search='?surface=game';w.innerWidth=1280;w.innerHeight=720;
+  load(w,['overlay-model.js','overlay-widgets.js']);const M=w.AimModOverlayModel;
+  const store=M.defaultStore();store.scenes[0].auto='scenario';store.scenes[0].width=1280;store.scenes[0].height=720;
+  store.scenes[0].widgets=[M.widget('text','run-label',10,10,{opts:{text:'Run scene'}})];
+  store.scenes[1].auto='match';store.scenes[1].widgets=[M.widget('text','match-label',10,10,{opts:{text:'Match scene'}})];
+  store.scenes[2].auto='replay';store.scenes[2].widgets=[M.widget('text','replay-label',10,10,{opts:{text:'Replay scene'}})];
+  load(w,['overlay.js']);
+  const feed={enabled:true,storeRevision:1,live:{active:true}};
+  const answer=()=>s.requests.filter(r=>r.url==='/cap/overlay-feed?surface=game').at(-1).finish(200,feed);
+  answer();s.requests.find(r=>r.url==='/cap/overlay-scenes').finish(200,store);
+  assert.match(host.textContent,/Run scene/);assert.equal(host.style.width,'1280px');assert.equal(host.style.transform,'scale(1.00000)');
+  feed.multiplayer={match:{phase:'live'}};s.run();answer();assert.match(host.textContent,/Match scene/);assert.equal(host.style.width,'1920px');
+  feed.replay={visible:true};s.run();answer();assert.match(host.textContent,/Replay scene/);
+  feed.enabled=false;s.run();answer();assert.equal(host.className,'hidden');
+});

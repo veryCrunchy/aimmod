@@ -31,6 +31,10 @@ sealed class OverlayService(OverlaySettings settings, OverlayScenes scenes, Func
     Hub? hub, KovaaksSettings kovaaks, OverlayHistory history, OverlayMotion motion, Func<long>? clock = null)
 {
     public OverlayScenes Scenes => scenes;
+    public Func<Multiplayer.OverlayMultiplayer?>? MultiplayerSource { get; set; }
+    public Func<OverlayReplay?>? ReplaySource { get; set; }
+    public Func<string, byte[]?>? AvatarSource { get; set; }
+    public OverlayAnalysisSource Analysis { get; } = new();
     long nextBenchmarkFetch;
     long Now() => clock?.Invoke() ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
     internal bool Enabled(string surface) => surface switch { "obs" => settings.Current.ObsEnabled, "game" => settings.Current.GameEnabled, "preview" => true, _ => false };
@@ -38,14 +42,15 @@ sealed class OverlayService(OverlaySettings settings, OverlayScenes scenes, Func
     public object Feed(string surface)
     {
         if (!Enabled(surface)) return new { v = 1, enabled = false, storeRevision = scenes.Revision };
-        var now = Now(); var scenario = liveScenario();
+        var now = Now(); var scenario = liveScenario(); var multiplayer = MultiplayerSource?.Invoke();
         return new
         {
             v = 1, enabled = true, storeRevision = scenes.Revision, live = live(), session = history.Session(now), recent = history.Recent(), scenario = history.Scenario(scenario),
-            kovaaks = kovaaks.Read(), profile = Profile(), benchmarks = Benchmarks(scenario ?? history.Current.Latest, now), board = board(), tournament = tournament(),
+            kovaaks = kovaaks.Read(), profile = Profile(multiplayer?.Self), benchmarks = Benchmarks(scenario ?? history.Current.Latest, now), board = board(), tournament = tournament(),
+            multiplayer, replay = ReplaySource?.Invoke(), mouse = motion.CatalogView(Analysis.Read()),
         };
     }
-    object Profile() => new { linked = hub?.LinkedHandle is not null, name = hub?.AccountLabel ?? hub?.LinkedHandle, handle = hub?.LinkedHandle };
+    object Profile(Multiplayer.OverlayPlayer? self) => new OverlayProfile(hub?.LinkedHandle is not null, hub?.AccountLabel ?? hub?.LinkedHandle ?? self?.Name, hub?.LinkedHandle, self?.Avatar);
     object[] Benchmarks(string? scenario, long now)
     {
         if (hub is null) return [];
@@ -70,12 +75,15 @@ sealed class OverlayService(OverlaySettings settings, OverlayScenes scenes, Func
                 if (above is not null) { next = above.Rank; var from = below?.Score ?? 0; progress = above.Score > from ? Math.Clamp((row.Score - from) / (above.Score - from), 0, 1) : null; }
                 break;
             }
-        return new { id = b.Id, name = b.Name, rank = b.Rank?.Name, rankIndex = b.Rank?.Index, scenarioRank, progress, next };
+        return new OverlayBenchmark(b.Id, b.Name, b.Author, b.Rank?.Name, b.Rank?.Index, scenarioRank, progress, next);
     }
 
     static string Surface(HttpRequest request, bool obs) => obs ? "obs" : request.Query["surface"].ToString() is "game" ? "game" : "preview";
     void MapReads(IEndpointRouteBuilder routes, string prefix, bool obs)
     {
+        routes.MapGet(prefix + "/overlay-avatar/{name}", (string name, HttpRequest request) => Enabled(Surface(request, obs)) && AvatarSource?.Invoke(name) is { } png ? Results.Bytes(png, "image/png") : Results.NotFound());
+        routes.MapGet(prefix + "/overlay-data", (HttpRequest request) => Results.Json(new { v = 1, fields = OverlayDataCatalog.Read(Feed(Surface(request, obs))) }));
+        routes.MapGet(prefix + "/overlay-stream", (HttpContext context) => OverlayDataCatalog.Stream(context, () => Feed(Surface(context.Request, obs))));
         routes.MapGet(prefix + "/overlay-scenes", () => Results.Bytes(scenes.Bytes, "application/json"));
         routes.MapGet(prefix + "/overlay-feed", (HttpRequest request) => Results.Json(Feed(Surface(request, obs))));
         routes.MapGet(prefix + "/overlay-motion", (HttpRequest request) =>

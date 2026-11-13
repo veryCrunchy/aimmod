@@ -13,6 +13,11 @@ static class StatsChecks
         void Check(bool condition, string message) { checks++; if (!condition) throw new Exception(message); }
         var now = new DateTimeOffset(2026, 9, 6, 12, 0, 0, TimeSpan.Zero);
         Run Sample(string id, string scenario, double score, DateTimeOffset stamp) => new(id, scenario, score, null, 60, 0, 0, stamp.ToString("O"), null, null, null, null, false);
+        var offsetZone = TimeZoneInfo.CreateCustomTimeZone("Synthetic", TimeSpan.FromHours(2), "Synthetic", "Synthetic");
+        var midnightRun = Sample("midnight", "Synthetic", 10, new DateTimeOffset(2026, 9, 5, 23, 30, 0, TimeSpan.Zero));
+        var localDay = StatsAnalysis.Build([midnightRun], "Synthetic", now, offsetZone).Periods.Single(p => p.Key == "7");
+        Check(localDay.Calendar.Single().Date == "2026-09-06" && localDay.Calendar.Single().Minutes == 1, "Practice calendar uses local day and duration");
+        Check(StatsAnalysis.Build([midnightRun], "Synthetic", now.AddDays(8), offsetZone).Periods.Single(p => p.Key == "7").Runs == 0, "Old runs leave the weekly window");
         var fixture = new List<Run>();
         for (int i = 0; i < 3; i++)
         {

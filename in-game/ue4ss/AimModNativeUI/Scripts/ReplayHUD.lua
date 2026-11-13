@@ -6,11 +6,24 @@ local sliderRoutes={}
 local sliderHooked=false
 local function valid(o)return o and o:IsValid()end
 local build
-function M.create(owner,send)
+function M.parseMarkers(data,id)
+    if type(data)~='string' or #data>4096 or data:sub(-1)~='\n' then return {} end
+    local found,duration,body=data:match('^AIMMOD_KILLS_1\t([%w_-]+)\t([^\n]+)\n(.*)$')
+    duration=tonumber(duration)
+    if found~=id or not duration or duration~=duration or duration<=0 or duration==math.huge then return {} end
+    local result,seen={},{}
+    for line in body:gmatch('([^\n]+)\n')do
+        local n=tonumber(line)
+        if not n or n<0 or n>248 or n%1~=0 or seen[n] then return {} end
+        seen[n]=true;result[#result+1]=n
+    end
+    return result
+end
+function M.create(owner,send,id)
     -- A partially built HUD must not leave click routes (and the widgets their
     -- closures reference) registered, or an orphaned frame in the viewport.
     local registered={routes={},sliders={}}
-    local ok,result=pcall(build,owner,send,registered)
+    local ok,result=pcall(build,owner,send,registered,id)
     if not ok then
         for _,key in ipairs(registered.routes)do routes[key]=nil end
         for _,key in ipairs(registered.sliders)do sliderRoutes[key]=nil end
@@ -19,7 +32,7 @@ function M.create(owner,send)
     end
     return result
 end
-build=function(owner,send,registered)
+build=function(owner,send,registered,id)
     local lib=StaticFindObject('/Script/UMG.Default__WidgetBlueprintLibrary')
     local function widget(name)
         local class=StaticFindObject('/Game/FirstPersonBP/Blueprints/UI/Palette/'..name..'.'..name..'_C')
@@ -43,7 +56,7 @@ build=function(owner,send,registered)
     local colors={mint={R=.04,G=.82,B=.49,A=1},paper={R=.85,G=.94,B=.90,A=1},muted={R=.42,G=.61,B=.53,A=1},panel={R=.009,G=.024,B=.018,A=.97},line={R=.035,G=.13,B=.08,A=1}}
     local panel=make('Border');panel:SetVisibility(0)
     panel:SetPadding({Left=0,Top=0,Right=0,Bottom=0});panel:SetBrushColor(colors.panel)
-    place(canvas,panel,-520,-184,1040,160,.5,1)
+    place(canvas,panel,-520,-208,1040,184,.5,1)
     local body=make('CanvasPanel');body:SetVisibility(4);panel:SetContent(body)
     local palette=FindFirstOf('PaletteManager')
     local fontObject=valid(palette) and valid(palette.PaletteManagerData) and palette.PaletteManagerData.BoldFont or nil
@@ -58,20 +71,27 @@ build=function(owner,send,registered)
         local b=make('Border');b:SetBrushColor(color);b:SetVisibility(3);place(body,b,x,y,w,h);return b
     end
     line(0,0,1040,3,colors.mint)
-    place(body,text('AIMMOD',17,colors.mint),24,19,120,24)
-    local status=text('REPLAY PAUSED',11,colors.muted);place(body,status,24,44,140,20)
+    place(body,text('REPLAY',14,colors.mint),24,15,150,22)
+    local status=text('REPLAY PAUSED',11,colors.muted);place(body,status,24,38,150,18)
     local scoreTitle
     local fields={};local keys={'score','accuracy','hits','shots','kills','damage'}
     local labels={'SCORE','ACCURACY','HITS','SHOTS','KILLS','DAMAGE'}
     for i,key in ipairs(keys)do
         local x=192+(i-1)*136
-        local title=text(labels[i],10,colors.muted);place(body,title,x,17,126,16)
+        local title=text(labels[i],10,colors.muted);place(body,title,x,14,126,16)
         if key=='score' then scoreTitle=title end
-        fields[key]=text('—',21);place(body,fields[key],x,34,126,30)
+        fields[key]=text('—',18);place(body,fields[key],x,30,126,28)
     end
     -- Native slider handles pointer capture and DPI; this bar supplies the progress fill.
     local progress=make('ProgressBar');progress:SetVisibility(3);progress:SetPercent(0);progress:SetFillColorAndOpacity(colors.mint)
-    place(body,progress,24,75,992,5)
+    place(body,progress,24,93,992,3)
+    if id then
+        local file=io.open((os.getenv('LOCALAPPDATA') or '')..'/AimMod/KovaaksNative/replay-kills.tsv','rb')
+        if file then
+            local data=file:read(4097);file:close()
+            for _,bin in ipairs(M.parseMarkers(data,id))do line(24+math.min(990,bin*4),98,2,5,colors.muted)end
+        end
+    end
     local buttons={}
     local surfaces={}
     local function updateSurface(surface)
@@ -79,7 +99,7 @@ build=function(owner,send,registered)
         local state=not native:GetIsEnabled() and 'disabled' or (native:IsPressed() and 'pressed' or (native:IsHovered() and 'hover' or 'normal'))
         if state~=surface.state then surface.border:SetBrushColor(surface.colors[state]);surface.state=state end
     end
-    local function button(value,x,w,callback,primary)
+    local function button(value,x,w,callback,primary,y,h,tint)
         local item=widget('PalettedBoxButtonWidget');item:SetVisibility(0)
         item.HideTrim=true;item.HoverEffect=false
         assert(valid(item.Binding_Button),'replay button unavailable')
@@ -87,8 +107,8 @@ build=function(owner,send,registered)
         -- Own the paint surface; preserve the game's complete native button style,
         -- including its nontrivial Slate sounds and brush resource ownership.
         local surface=make('Border');surface:SetVisibility(3)
-        place(body,surface,x,96,w,42)
-        local entry={item=item,border=surface,colors={
+        place(body,surface,x,y or 116,w,h or 42)
+        local entry={item=item,border=surface,colors=tint or {
             normal=primary and colors.mint or {R=.035,G=.095,B=.065,A=1},
             hover=primary and {R=.09,G=1,B=.65,A=1} or {R=.06,G=.18,B=.12,A=1},
             pressed=primary and {R=.02,G=.53,B=.30,A=1} or {R=.02,G=.065,B=.04,A=1},
@@ -96,7 +116,7 @@ build=function(owner,send,registered)
         surfaces[#surfaces+1]=entry
         local label=text(value,16,primary and colors.panel or colors.paper);label:SetJustification(1)
         item.ButtonContentsSlot:SetContent(label)
-        place(body,item,x,96,w,42)
+        place(body,item,x,y or 116,w,h or 42)
         local key=item:GetFullName();registered.routes[#registered.routes+1]=key
         routes[key]=function()frame:SetUserFocus(owner:GetOwningPlayer());callback()end;buttons[#buttons+1]=item
         return label
@@ -105,13 +125,22 @@ build=function(owner,send,registered)
     button('-5 sec',148,88,function()send('seek-relative',-5)end)
     button('+5 sec',244,88,function()send('seek-relative',5)end)
     local speedLabel=button('1x speed',348,112,function()send('speed-next')end)
-    local timer=text('0:00 / 0:00',20);place(body,timer,492,94,240,28)
-    local remaining=text('0:00 remaining',11,colors.muted);place(body,remaining,492,122,240,20)
+    local timer=text('0:00 / 0:00',20);place(body,timer,492,114,240,28)
+    local remaining=text('0:00 remaining',11,colors.muted);place(body,remaining,492,140,240,20)
     button('Exit replay',864,152,function()send('close')end)
+    place(body,text('Space: play / pause     Left / Right: 5s     Shift + Left / Right: 1s     Esc: exit     [ / ]: previous / next flick',10,colors.muted),24,164,992,16)
+    local updateFlicks=function()end
+    if id and id~='live' then
+        local ok,module=pcall(require,'ReplayFlicks')
+        if ok then
+            local built,update=pcall(module.create,id,make,place,text,canvas,button,send)
+            if built then updateFlicks=update end
+        end
+    end
     local seek=widget('PalettedSlider');seek:SetVisibility(0)
     local slider=seek.Binding_Slider;assert(valid(slider),'replay timeline unavailable')
     slider.IsFocusable=false
-    place(body,seek,24,64,992,27)
+    place(body,seek,24,82,992,27)
     local clock=StaticFindObject('/Script/Engine.Default__GameplayStatics')
     local seekDuration=0;local dragFraction;local syncingSlider=false
     local lastSeekTime=-math.huge;local pendingSeekValue;local lastSliderValue
@@ -211,6 +240,20 @@ build=function(owner,send,registered)
     slider:SetSliderBarColor({R=0,G=0,B=0,A=0});slider:SetSliderHandleColor(colors.mint)
     lib:SetInputMode_UIOnlyEx(owner:GetOwningPlayer(),frame,0)
     local closed=false;local cached={};local lastHit,lastProgress
+    local pointer=StaticFindObject('/Script/UMG.Default__WidgetLayoutLibrary')
+    local lastPointerX,lastPointerY,lastActivity,lastPlaying,lastSpeed=nil,nil,0,nil,nil
+    local controlsVisible=true
+    local function visibility(state)
+        local now=clock:GetRealTimeSeconds(owner)
+        local ok,pos=pcall(function()return pointer:GetMousePositionOnPlatform()end)
+        if not ok or not pos or type(now)~='number' then panel:SetVisibility(0);return end
+        local engaged=slider:HasMouseCapture()
+        for _,surface in ipairs(surfaces)do if surface.item.Binding_Button:IsHovered() or surface.item.Binding_Button:IsPressed()then engaged=true end end
+        if pos.X~=lastPointerX or pos.Y~=lastPointerY or state.playing~=lastPlaying or state.speed~=lastSpeed or engaged or not state.playing then lastActivity=now end
+        lastPointerX=pos.X;lastPointerY=pos.Y;lastPlaying=state.playing;lastSpeed=state.speed
+        local show=not state.playing or now-lastActivity<3
+        if show~=controlsVisible then panel:SetVisibility(show and 0 or 2);controlsVisible=show end
+    end
     local markerUntil,previousMarkerTime,previousTransport
     -- Do not enter this shared Lua VM through RegisterKeyBind on this UE4SS build.
     -- Its input-thread lock is not held by the engine-tick Lua callback executor.
@@ -229,7 +272,9 @@ build=function(owner,send,registered)
         if closed then return end
         local time=known(state.time) and state.time or 0;local duration=known(state.duration) and state.duration or 0
         seekDuration=duration
+        visibility(state)
         refreshControls()
+        updateFlicks(state)
         write(play,state.playing and 'Pause' or 'Play')
         write(status,state.playing and 'REPLAY PLAYING' or (duration>0 and time>=duration and 'REPLAY FINISHED' or 'REPLAY PAUSED'))
         write(speedLabel,tostring(state.speed)..'x speed')

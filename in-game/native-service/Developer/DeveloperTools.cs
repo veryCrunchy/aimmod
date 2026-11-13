@@ -26,6 +26,16 @@ sealed partial class DeveloperTools : IDisposable
     public void Dispose() { timer.Dispose(); lock (gate) { StopLoopback(); Disposed = true; } }
     internal bool Disposed { get; private set; }
 
+    public string? Performance()
+    {
+        try {
+            using var file = new FileStream(Path.Combine(output, "core-perf.tsv"), FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            if (file.Length > 8192) return null;
+            using var reader = new StreamReader(file);
+            return reader.ReadToEnd();
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return null; }
+    }
+
     static long Now() => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
     // ---- replays and the avatar test path ---------------------------------

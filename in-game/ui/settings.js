@@ -1,8 +1,8 @@
 (function(root){
   'use strict';
-  var container=null,request=null,generation=0,value=null;
+  var container=null,request=null,generation=0,value=null,capture=null;
   function node(tag,css,text){var el=root.document.createElement(tag);el.className=css||'';if(text!==undefined)el.textContent=text;return el;}
-  function leave(){if(root.AimModMultiplayer)root.AimModMultiplayer.leave();if(root.AimModHistoryImport)root.AimModHistoryImport.leave();if(root.AimModDiscordSettings)root.AimModDiscordSettings.leave();if(root.AimModHubSharing)root.AimModHubSharing.leave();if(root.AimModLifecycle)root.AimModLifecycle.leaveSettings();generation++;if(request){request.abort();request=null;}container=null;}
+  function leave(){if(root.AimModMultiplayer)root.AimModMultiplayer.leave();if(root.AimModHistoryImport)root.AimModHistoryImport.leave();if(root.AimModDiscordSettings)root.AimModDiscordSettings.leave();if(root.AimModHubSharing)root.AimModHubSharing.leave();if(root.AimModLifecycle)root.AimModLifecycle.leaveSettings();generation++;if(request){request.abort();request=null;}container=null;capture=null;}
   function send(patch,done){
     var ticket=++generation,xhr=new root.XMLHttpRequest();request=xhr;
     var path=root.location.pathname;path=path.slice(0,path.lastIndexOf('/'));
@@ -16,17 +16,10 @@
   // A real on/off switch: the button text stays "On"/"Off" for assistive tech.
   function toggleSwitch(on,title,action){var control=node('button','switch'+(on?' on':''),on?'On':'Off');control.type='button';control.setAttribute('role','switch');control.setAttribute('aria-checked',String(on));control.setAttribute('aria-label',title);control.appendChild(node('span','knob'));control.onclick=action;return control;}
   function render(message,ok){
-    if(!container)return;while(container.firstChild)container.removeChild(container.firstChild);
-    var panel=node('div','panel settings-card');panel.appendChild(node('h2','','Capture & privacy'));
-    if(!value){if(message)panel.appendChild(node('p','notice warn',message));var retryRow=node('div','actions');var retry=node('button','button primary','Try again');retry.type='button';retry.onclick=load;retryRow.appendChild(retry);panel.appendChild(retryRow);container.appendChild(panel);return;}
-    function toggle(key,title,description){
-      var row=node('div','settings-row'),info=node('div','settings-info');info.appendChild(node('h3','',title));info.appendChild(node('p','subtle',description));row.appendChild(info);
-      row.appendChild(node('span','switch-state',value[key]?'On':'Off'));
-      row.appendChild(toggleSwitch(value[key],title,function(){if(request)return;var patch={};patch[key]=!value[key];var controls=container.querySelectorAll('button');for(var i=0;i<controls.length;i++)controls[i].disabled=true;send(patch,function(ok,data){if(ok)value=data;render(ok?'Saved.':'Couldn’t save. Try again.',ok);});}));panel.appendChild(row);
-    }
-    toggle('replayRecordingEnabled','Record replays','Turning this off discards the run being recorded. Saved replays stay.');
-    toggle('hubHistoryEnabled','Download Hub history','Keeps your linked account’s history up to date.');
-    if(message)panel.appendChild(node('p',ok?'saved-note':'notice warn',message));
+    if(!container)return;if(capture){drawCapture(message,ok);return;}while(container.firstChild)container.removeChild(container.firstChild);
+    capture=node('div','panel settings-card');drawCapture(message,ok);
+    var panel=capture;
+    if(!value){container.appendChild(panel);capture=null;return;}
     // Two columns at wide sizes: capture and updates on the left; import, replays,
     // AimMod Hub, Discord and developer mode on the right. Narrow sizes stack them in that order.
     var columns=node('div','settings-columns'),left=node('div','settings-col'),right=node('div','settings-col');columns.appendChild(left);columns.appendChild(right);container.appendChild(columns);
@@ -37,10 +30,22 @@
     var importCard=right.children&&right.children[importStart];
     var storage=node('div','panel settings-card');storage.appendChild(node('h2','','Replay library'));storage.appendChild(node('p','subtle','Exports are saved in Documents / AimMod / Replays.'));if(root.AimModWorkspace){var openRow=node('div','actions');var open=node('button','button','Open replays');open.type='button';open.onclick=function(){root.AimModWorkspace.open('replays');};openRow.appendChild(open);storage.appendChild(openRow);}right.appendChild(storage);
     if(root.AimModHubSharing)root.AimModHubSharing.render(right);
-    var multiplayer=node('div','panel settings-card');multiplayer.appendChild(node('h2','','Multiplayer'));var preferences=node('div','');multiplayer.appendChild(preferences);right.appendChild(multiplayer);if(root.AimModMultiplayer)root.AimModMultiplayer.enterPreferences(preferences);if(root.AimModDiscordSettings)root.AimModDiscordSettings.render(multiplayer);
+    var multiplayer=node('div','panel settings-card');multiplayer.appendChild(node('h2','','Multiplayer'));var preferences=node('div','');multiplayer.appendChild(preferences);left.appendChild(multiplayer);if(root.AimModMultiplayer)root.AimModMultiplayer.enterPreferences(preferences);if(root.AimModDiscordSettings)root.AimModDiscordSettings.render(right);
     var fair=node('div','panel settings-card');fair.appendChild(node('h2','','Fair play'));fair.appendChild(node('p','subtle','AimMod checks match content and settings before play, and flags disputed results. KovaaK’s ranked leaderboards are never touched.'));right.appendChild(fair);
     if(root.AimModDeveloper)root.AimModDeveloper.renderSettings(right);
     if(api.wantImport&&importCard){api.wantImport=false;reveal(importCard);}
+  }
+  function drawCapture(message,ok){
+    var panel=capture;while(panel.firstChild)panel.removeChild(panel.firstChild);panel.appendChild(node('h2','','Capture & privacy'));
+    if(!value){if(message)panel.appendChild(node('p','notice warn',message));var retryRow=node('div','actions');var retry=node('button','button primary','Try again');retry.type='button';retry.onclick=load;retryRow.appendChild(retry);panel.appendChild(retryRow);return;}
+    function toggle(key,title,description){
+      var row=node('div','settings-row'),info=node('div','settings-info');info.appendChild(node('h3','',title));info.appendChild(node('p','subtle',description));row.appendChild(info);
+      row.appendChild(node('span','switch-state',value[key]?'On':'Off'));
+      row.appendChild(toggleSwitch(value[key],title,function(){if(request)return;var patch={};patch[key]=!value[key];var controls=panel.querySelectorAll('button');for(var i=0;i<controls.length;i++)controls[i].disabled=true;saveState.textContent='Saving…';send(patch,function(ok,data){if(ok)value=data;render(ok?'Saved.':'Couldn’t save. Try again.',ok);});}));panel.appendChild(row);
+    }
+    toggle('replayRecordingEnabled','Record replays','Turning this off discards the run being recorded. Saved replays stay.');
+    toggle('hubHistoryEnabled','Download Hub history','Keeps your linked account’s history up to date.');
+    var saveState=node('p',message&&!ok?'notice warn':'saved-note',message||'Changes save automatically.');saveState.setAttribute('role','status');panel.appendChild(saveState);
   }
   // Opened from an "Import past runs" action: bring the import card into view and focus its folder field.
   function reveal(card){root.setTimeout(function(){var pages=root.document.getElementById('pages');if(pages&&card.getBoundingClientRect&&pages.getBoundingClientRect)pages.scrollTop+=card.getBoundingClientRect().top-pages.getBoundingClientRect().top-12;var input=card.querySelector?card.querySelector('input'):null;if(input&&input.focus)input.focus();},0);}

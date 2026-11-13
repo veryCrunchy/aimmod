@@ -1,6 +1,6 @@
 (function (global) {
   'use strict';
-  var runFilter = 'all', periodKey = '30', chartMetric = 'Score', detailKey = '', scenarioQuery = '', scenarioLimit = 200, root, report, signature = '', selectScenario;
+  var runFilter = 'all', periodKey = 'all', chartMetric = 'Score', detailKey = 'overview', scenarioQuery = '', scenarioLimit = 200, root, report, signature = '', selectScenario;
   var SERIES = { value: '#27e4a1', average: '#c8f3e0', trend: '#e8b667' };
   var measures = [
     ['Overshoot','Overshoot','%',100],['SpeedVariation','Speed variation',' CV',1],['AverageSpeed','Average speed',' px/s at 800 DPI',1],
@@ -99,9 +99,9 @@
     c.fillStyle = SERIES.value; points.forEach(function (p, index) { var v = values[index]; if (typeof v !== 'number' || !isFinite(v)) return; c.beginPath(); c.arc(x(p, index), y(v), points.length > 120 ? 1.6 : 2.4, 0, Math.PI * 2); c.fill(); canvas.chartHits.push({ x: x(p, index), y: y(v), text: (p.Date ? F().dateTime(p.Date) + ' · ' : '') + chartValueText(chartMetric, v) + (band[index] ? ' · 5-run avg ' + chartValueText(chartMetric, band[index].mean) : '') }); });
     if (first >= 0) { c.beginPath(); var on = false; band.forEach(function (b, i) { if (!b) return; if (on) c.lineTo(x(points[i], i), y(b.mean)); else { c.moveTo(x(points[i], i), y(b.mean)); on = true; } }); c.strokeStyle = SERIES.average; c.lineWidth = 2.5; c.stroke(); }
     if (chartMetric === 'Score') { c.beginPath(); var t = false; points.forEach(function (p, index) { if (!F().known(p.TrendLine)) return; if (t) c.lineTo(x(p, index), y(p.TrendLine)); else { c.moveTo(x(p, index), y(p.TrendLine)); t = true; } }); if (c.setLineDash) c.setLineDash([6, 4]); c.strokeStyle = SERIES.trend; c.lineWidth = 1.5; c.stroke(); if (c.setLineDash) c.setLineDash([]); }
-    var firstDate = points[0].Date, lastDate = points[points.length - 1].Date;
-    c.fillStyle = '#a7bab0'; c.textAlign = 'left'; c.fillText(firstDate ? F().date(firstDate) : 'Earlier runs', left, h - 8); c.textAlign = 'right'; c.fillText(lastDate ? F().date(lastDate) : 'Latest runs', right, h - 8);
-    if (firstDate && lastDate && points.length > 8) { var midIndex = Math.floor(points.length / 2), mid = points[midIndex]; if (mid.Date) { c.textAlign = 'center'; c.fillText(F().date(mid.Date), x(mid, midIndex), h - 8); } }
+    if(chartMetric==='Score'){var pbPoints=points.filter(function(p){return F().known(p.PersonalBest)&&p.Score===p.PersonalBest;});if(pbPoints.length){var pb=pbPoints[pbPoints.length-1],pi=points.indexOf(pb);c.fillStyle='#f0b45a';c.beginPath();c.arc(x(pb,pi),y(pb.Score),5,0,Math.PI*2);c.fill();c.textAlign=x(pb,pi)>right-60?'right':'left';c.fillText('PB '+number(pb.Score),x(pb,pi),Math.max(top+12,y(pb.Score)-10));}}
+    c.fillStyle = '#a7bab0'; c.textAlign = 'left'; c.fillText('Run '+(points[0].RunNumber||1), left, h - 8); c.textAlign = 'right'; c.fillText('Run '+(points[points.length-1].RunNumber||points.length), right, h - 8);
+    c.textAlign = 'center'; c.fillText('Run sequence (not elapsed time)', (left+right)/2, h - 8);
   }
   // Nearest-point tooltip; the chart stores hit positions while drawing.
   function hover(canvas, wrap) {
@@ -110,15 +110,23 @@
     canvas.onmouseleave = function () { tip.style.display = 'none'; };
   }
   function draw() {
-    if (!root || !report || !report.Periods) return; root.textContent = '';
+    if (!root) return; root.textContent = ''; if (!report || !report.Periods) { empty(root, 'Statistics are unavailable. Refresh your history and try again.'); return; }
     var period = report.Periods.filter(function (p) { return p.Key === periodKey; })[0] || report.Periods[0];
+    var fallbackDays=null;if(period&&period.Days&&(!period.Selected||!period.Selected.Runs)){var available=report.Periods.filter(function(p){return !p.Days&&p.Selected&&p.Selected.Runs>0;})[0];if(available){fallbackDays=period.Days;period=available;}}
     if (!period) { var none = append(root, node('div', undefined, 'panel empty')); append(none, node('h3', 'No practice to show yet')); append(none, node('p', 'Complete a few runs, or import your past runs.')); if (global.AimModWorkspace && global.AimModWorkspace.openImport) append(append(none, node('div', undefined, 'actions center')), button('Import past runs', function () { global.AimModWorkspace.openImport(); })); return; }
+    if(fallbackDays)empty(root,'No runs for this scenario in the last '+fallbackDays+' days. Showing all recorded runs.');
     var selected = runFilter==='warmup'&&period.Warmup?period.Warmup:runFilter==='settled'&&period.Settled?period.Settled:period.Selected;
     var toolbar = append(root, node('div', undefined, 'toolbar stats-toolbar'));
+    toolbar.setAttribute('aria-label','Statistics filters');
     var heading = append(toolbar, node('div', undefined, 'stats-heading')); append(heading, node('h2', selected && selected.Name || 'Choose a scenario'));
     append(heading, node('p', selected ? number(selected.Runs, 0) + (selected.Runs === 1 ? ' run' : ' runs') + (period.Days ? ' in the last ' + period.Days + ' days' : ' in your history') : 'Pick a scenario in the top bar.', 'stats-muted'));
-    if(period.Warmup&&period.Settled){var filters=append(toolbar,node('div',undefined,'segmented stats-filter'));[['all','All runs'],['warmup','Warm-up ('+period.Warmup.Runs+')'],['settled','Other runs ('+period.Settled.Runs+')']].forEach(function(f){var b=append(filters,button(f[1],function(){runFilter=f[0];draw();},runFilter===f[0]));b.setAttribute('aria-pressed',String(runFilter===f[0]));});}
-    var periods = append(toolbar, node('div', undefined, 'segmented'));
+    var scenarioField=append(heading,node('label','Scenario','stats-filter-label'));
+    var allPeriod=report.Periods.filter(function(p){return !p.Days;})[0]||period;
+    append(scenarioField,F().dropdown('Scenario',(allPeriod.ScenarioTable||[]).map(function(s){return {value:s.Name,label:s.Name};}),selected&&selected.Name,function(value){if(selectScenario)selectScenario(value);}));
+    if(!period.Days)append(heading,node('p','Showing all recorded activity. Choose a shorter period to compare recent practice.','stats-muted'));
+    var filterRow=append(toolbar,node('div',undefined,'stats-filter-row'));
+    if(period.Warmup&&period.Settled){var filters=append(filterRow,node('div',undefined,'segmented stats-filter'));filters.setAttribute('aria-label','Run type');[['all','All runs'],['warmup','Warm-up ('+period.Warmup.Runs+')'],['settled','Other runs ('+period.Settled.Runs+')']].forEach(function(f){var b=append(filters,button(f[1],function(){runFilter=f[0];draw();},runFilter===f[0]));b.setAttribute('aria-pressed',String(runFilter===f[0]));});}
+    var periods = append(filterRow, node('div', undefined, 'segmented'));periods.setAttribute('aria-label','Period');
     report.Periods.forEach(function (p) { var b = append(periods, button(p.Days ? p.Days + ' days' : 'All time', function () { periodKey = p.Key; draw(); }, p.Key === period.Key)); b.setAttribute('aria-pressed', String(p.Key === period.Key)); });
     if(runFilter!=='all'&&period.Warmup)empty(root,'Warm-up runs are early, lower scores that recover later in the same session.');
     if (!selected) { empty(root, 'Choose a scenario to see its score trend.'); return; }
@@ -128,8 +136,12 @@
     metric(stats, 'Best score', number(selected.Best), 'Best in this period');
     metric(stats, 'Average score', number(selected.Average, 0), period.Days ? changeNote(selected.ScoreChange) : number(selected.Runs, 0) + (selected.Runs === 1 ? ' run' : ' runs'), period.Days ? selected.ScoreChange : null);
     metric(stats, 'Consistency', F().percent(selected.VariationPercent), 'Run-to-run spread · lower is steadier');
-    metric(stats, 'All practice', F().hours(period.Hours), 'Every scenario · ' + number(period.Runs, 0) + ' runs · ' + number(period.ActiveDays, 0) + ' active days', period.Days ? period.PracticeChange : null);
-    var charts = append(root, node('div', undefined, 'stats-columns'));
+    metric(stats, 'Practice time', F().hours(period.Hours), 'Every scenario · ' + number(period.Runs, 0) + ' runs · ' + number(period.ActiveDays, 0) + ' active days', period.Days ? period.PracticeChange : null);
+    var tabs=append(root,node('div',undefined,'tabs stats-subtabs'));tabs.setAttribute('role','tablist');tabs.setAttribute('aria-label','Statistics views');
+    var tabItems=[['overview','Overview'],['movement','Movement & timing'],['practice','Practice pattern'],['scenarios','Compare scenarios']];
+    tabItems.forEach(function(item,index){var b=append(tabs,button(item[1],function(){detailKey=item[0];draw();},detailKey===item[0]));b.id='stats-tab-'+item[0];b.setAttribute('role','tab');b.setAttribute('aria-selected',String(detailKey===item[0]));b.setAttribute('aria-controls','stats-view');b.setAttribute('tabindex',detailKey===item[0]?'0':'-1');b.onkeydown=function(e){var next=e.keyCode===39?(index+1)%4:e.keyCode===37?(index+3)%4:e.keyCode===36?0:e.keyCode===35?3:-1;if(next<0)return;e.preventDefault();detailKey=tabItems[next][0];draw();var target=global.document&&global.document.getElementById('stats-tab-'+detailKey);if(target)target.focus();};});
+    var viewPanel=append(root,node('div'));viewPanel.id='stats-view';viewPanel.setAttribute('role','tabpanel');viewPanel.setAttribute('aria-labelledby','stats-tab-'+detailKey);
+    var charts = append(viewPanel, node('div', undefined, 'stats-columns'));if(detailKey!=='overview')charts.style.display='none';
     var trend = append(charts, panel(chartMetric === 'Score' ? 'Score trend' : ((availableMetrics.filter(function (m) { return m[0] === chartMetric; })[0] || [0, chartMetric])[1]) + ' trend'));
     var chartButtons = append(trend, node('div', undefined, 'stats-chart-controls'));
     if(availableMetrics.length>1)availableMetrics.forEach(function(item){var b=append(chartButtons,button(item[1],function(){chartMetric=item[0];draw();},chartMetric===item[0]));b.className='button compact'+(chartMetric===item[0]?' primary':'');b.setAttribute('aria-pressed',String(chartMetric===item[0]));});
@@ -146,13 +158,7 @@
     var distributionCanvas = append(distributionWrap, node('canvas', undefined, 'stats-chart')); hover(distributionCanvas, distributionWrap);
     var common = mostCommon(selected.Distribution || []);
     append(distribution, node('p', common ? 'Most runs landed between ' + number(common.From, 0) + ' and ' + number(common.To, 0) + '.' : 'Play a few more runs to see your spread.', 'stats-muted stats-foot'));
-    var details=append(root,node('div',undefined,'stats-details'));
-    var detailButtons=append(details,node('div',undefined,'stats-detail-controls'));
-    append(detailButtons,node('span','Explore more','stats-detail-label'));
-    [['movement','Movement & timing'],['practice','Practice pattern'],['scenarios','Compare scenarios']].forEach(function(item){
-      var control=button(item[1],function(){detailKey=detailKey===item[0]?'':item[0];draw();},detailKey===item[0]);
-      control.setAttribute('aria-expanded',detailKey===item[0]?'true':'false');append(detailButtons,control);
-    });
+    var details=append(viewPanel,node('div',undefined,'stats-details'));
     if(detailKey==='movement')renderMeasurements(append(details,panel('Movement and timing')),selected.Measurements);
     if(detailKey==='practice'){
     var calendar = period.Calendar || [], blockList = period.Blocks || [];
@@ -192,6 +198,7 @@
     setTimeout(function () { var width=widthOf(root),wide=width>=1100,trendWidth=wide?Math.round((width-16)*0.68):width,spreadWidth=wide?width-16-trendWidth:width;
       if(width){charts.style.width=width+'px';trend.style.width=trendWidth+'px';distribution.style.width=spreadWidth+'px';trend.style.marginRight=wide?'16px':'0px';charts.style.display=wide?'flex':'block';
         trendCanvas.style.width=Math.max(120,trendWidth-40)+'px';trendCanvas.style.height='300px';distributionCanvas.style.width=Math.max(120,spreadWidth-40)+'px';distributionCanvas.style.height=wide?'254px':'220px';}
+      if(detailKey!=='overview'){charts.style.display='none';return;}
       chart(trendCanvas, selected.Points || [], false); chart(distributionCanvas, selected.Distribution || [], true, [{value:selected.Average,color:'#66ccff',label:'Avg '+number(selected.Average,0)},{value:selected.Median,color:'#f0b45a',dash:true,label:''}]); }, 0);
   }
   function focusedSearch() { var active = global.document && global.document.activeElement; return !!(active && active.className === 'stats-search'); }

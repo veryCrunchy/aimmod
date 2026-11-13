@@ -31,14 +31,15 @@
 
 namespace aimmod
 {
+    class Output;
     class CsGrenades
     {
     public:
-        void Tick(game::UObject* character, int hand, const std::filesystem::path& root, const std::string& scenario);
+        void Tick(game::UObject* character, int hand, Output& output, const std::string& scenario);
         void Release(const char* why);
 
     private:
-        void Read(const std::filesystem::path& root);
+        void Read(Output& output);
         void Hand(game::UObject* character, int hand, std::int64_t nowMs);
         void World(game::UObject* character, std::int64_t nowMs);
         struct Shown

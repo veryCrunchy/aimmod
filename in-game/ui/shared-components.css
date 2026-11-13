@@ -1,0 +1,76 @@
+/* Shared primitives. Keep existing component names available to every page. */
+.text-title{font-size:24px;line-height:32px;font-weight:600;color:#eef5f1}
+.text-heading{font-size:18px;line-height:26px;font-weight:600;color:#eef5f1}
+.text-body{font-size:14px;line-height:22px;color:#eef5f1}
+.text-caption{font-size:12px;line-height:18px;color:#93a69c}
+.text-muted{color:#93a69c}.text-accent{color:#27e4a1}.text-warning{color:#f5b94a}.text-danger{color:#ffb3b3}
+.surface-canvas{background:#0b1110}.surface-panel{background:#121a17}.surface-raised{background:#18231f}
+.pad-sm{padding:8px}.pad-md{padding:16px}.pad-lg{padding:24px}
+.stack-sm>*+*{margin-top:8px}.stack-md>*+*{margin-top:16px}.stack-lg>*+*{margin-top:24px}
+.button.secondary{background:#18231f;color:#eef5f1;border:1px solid #40594d}
+.button.ghost{background:transparent;color:#b9d0c4;border:1px solid transparent}
+.button.danger{background:#432626;color:#ffd0d0;border:1px solid #885353}
+.button.small{height:30px;line-height:28px;padding:0 10px;font-size:12px}
+.button.large{height:42px;line-height:40px;padding:0 18px;font-size:14px}
+.button:disabled{opacity:.5;cursor:default}
+button:focus,input:focus,select:focus,textarea:focus,a:focus,[tabindex]:focus{outline:2px solid #8bf5ce;outline-offset:2px}
+.card{background:#121a17;border:1px solid #1f2b27;border-radius:8px;padding:20px}
+.card-header{display:flex;align-items:center;margin-bottom:16px}.card-header>h2{flex:1;margin:0;font-size:18px}
+.chip,.badge{display:block;flex-shrink:0;padding:3px 8px;border:1px solid #40594d;border-radius:12px;background:#18231f;color:#c4d8cd;font-size:12px;line-height:18px}
+.chip.success,.badge.success{background:#173b2f;color:#8bf5ce;border-color:#35765e}
+.chip.warning,.badge.warning{background:#3a2f17;color:#f5d393;border-color:#80642e}
+.state{padding:32px 24px;text-align:center;color:#93a69c;font-size:14px;line-height:22px}
+.state h3{margin:0 0 8px;color:#eef5f1;font-size:18px}.state p{margin:0 0 16px}
+.state.error{background:#30241b;color:#f5d393}.state.loading{color:#b9d0c4}
+.input{height:36px;padding:0 12px;border:1px solid #40594d;border-radius:6px;background:#101916;color:#eef5f1;font-size:14px}
+.tabs{display:flex;border-bottom:1px solid #1f2b27}.tabs>button{padding:12px 16px;color:#93a69c;border-bottom:2px solid transparent}.tabs>button.active,.tabs>button[aria-selected="true"]{color:#27e4a1;border-bottom-color:#27e4a1}
+.tooltip-wrap{position:relative}.tooltip{display:none;position:absolute;top:100%;left:0;z-index:40;width:220px;padding:8px 12px;border:1px solid #40594d;border-radius:6px;background:#18231f;color:#eef5f1;font-size:12px;line-height:18px}.tooltip-wrap:hover .tooltip,.tooltip-wrap:focus .tooltip,.tooltip-wrap:focus-within .tooltip{display:block}
+
+/* Workspace chrome */
+.sidebar{width:196px;padding:18px 10px 16px;background:#101916}
+.brand{margin:0 12px 14px}.nav-label{color:#93a69c;padding:14px 12px 6px;font-size:10px;letter-spacing:1.2px}
+.nav button{height:36px;border-left:3px solid transparent;padding:0 9px;margin-bottom:3px}
+.nav button.active{border-left-color:#27e4a1;background:#173b2f;color:#8bf5ce}
+.sidebar-foot{padding-top:12px;margin-top:auto;flex-shrink:0}.nav{padding-bottom:18px}
+.topbar{height:68px;padding:0 24px;position:relative;z-index:35}.pages{padding:20px 24px 28px}
+#account-shortcut.account-chip{display:flex;align-items:center;max-width:180px;padding:0 10px 0 4px;margin-left:8px;border-radius:18px;background:#121a17}
+.account-avatar{display:block;width:26px;height:26px;line-height:26px;text-align:center;border-radius:13px;background:#245b46;color:#b3f7dc;font-size:11px;font-weight:600;flex-shrink:0;margin-right:8px}
+.account-label{display:block;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;font-size:12px}
+.inbox-anchor{position:relative;margin-right:8px}.notice-inbox{position:absolute;top:46px;right:0;width:360px;max-height:420px;overflow-y:auto;padding:16px;background:#121a17;border:1px solid #40594d;border-radius:8px;box-shadow:0 12px 32px #050908}
+.inbox-title{font-size:16px;line-height:24px;margin:0 0 12px}.inbox-item{padding:12px 0;border-top:1px solid #1f2b27}.topbar .inbox-item p{white-space:normal;line-height:20px;color:#dcebe3;margin-bottom:12px;font-size:13px}.inbox-item .button{height:30px;font-size:12px}.inbox-empty{font-size:13px;color:#93a69c}
+.recording-status{color:#93a69c;font-size:12px;line-height:20px;padding:0 0 12px 14px;background:none;border:0;margin:0;position:relative}
+.recording-status:before{content:'';display:block;position:absolute;left:0;top:7px;width:6px;height:6px;border-radius:3px;background:#93a69c}
+@media(max-width:1300px){.sidebar{width:176px}.topbar{padding:0 18px}.pages{padding:18px}.selector{width:220px}.scenario-label{display:none}#account-shortcut.account-chip{max-width:132px}.topbar h1{font-size:21px}.notice-inbox{width:320px}}
+@media(max-height:760px){.sidebar{padding-top:12px}.brand{height:40px;margin-bottom:8px}.nav-label{padding-top:10px;padding-bottom:4px}.nav button{height:30px;margin-bottom:2px}.nav{padding-bottom:10px}.sidebar-foot{padding-top:10px}.topbar{height:60px}.notice-inbox{max-height:340px}}
+/* A bounded popup uses ordinary buttons, including in the embedded browser. */
+.dropdown{position:relative;display:flex;flex-direction:column;min-width:140px;max-width:100%}
+.dropdown-trigger{display:block;position:relative;box-sizing:border-box;width:100%;height:36px;line-height:34px;font-size:13px;font-weight:500;text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:0 28px 0 12px;margin:0;background:#18231f;border:1px solid #456052;border-radius:6px;color:#eef5f1}
+.dropdown-panel{position:absolute;top:100%;left:0;width:100%;min-width:220px;z-index:100;background:#121a17;border:1px solid #456052;border-radius:6px;padding:8px;box-sizing:border-box}
+.dropdown-panel input{width:100%;box-sizing:border-box}
+.dropdown-options{max-height:240px;overflow:auto}
+.dropdown-option{display:block;width:100%;text-align:left;white-space:normal;min-height:36px;height:auto;margin-top:4px;padding:8px;background:#18231f;color:#eef5f1;border:1px solid #1f2b27;border-radius:4px}
+.dropdown-option[aria-selected=true]{background:#1d4938;color:#8bf5ce}
+
+/* Shared scale and quiet selection. */
+.text-title{font-size:28px;line-height:36px;font-weight:700}.text-heading{font-size:20px;line-height:28px;font-weight:700}
+.text-label{font-size:13px;font-weight:500}.text-section{font-size:16px;font-weight:700}
+.pages{padding:24px}.nav button.active{background:#18231f;color:#27e4a1}.nav-label{font-size:12px;letter-spacing:0}
+.topbar h1{font-size:20px;font-weight:700}.panel,.card{border-color:#1f2b27;border-radius:8px}.metric{background:#121a17;border:1px solid #1f2b27;border-radius:8px}
+.metric-value{font-size:28px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.metric-note{color:#93a69c}
+#metrics .metric{flex:1;width:30%;overflow:hidden}.metric-label{font-size:12px;font-weight:500}
+#home-secondary{margin-top:8px}#home-secondary>.panel{width:50%;margin-right:16px}#home-secondary>.panel:last-child{margin-right:0}
+#home-pbs>h2{font-size:16px;padding:16px 20px}#home-pbs .next-item{padding:12px 20px}
+#overview .next-item{background:transparent}.swatch.best{background:#f5b94a}
+#history .history-filter{display:none!important}#history .toolbar{flex-wrap:nowrap}#history-title{width:220px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+#history .dropdown{width:210px;margin-left:12px;flex-shrink:0}.history-row{min-height:52px}.history-head{background:#18231f}.history-head .button{font-size:12px}
+.segmented{background:#0b1110;border:1px solid #1f2b27;border-radius:6px;padding:4px}.segmented>.primary{background:#18231f;color:#27e4a1;border-color:#1f2b27}
+
+#home-secondary{margin:8px 0 0}#home-secondary>.panel{width:49%;flex-shrink:0;margin-right:2%}
+.history-head .button{width:100%;text-align:left;padding:0;height:32px;background:transparent;border:0}
+.history-head .history-score .button,.history-head .history-accuracy .button,.history-head .history-duration .button{text-align:right}
+#history>.pager{margin:0 0 16px}
+
+.history-head .button{justify-content:flex-start}.history-head .history-score .button,.history-head .history-accuracy .button,.history-head .history-duration .button{justify-content:flex-end}
+.dropdown-caret{position:absolute;right:12px;top:16px;pointer-events:none;width:0;height:0;border-left:4px solid transparent;border-right:4px solid transparent;border-top:5px solid #93a69c}.ove-bar-right .dropdown-caret{top:13px}
+
+.metric-long .metric-value{font-size:20px;line-height:34px}

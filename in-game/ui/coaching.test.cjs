@@ -34,6 +34,7 @@ test('empty scenario text stays literal and unavailable scope is disabled',()=>{
 test('drill actions pass search queries without pretending to select exact scenarios',()=>{
  const c=load(),root=dom(c),queries=[];const input=Array.from({length:40},(_,i)=>({id:'drill-'+i,normalizedScenario:'synthetic static',timestampMs:Date.UTC(2026,8,1)+i*100000,duration_secs:60,score:100+i*.2,accuracy:90,kills:3,damage_done:2,stats_panel:{scenario_type:'StaticClicking'}}));
  c.AimModCoaching.render(root,{coachingHistory:input},()=>{throw Error('must use drill search')},query=>queries.push(query));
+ const more=css(root,'coach-more-toggle')[0];if(more)more.onclick();
  const drills=css(root,'coach-drill');assert.ok(drills.length>0);drills[0].onclick();assert.equal(typeof queries[0],'string');assert.ok(queries[0].length>0);
 });
 
@@ -42,8 +43,8 @@ test('feedback stores generated advice once and supports useful, hide, prior adv
  const c=load(),root=dom(c),requests=feedbackClient(c),state={coachingHistory:runs()};c.AimModCoaching.render(root,state);
  const payload=JSON.parse(requests[0].body),card=payload.cards[0];assert.equal(payload.action,'observe');assert.equal(requests[0].url,'/capability/coaching-feedback');assert.equal(requests[0].headers['X-AimMod-UI'],'1');assert.ok(c.AimModCoaching.analyze(runs()).cards.some(x=>x.id===card.id));
  const history=[{...card,key:'synthetic-key',scope:'all',seenAt:'2026-01-01T00:00:00Z'}];requests[0].finish(200,{feedback:[],history});
- c.AimModCoaching.render(root,state);assert.equal(requests.length,1);button(root,'Useful').onclick();assert.equal(JSON.parse(requests[1].body).feedback,'helpful');requests[1].finish(200,{feedback:[{scope:'all',id:card.id,feedback:'helpful'}],history});assert.ok(button(root,'Marked useful'));
- button(root,'Hide this advice').onclick();requests[2].finish(200,{feedback:[{scope:'all',id:card.id,feedback:'not_for_me'}],history});assert.ok(!all(root,n=>n.tag==='h3'&&n.textContent===card.title).length);
+ c.AimModCoaching.render(root,state);assert.equal(requests.length,1);button(root,'Got it').onclick();assert.equal(JSON.parse(requests[1].body).feedback,'helpful');requests[1].finish(200,{feedback:[{scope:'all',id:card.id,feedback:'helpful'}],history});assert.ok(button(root,'Got it'));
+ button(root,'Not for me').onclick();requests[2].finish(200,{feedback:[{scope:'all',id:card.id,feedback:'not_for_me'}],history});assert.ok(!all(root,n=>n.tag==='h3'&&n.textContent===card.title).length);
  button(root,'Show advice history').onclick();assert.ok(button(root,'Restore advice'));button(root,'Restore advice').onclick();assert.equal(JSON.parse(requests[3].body).feedback,'none');requests[3].finish(200,{feedback:[],history});assert.ok(all(root,n=>n.tag==='h3'&&n.textContent===card.title).length);
 });
 test('feedback failure exposes retry without pretending preferences were saved',()=>{const c=load(),root=dom(c),requests=feedbackClient(c);c.AimModCoaching.render(root,{coachingHistory:runs()});requests[0].finish(503,{});assert.ok(button(root,'Retry preferences'));assert.match(root.textContent,/preferences are unavailable/);assert.equal(requests.length,1);
@@ -68,3 +69,15 @@ test('room to improve renders literal names and selects the scenario on click',(
 test('unchanged history across polls reuses the engine result instead of re-analysing',()=>{const c=load(),root=dom(c);const state={coachingHistory:runs(),selectedScenario:''};c.AimModCoaching.render(root,state);const view=root.aimmodCoachingView,first=view.results.all;
  c.AimModCoaching.render(root,{coachingHistory:JSON.parse(JSON.stringify(runs())),selectedScenario:''});assert.equal(root.aimmodCoachingView.results.all,first);
  const changed=runs();changed[0].score=1;c.AimModCoaching.render(root,{coachingHistory:changed,selectedScenario:''});assert.notEqual(root.aimmodCoachingView.results.all,first);});
+test('next block names a scenario and a measured target, with only two advice cards initially',()=>{
+ const c=load(),root=dom(c);c.AimModCoaching.render(root,{coachingHistory:runs(),scenarios:[{name:'Small'},{name:'Large'}]});
+ const lead=css(root,'coach-summary')[0];assert.match(lead.textContent,/3 runs on (Small|Large)/);assert.match(lead.textContent,/Aim for [\d,]+ score or higher/);
+ assert.ok(css(root,'coach-primary').length+css(root,'coach-more').length<=2);assert.ok(button(root,'Got it'));assert.ok(button(root,'Not for me'));
+ assert.ok(css(root,'coach-spark').every(n=>n.attrs['aria-label'].includes('oldest to newest')));
+});
+test('unchanged coaching updates preserve the mounted controls',()=>{
+ const c=load(),root=dom(c),state={coachingHistory:runs(),selectedScenario:'small'};
+ c.AimModCoaching.render(root,state);const before=root.children[0];
+ c.AimModCoaching.render(root,JSON.parse(JSON.stringify(state)));assert.equal(root.children[0],before);
+ c.AimModCoaching.render(root,{...state,selectedScenario:'large'});assert.notEqual(root.children[0],before);
+});

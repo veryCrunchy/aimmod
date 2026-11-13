@@ -9,7 +9,7 @@ sealed record ReplayHealth(double Id, double Percent);
 sealed record ReplayAppearance(double Id, string Profile, double[] Rotation);
 sealed record ReplayFrame(double T, double[] Camera, double[][] Actors, ReplayStats? Stats = null, ReplayHealth[]? Health = null, ReplayAppearance[]? Appearance = null);
 sealed record ReplayInput(double T, string Action, double Value);
-sealed record ReplaySummary(string Id, string Scenario, string RecordedAt, string Reason, int Frames, int InputEvents);
+sealed record ReplaySummary(string Id, string Scenario, string RecordedAt, string Reason, int Frames, int InputEvents, double? Score = null, double? Duration = null);
 sealed record NativeReplay(int Version, string Id, string Scenario, string RecordedAt, string Reason,
     double Duration, IReadOnlyList<ReplayFrame> Frames, IReadOnlyList<ReplayInput> Inputs, string? MapName = null, double? MapScale = null,
     [property: System.Text.Json.Serialization.JsonIgnore] Motion? Motion = null);
@@ -43,7 +43,9 @@ sealed class ReplayCatalog
         return info.Exists && info.Length is > 0 and <= MaxBytes &&
             !info.Attributes.HasFlag(FileAttributes.ReparsePoint) ? path : null;
     }
-    public IReadOnlyList<ReplaySummary> List()
+    static double? SummaryNumber(JsonElement value, string key) =>
+        value.TryGetProperty(key, out var field) && field.ValueKind == JsonValueKind.Number && field.TryGetDouble(out var number) && double.IsFinite(number) ? number : null;
+    public IReadOnlyList<ReplaySummary> List(Action? checkpoint = null)
     {
         var result = new List<ReplaySummary>();
         foreach (var file in new DirectoryInfo(directory).EnumerateFiles("*.amreplay")
@@ -51,6 +53,7 @@ sealed class ReplayCatalog
         {
             try
             {
+                checkpoint?.Invoke();
                 var id = Path.GetFileNameWithoutExtension(file.Name);
                 var path = Resolve(id);
                 if (path is null) continue;
@@ -65,7 +68,7 @@ sealed class ReplayCatalog
                         var compactFrames = c.GetProperty("frames").GetInt32();
                         var compactInputs = c.GetProperty("inputEvents").GetInt32();
                         if (compactFrames < 2 || compactInputs < 0) continue;
-                        result.Add(new(id, Text(c, "scenario"), Text(c, "recordedAt"), "completed", compactFrames, compactInputs));
+                        result.Add(new(id, Text(c, "scenario"), Text(c, "recordedAt"), "completed", compactFrames, compactInputs, SummaryNumber(c, "score"), SummaryNumber(c, "duration")));
                         continue;
                     }
                 }
@@ -87,7 +90,7 @@ sealed class ReplayCatalog
                 var inputCount = e.GetProperty("inputEvents").GetInt32();
                 if (count is < 2 or > MaxFrames || inputCount is < 0 or > MaxInputs) continue;
                 result.Add(new(id, Text(h, "scenario"), Text(h, "recordedAt"), Text(e, "reason"), count,
-                    inputCount));
+                    inputCount, SummaryNumber(e, "score"), SummaryNumber(e, "duration")));
             }
             catch (Exception e) when (DataError(e)) { /* Incomplete/unsupported records stay unavailable. */ }
         }

@@ -3,6 +3,21 @@ const deq=(a,b,m)=>assert.deepStrictEqual(JSON.parse(JSON.stringify(a)),JSON.par
 const {makeWindow,load}=require('./overlay-test-dom.cjs');
 const settings={gameEnabled:false,obsEnabled:true,opacity:1,stats:{visible:true,x:1,y:100,width:560},versus:{visible:true,x:100,y:100,width:300}};
 const setupInfo={obsAvailable:true,obsBase:'http://127.0.0.1:1234/obs',obsUrl:'http://127.0.0.1:1234/obs/overlay?surface=obs',boardUrl:'http://127.0.0.1:1234/obs/board',tournamentUrl:'http://127.0.0.1:1234/obs/tournament'};
+test('assigned HUD warns when the master is off and enables it without changing OBS',()=>{
+  const s=setup();s.ready();assert.match(s.container.textContent,/In-game HUD is off/);
+  s.byId('ove-enable-game').onclick();const request=s.posts('overlay-settings').at(-1);deq(JSON.parse(request.body),{gameEnabled:true});
+  request.finish(200,{...settings,gameEnabled:true});assert.equal(s.byId('ove-enable-game'),null);assert.equal(s.api.state().settings.obsEnabled,true);
+});
+test('assigning another HUD scene preserves the master switch',()=>{
+  const s=setup();s.ready();s.byId('ove-scene-setup').onclick();s.byId('ove-use-game').onclick();
+  assert.equal(s.api.state().store.gameScene,'setup');assert.equal(s.posts('overlay-settings').length,0);
+});
+test('failed HUD enable keeps the warning and allows retry',()=>{
+  const s=setup();s.ready();s.byId('ove-enable-game').onclick();s.posts('overlay-settings').at(-1).finish(500,{});
+  assert.equal(s.api.state().settings.gameEnabled,false);assert.match(s.container.textContent,/In-game HUD is off/);
+  s.byId('ove-enable-game').onclick();s.posts('overlay-settings').at(-1).finish(200,{...settings,gameEnabled:true});
+  assert.equal(s.byId('ove-enable-game'),null);
+});
 function setup(){
   const w=makeWindow();const container=w.document.createElement('section');container.offsetWidth=1500;w.document.roots.push(container);
   load(w.window,['overlay-model.js','overlay-widgets.js','overlay-editor.js']);const M=w.window.AimModOverlayModel,api=w.window.AimModOverlayEditor;api.enter(container);
@@ -38,7 +53,7 @@ test('position fields, text size and opacity are bounded',()=>{
 });
 test('dragging moves the selected widget with snapping and a guide, then saves',()=>{
   const s=setup();s.ready();s.byId('ove-layer-versus').onclick();
-  const handle=s.container.find(n=>n.amId==='versus');const scale=900/1920;const v=s.M.findWidget(s.M.find(s.api.state().store,'game'),'versus');
+  const handle=s.container.find(n=>n.amId==='versus');const scale=940/1920;const v=s.M.findWidget(s.M.find(s.api.state().store,'game'),'versus');
   handle.onmousedown({button:0,clientX:1000*scale,clientY:100*scale,preventDefault(){},stopPropagation(){}});
   s.document.dispatch('mousemove',{clientX:(1000-v.x+3)*scale,clientY:(100-v.y+2)*scale});
   const guides=s.container.find(n=>n.className==='ove-guides');assert.ok(guides.children.length>=1,'a snap guide shows');
@@ -70,13 +85,13 @@ test('share codes export the current scene and import as a new one; bad codes ex
 test('OBS and in-game outputs: master switches keep the earlier settings API, every scene and widget has a URL',()=>{
   const s=setup();s.ready();s.byId('ove-tab-outputs').onclick();
   assert.equal(s.byId('ove-url-stream').value,'http://127.0.0.1:1234/obs/scene?id=stream&w=1920&h=1080');
-  s.byId('ove-res-2560x1440').onclick();assert.equal(s.byId('ove-url-setup').value,'http://127.0.0.1:1234/obs/scene?id=setup&w=2560&h=1440');
+  s.byId('ove-res-2560x1440').onclick();assert.equal(s.byId('ove-url-setup').value,'http://127.0.0.1:1234/obs/scene?id=setup&w=1920&h=1080');
   assert.match(s.container.textContent,/Set Width to 2560 and Height to 1440/);
-  const widgetUrls=s.container.findAll(n=>n.className==='ove-url small').map(n=>n.value);assert.ok(widgetUrls.includes('http://127.0.0.1:1234/obs/scene?id=game&widget=stats&w=2560&h=1440'));
+  const widgetUrls=s.container.findAll(n=>n.className==='ove-url small').map(n=>n.value);assert.ok(widgetUrls.includes('http://127.0.0.1:1234/obs/scene?id=game&widget=stats&w=616&h=120'));
   assert.equal(s.byId('ove-url-legacy').value,setupInfo.obsUrl);assert.equal(s.byId('ove-url-board').value,setupInfo.boardUrl);
   s.byId('ove-game-enabled').onclick();deq(JSON.parse(s.posts('overlay-settings')[0].body),{gameEnabled:true});
   s.posts('overlay-settings')[0].finish(200,{...settings,gameEnabled:true});assert.equal(s.byId('ove-game-enabled').attrs['aria-checked'],'true');
-  const pick=s.byId('ove-game-scene');pick.value='setup';pick.onchange();assert.equal(s.saveNow().gameScene,'setup');
+  const pick=s.byId('ove-game-scene');pick.children[0].onclick();pick.find(n=>n.getAttribute('role')==='option'&&n.textContent==='Setup card').onclick();assert.equal(s.saveNow().gameScene,'setup');
   s.byId('ove-url-stream-copy').onclick();assert.ok(s.byId('ove-url-stream').selected);
 });
 test('profile peripherals are added, edited, reordered and removed; KovaaK’s settings are listed read-only',()=>{
@@ -87,7 +102,7 @@ test('profile peripherals are added, edited, reordered and removed; KovaaK’s s
   assert.match(s.container.textContent,/30\.00 cm\/360/);assert.match(s.container.textContent,/103° · Overwatch/);
 });
 test('VS opponent selection still saves through overlay-opponents',()=>{
-  const s=setup();s.ready();s.byId('ove-tab-vs').onclick();const sel=s.byId('ove-opponent');sel.value='r1';sel.onchange();deq(JSON.parse(s.posts('overlay-opponents')[0].body),{key:'r1'});
+  const s=setup();s.ready();s.byId('ove-tab-vs').onclick();const sel=s.byId('ove-opponent');sel.children[0].onclick();sel.find(n=>n.getAttribute('role')==='option'&&n.textContent.indexOf('Example')===0).onclick();deq(JSON.parse(s.posts('overlay-opponents')[0].body),{key:'r1'});
 });
 test('a failed load offers a retry, and leaving aborts requests so late responses cannot render',()=>{
   const s=setup();s.route('overlay-scenes')[0].finish(500,'');assert.match(s.container.textContent,/Could not load your overlays/);s.button('Try again').onclick();assert.equal(s.route('overlay-scenes').length,2);
@@ -97,7 +112,7 @@ test('a pending change is saved when the page is left',()=>{
   const s=setup();s.ready();s.byId('ove-add-clock').onclick();s.api.leave();const post=s.posts('overlay-scenes').at(-1);assert.ok(post);assert.ok(JSON.parse(post.body).scenes[0].widgets.some(w=>w.type==='clock'));
 });
 test('live data previews the real feed and polls motion only when the scene shows a path or input widget',()=>{
-  const s=setup();s.ready();s.byId('ove-data-live').onclick();const feed=s.last('overlay-feed');feed.finish(200,{enabled:true,live:{active:true,score:4321,scenario:'Synthetic live'}});
+  const s=setup();s.ready();const picker=s.byId('ove-data-picker');picker.children[0].onclick();picker.find(n=>n.getAttribute('role')==='option'&&n.textContent==='Live data').onclick();const feed=s.last('overlay-feed');feed.finish(200,{enabled:true,live:{active:true,score:4321,scenario:'Synthetic live'}});
   assert.match(s.container.find(n=>n.className==='ove-layer').textContent,/4,321/);
   s.run();assert.ok(!s.requests.some(r=>r.url.indexOf('overlay-motion')>=0),'the in-game scene has no motion widget');
   s.byId('ove-add-input').onclick();s.run();const m=s.requests.find(r=>r.url.indexOf('overlay-motion')>=0);assert.ok(m);assert.equal(m.url,'/cap/overlay-motion?input=1');
@@ -111,4 +126,12 @@ test('writes survive leave, serialize revisions and expose Retry after failure',
  assert.ok(!JSON.parse(second.body).scenes.find(x=>x.id==='game').widgets.some(w=>w.type==='mouse-path'));
  second.finish(500,{});s.api.enter(s.container);assert.ok(s.byId('ove-save-retry'));s.byId('ove-save-retry').onclick();assert.equal(s.posts('overlay-scenes').length,3);
  const retry=s.posts('overlay-scenes')[2];retry.finish(200,JSON.parse(retry.body));assert.match(s.byId('ove-status').textContent,/All changes saved/);
+});
+
+test('moving keeps the canvas and toolbar nodes and undo restores the position',()=>{
+ const s=setup();s.ready();s.byId('ove-layer-stats').onclick();const stage=s.container.find(n=>n.className==='ove-stage'),undo=s.byId('ove-undo');
+ const before=s.M.find(s.api.state().store,'game').widgets[0].x;
+ s.document.dispatch('keydown',{keyCode:39,target:{tagName:'DIV'},preventDefault(){}});
+ assert.equal(s.container.find(n=>n.className==='ove-stage'),stage);assert.equal(s.byId('ove-undo'),undo);assert.equal(undo.disabled,false);
+ undo.onclick();assert.equal(s.M.find(s.api.state().store,'game').widgets[0].x,before);
 });

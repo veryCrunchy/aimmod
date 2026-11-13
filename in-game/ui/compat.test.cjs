@@ -6,6 +6,39 @@ const vm=require('node:vm');
 const {loadFormat}=require('./test-format.cjs');
 const context=vm.createContext({window:{}});
 const F=loadFormat(context);
+test('embedded pages never construct native popup controls',()=>{
+  const files=fs.readdirSync(__dirname).filter(f=>/\.(js|html|ts)$/.test(f));
+  files.push(...fs.readdirSync(path.join(__dirname,'..','replay')).filter(f=>/\.(js|html|ts)$/.test(f)).map(f=>path.join('..','replay',f)));
+  for(const file of files){
+    const source=fs.readFileSync(path.join(__dirname,file),'utf8');
+    assert.doesNotMatch(source,/<\s*(select|datalist)\b|\b(?:createElement|node|el)\(\s*(?:[^,;\n]+,\s*)?['"](?:select|datalist)['"]/i,file);
+    assert.doesNotMatch(source,/\.type\s*=\s*['"](?:range|date|color)['"]|type\s*=\s*['"](?:range|date|color)['"]/i,file);
+  }
+});
+test('Gameface: toasts do not rely on version-specific fixed containing blocks',()=>{
+  for(const [name,text] of uiCss())assert.doesNotMatch(text,/position\s*:\s*fixed\b/i,name);
+  for(const [name,text] of uiScripts())assert.doesNotMatch(text,/\.position\s*=\s*['"]fixed['"]/i,name);
+});
+test('Gameface: generated content uses single-colon before and after only',()=>{
+  // Cohtml 1.19 applies double-colon pseudo-element declarations to the element itself.
+  for(const [name,text] of uiCss()){
+    for(const m of text.matchAll(/::([\w-]+)/g))assert.fail(name+': use single-colon '+m[0].slice(1));
+    assert.doesNotMatch(text,/:(?:first-line|first-letter|selection|placeholder|marker)\b/,name);
+  }
+});
+test('multiline votes and chat instructions keep their contrast backing',()=>{
+  assert.match(fs.readFileSync(path.join(__dirname,'notify.css'),'utf8'),/\.match-vote\{[^}]*height:auto/);
+  assert.match(fs.readFileSync(path.join(__dirname,'chat.css'),'utf8'),/\.chat-hint\{[^}]*background:/);
+});
+test('every HTML entry point keeps embedded styles compatible',()=>{
+  for(const file of fs.readdirSync(__dirname).filter(f=>f.endsWith('.html'))){
+    const source=fs.readFileSync(path.join(__dirname,file),'utf8');
+    for(const match of source.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/g)){
+      const css=match[1].replace(/\/\*[\s\S]*?\*\//g,'');
+      assert.doesNotMatch(css,/display:\s*(inline-)?grid|(^|[;{\s])(row-|column-)?gap\s*:|position:\s*sticky|var\(--|calc\(/,file);
+    }
+  }
+});
 test('Gameface formatting works without Intl options',()=>{
   assert.equal(F.number(98.123456789),'98.1');
   assert.equal(F.percent(83.876543210),'83.9%');
@@ -88,7 +121,13 @@ test('styles and scripts stay inside the Gameface feature set',()=>{
 });
 // Rules below come from live Gameface rendering in KovaaK's 3.9.11.
 const uiDir=__dirname;
-function uiCss(){const out=fs.readdirSync(uiDir).filter(f=>f.endsWith('.css')).map(f=>[f,fs.readFileSync(path.join(uiDir,f),'utf8')]);out.push(['index.html <style>',fs.readFileSync(path.join(uiDir,'index.html'),'utf8').match(/<style>([\s\S]*?)<\/style>/)[1]]);return out.map(([n,t])=>[n,t.replace(/\/\*[\s\S]*?\*\//g,'')]);}
+function uiCss(){
+  const out=fs.readdirSync(uiDir).filter(f=>f.endsWith('.css')).map(f=>[f,fs.readFileSync(path.join(uiDir,f),'utf8')]);
+  for(const file of fs.readdirSync(uiDir).filter(f=>f.endsWith('.html'))){
+    for(const match of fs.readFileSync(path.join(uiDir,file),'utf8').matchAll(/<style[^>]*>([\s\S]*?)<\/style>/g))out.push([file+' <style>',match[1]]);
+  }
+  return out.map(([n,t])=>[n,t.replace(/\/\*[\s\S]*?\*\//g,'')]);
+}
 function uiScripts(){return fs.readdirSync(uiDir).filter(f=>/\.(js|ts)$/.test(f)&&f!=='coaching.js').map(f=>[f,fs.readFileSync(path.join(uiDir,f),'utf8')]).concat(['browser.js','native-browser.js'].map(f=>['replay/'+f,fs.readFileSync(path.join(uiDir,'..','replay',f),'utf8')]),[['index.html',fs.readFileSync(path.join(uiDir,'index.html'),'utf8')]]);}
 test('Gameface: no inline-block or inline-flex (they lay out as blocks and stack controls)',()=>{
   for(const [name,text] of uiCss())assert.doesNotMatch(text,/display:\s*inline/,name);

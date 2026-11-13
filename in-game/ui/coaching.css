@@ -67,3 +67,29 @@
 .coach-history-entry{border-top:1px solid #22302a;padding:10px 0}.coach-history-entry h4{margin:4px 0;font-size:14px}.coach-history-entry p{font-size:13px;color:#a7bab0}
 @media(max-width:1250px){#coaching-profile .coach-columns{display:block}#coaching-profile .coach-profile,#coaching-profile .coach-advice{width:100%!important;margin-right:0!important}#coaching-profile .coach-axis{width:100%!important}}
 @media(max-width:1000px){#coaching-profile .coach-spark{display:none}}
+#coaching-profile .coach-summary{padding:24px;margin-bottom:24px;border-left:3px solid #27e4a1}
+#coaching-profile .coach-summary h2{font-size:24px;line-height:32px;white-space:normal;word-wrap:break-word}
+#coaching-profile .coach-summary .button{margin-top:16px}#coaching-profile .coach-evidence{color:#8bf5ce;margin:8px 0}
+#coaching-profile .coach-rank{min-height:100px;padding-top:16px;padding-bottom:16px}#coaching-profile .coach-rank-issue{display:block}
+#coaching-profile .coach-rank-kind,#coaching-profile .coach-rank-detail{display:block;line-height:20px}#coaching-profile .coach-rank-gap{color:#f0b45a;font-size:16px}
+#coaching-profile .coach-more{padding:20px;margin-bottom:16px}#coaching-profile .coach-more h3{font-size:17px}#coaching-profile .coach-primary{padding:20px;margin-bottom:16px}
+#coaching-profile .coach-drill-label{font-size:13px;color:#8bf5ce;margin:12px 0}#coaching-profile .coach-feedback{flex-wrap:wrap}#coaching-profile .coach-feedback .button{min-height:34px;margin-bottom:8px}
+@media(max-width:1250px){#coaching-profile .coach-advice{margin-top:20px}#coaching-profile .coach-summary{padding:18px}}
+@media(max-width:1000px){#coaching-profile .coach-spark{display:flex;width:64px;min-width:64px}#coaching-profile .coach-rank-detail{font-size:12px}}
+/* Practice page surfaces stay quiet so the recommendation carries the emphasis. */
+#coaching-profile .coach-summary{background:#121a17;border:1px solid #1f2b27;border-left:3px solid #27e4a1;padding:20px 24px;margin-bottom:16px}
+#coaching-profile .coach-summary h2{font-size:20px;line-height:28px}
+#coaching-profile .coach-summary .button{margin-top:8px}
+#coaching-profile .coach-primary{background:#121a17;border:1px solid #1f2b27}
+#coaching-profile .coach-rank{min-height:84px;padding:12px 16px}
+#coaching-profile .coach-rank-body{flex:none;width:62%;padding-right:12px}
+#coaching-profile .coach-rank-name{width:100%;white-space:normal;line-height:20px}
+#coaching-profile .coach-rank-detail{white-space:normal;line-height:18px}
+#coaching-profile .coach-spark{display:none}
+#coaching-profile .coach-rank-gap{margin-left:auto}
+#coaching-profile .coach-signals{margin-top:16px;background:#121a17;border-color:#1f2b27}
+#coaching-profile .coach-axis-list{display:block}
+#coaching-profile .coach-axis{width:100%!important}
+#coaching-profile .coach-feedback{flex-wrap:nowrap}
+#coaching-profile .coach-readiness{margin:16px 0}
+#coaching .practice-weakness{background:#18231f;border-color:#1f2b27}

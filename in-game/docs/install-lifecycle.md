@@ -492,3 +492,33 @@ publishing items the game does not recognise, so the design is:
 - Where the verified UE4SS zip is mirrored for CI (`AIMMOD_UE4SS_ZIP_URL`), and setting
   `AIMMOD_INGAME_RELEASES=true` when release-please should publish.
 - The tested Steam build list (`3.9.11=25635011` is the build this was developed against).
+# Installing a local development build
+
+Use PowerShell 7 and `in-game/install/Install-DevBuild.ps1` with `-Package`
+pointing to the output of `Build-AimModPackage.ps1`, `-Ue4ssZip` pointing to
+the verified runtime archive, and `-GameDir` pointing to the game's Win64
+directory. Supply a development semantic version with `-Version` and a positive
+`-ReleaseCounter`. Pass `-SteamDll` and `-SteamConfig` when the build includes
+multiplayer. Close the game before installing.
+
+The script stages a fresh package in the system temporary directory, computes
+the file hashes, signs its manifest, and invokes the packaged service with
+`--install --package <directory> --game-dir <directory>`. It runs at below-normal
+priority and consumes existing build outputs without compiling them. Use
+`-PackageOnly` to stage and inspect without installing.
+
+The trusted signing key must already be available through
+`AIMMOD_RELEASE_SIGNING_KEY`; never put it in a command argument or repository.
+Current service builds pin a release key and reject unsigned manifests. This
+script preserves that verification. A locally assembled unsigned manifest
+alone cannot be installed by a signed-release service. The script retains its
+temporary package on failure. Do not copy changed binaries over a managed
+installation afterward: that invalidates the installed hashes again.
+For an isolated installation check, copy the game folder layout into a temporary
+folder and pass that copy as `-GameDir`. Set `-StateDirectory` to a separate
+writable temporary folder so the install receipt and repair launcher also stay
+isolated. Then run the packaged service with `--install-status --game-dir` and
+`--output` pointing to those same folders. A healthy installation exits with 0;
+modified or missing managed files produce a repair status. Test builds signed
+with a temporary key require that public key in their own isolated source copy;
+never replace the release trust keys in the checkout or an installed release.
