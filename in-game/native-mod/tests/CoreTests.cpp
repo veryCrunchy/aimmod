@@ -326,6 +326,50 @@ static void CommandChecks()
     CHECK(FormatCommandResult(7, "error", "challenge-active", "Finish\tit") == "AIMMOD_CORE_RESULT_1\t7\terror\tchallenge-active\tFinish%09it\n", "result line");
 }
 
+static void CommandIntakeChecks()
+{
+    auto text = [](int seq) { return "AIMMOD_CORE_COMMAND_1\nseq\t" + std::to_string(seq) + "\naction\treset-overrides\n"; };
+    auto runs = [](const std::optional<std::variant<GameCommand, CommandError>>& r, std::uint64_t seq) {
+        return r && std::holds_alternative<GameCommand>(*r) && std::get<GameCommand>(*r).sequence == seq;
+    };
+    {
+        CommandIntake intake; // a request left by an earlier session
+        CHECK(!intake.Offer(text(5), false) && intake.primed(), "left-over request never runs");
+        CHECK(!intake.Offer(text(5), true), "left-over request stays ignored");
+        CHECK(runs(intake.Offer(text(6), true), 6), "first request after a left-over one runs");
+        CHECK(!intake.Offer(text(6), true), "unchanged request runs once");
+        CHECK(!intake.Offer(text(5), true) && !intake.Offer(text(6), true), "older or repeated sequence never runs again");
+        CHECK(runs(intake.Offer(text(7), false), 7), "write time only matters for the first contents");
+    }
+    {
+        CommandIntake intake; // no file at start-up
+        intake.Missing();
+        CHECK(runs(intake.Offer(text(3), false), 3), "first request runs when no file was left");
+        intake.Missing();
+        CHECK(!intake.Offer(text(3), true), "request does not run again after the file vanished");
+    }
+    {
+        CommandIntake intake; // the start-up read failed; the file was written afterwards
+        CHECK(!intake.primed() && runs(intake.Offer(text(9), true), 9), "first request runs when it is the first contents read");
+        CHECK(!intake.Offer(text(9), true) && runs(intake.Offer(text(10), true), 10), "and runs once");
+    }
+    {
+        CommandIntake intake; // the start-up read failed; the file is older than this session
+        CHECK(!intake.Offer(text(9), false) && runs(intake.Offer(text(10), true), 10), "late first read still ignores a left-over request");
+    }
+    {
+        CommandIntake intake; // an empty left-over file must not leave the intake undecided
+        CHECK(!intake.Offer("", false) && intake.primed() && runs(intake.Offer(text(4), true), 4), "empty left-over file does not cost the first request");
+    }
+    {
+        CommandIntake intake;
+        intake.Missing();
+        auto bad = intake.Offer("AIMMOD_CORE_COMMAND_1\nseq\t8\naction\tnope\n", true);
+        CHECK(bad && std::holds_alternative<CommandError>(*bad) && std::get<CommandError>(*bad).sequence == 8, "malformed request is answered");
+        CHECK(!intake.Offer(text(8), true) && runs(intake.Offer(text(11), true), 11), "its sequence is spent");
+    }
+}
+
 static void ClipChecks()
 {
     using namespace replay2;
@@ -1144,6 +1188,7 @@ int main(int argc, char** argv)
     LifecycleChecks();
     MatchPlayChecks();
     EndRunChecks();
+    CommandIntakeChecks();
     cosmetics_checks::Run();
     overlay_checks::Run();
     worldtags_checks::Run();
