@@ -59,9 +59,19 @@ sealed class WorkspaceHost : IAsyncDisposable
         var acknowledgement = renderer.Read();
         return new { playback = playback.Status, rendererReady = acknowledgement.Ready, rendererReason = acknowledgement.Reason, start = startGate.Status };
     }
-    byte[] data = Encoding.UTF8.GetBytes("{}");
+    // The panel polls /data every few seconds. Each snapshot carries a content
+    // tag as its first member; a poll that already holds that tag gets 204
+    // instead of the whole history again.
+    internal sealed record Snapshot(byte[] Bytes, string Tag);
+    internal static Snapshot Encode(string json)
+    {
+        if (json.Length <= 2 || json[0] != '{') return new(Encoding.UTF8.GetBytes(json), "");
+        var tag = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(json)), 0, 8).ToLowerInvariant();
+        return new(Encoding.UTF8.GetBytes("{\"snapshot\":\"" + tag + "\"," + json[1..]), tag);
+    }
+    Snapshot data = Encode("{}");
     public string Url { get; private set; } = "";
-    public void Update(string json) => Volatile.Write(ref data, Encoding.UTF8.GetBytes(json));
+    public void Update(string json) => Volatile.Write(ref data, Encode(json));
     readonly Multiplayer.MultiplayerService multiplayer;
     public Multiplayer.MultiplayerService MultiplayerLobby => multiplayer;
     public WorkspaceHost(Hub hub, string output, string? historyPath = null, NativeSettings? settings = null, CsvHistory? csvHistory = null, DiscordSettings? discordSettings = null, Func<object>? discordStatus = null, string[]? args = null, Lifecycle? lifecycle = null, HubSharingSettings? hubSharing = null, Func<object>? hubSharingStatus = null, string? gameFolder = null)
@@ -346,7 +356,10 @@ sealed class WorkspaceHost : IAsyncDisposable
             var replay = replays.Read(id);
             return replay is null ? Results.NotFound() : Results.Json(replay);
         });
-        app.MapGet(prefix + "/data", () => Results.Bytes(Volatile.Read(ref data), "application/json; charset=utf-8"));
+        app.MapGet(prefix + "/data", (string? have) => {
+            var snapshot = Volatile.Read(ref data);
+            return snapshot.Tag.Length > 0 && have == snapshot.Tag ? Results.NoContent() : Results.Bytes(snapshot.Bytes, "application/json; charset=utf-8");
+        });
         app.MapPost(prefix + "/command", async (HttpContext context) =>
         {
             // Capability URL + non-simple header and no CORS prevent arbitrary web
