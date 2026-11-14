@@ -6,6 +6,7 @@
 #include "Bridge.hpp"
 #include "Ghosts.hpp"
 #include "Grenades.hpp"
+#include <aimmod/AsyncLines.hpp>
 
 #include <DynamicOutput/DynamicOutput.hpp>
 #include <Mod/CppUserModBase.hpp>
@@ -38,7 +39,14 @@ namespace
         return out;
     }
 
-    void Log(const std::string& line) { RC::Output::send<RC::LogLevel::Default>(STR("[AimModSteam] {}\n"), Widen(line)); }
+    // Written by a worker: a console window or a slow disk must never hold the game thread.
+    // Leaked on purpose: no static destructor joins a thread while the DLL unloads.
+    aimmod::AsyncLines& LogLines()
+    {
+        static auto* lines = new aimmod::AsyncLines([](int, const std::string& line) { RC::Output::send<RC::LogLevel::Default>(STR("[AimModSteam] {}\n"), Widen(line)); });
+        return *lines;
+    }
+    void Log(const std::string& line) { LogLines().Post(0, line); }
 
     // Mods\AimModSteam\dlls\main.dll -> Mods\AimModSteam
     std::filesystem::path ModDirectory()
@@ -97,6 +105,7 @@ public:
         ModVersion = STR("0.1.0");
         ModDescription = STR("Steam lobbies, invites and P2P for AimMod multiplayer");
         ModAuthors = STR("AimMod");
+        LogLines().Start();
     }
 
     ~AimModSteam() override
@@ -116,6 +125,7 @@ public:
         m_ready = nullptr;
         if (m_starter.joinable()) m_starter.join();
         if (m_bridge) m_bridge->Stop(); // leaves the lobby
+        LogLines().Stop();
     }
     auto on_unreal_init() -> void override
     {

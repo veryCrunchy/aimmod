@@ -525,9 +525,18 @@ namespace aimmod
         };
         m_broadcastFunctions = std::size(functions);
         m_broadcastFound = 0;
-        for (const Named& n : functions)
+        // Native functions never unload, so each is looked up once. A lookup that misses scans
+        // every object in the game (tens of ms): a missing one is retried twice at start-up
+        // and then left alone.
+        static UFunction* resolved[std::size(functions)]{};
+        static unsigned refreshes = 0;
+        const bool retry = refreshes < 3;
+        if (retry) ++refreshes;
+        for (std::size_t i = 0; i < std::size(functions); ++i)
         {
-            if (UFunction* f = game::FindFunction(n.path))
+            const Named& n = functions[i];
+            if (!resolved[i] && retry) resolved[i] = game::FindFunction(n.path);
+            if (UFunction* f = resolved[i])
             {
                 ++m_broadcastFound;
                 std::string name = game::Narrow(n.path);
