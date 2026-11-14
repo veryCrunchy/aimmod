@@ -1,5 +1,6 @@
 #pragma once
 #include <DynamicOutput/DynamicOutput.hpp>
+#include <aimmod/AsyncLines.hpp>
 
 #include <Windows.h>
 
@@ -18,12 +19,17 @@ namespace aimmod
 
     // One line in UE4SS.log, prefixed. Never log private payloads (names of
     // other players, paths under the user profile).
-    inline void Log(const std::string& line)
+    // Written by a worker once the mod has started it (dllmain): a console window or a slow
+    // disk must never hold the game thread. Leaked on purpose: no static destructor joins a
+    // thread while the DLL unloads.
+    inline AsyncLines& LogLines()
     {
-        RC::Output::send<RC::LogLevel::Default>(STR("[AimModCore] {}\n"), Widen(line));
+        static auto* lines = new AsyncLines([](int level, const std::string& line) {
+            if (level > 0) RC::Output::send<RC::LogLevel::Warning>(STR("[AimModCore] {}\n"), Widen(line));
+            else RC::Output::send<RC::LogLevel::Default>(STR("[AimModCore] {}\n"), Widen(line));
+        });
+        return *lines;
     }
-    inline void Warn(const std::string& line)
-    {
-        RC::Output::send<RC::LogLevel::Warning>(STR("[AimModCore] {}\n"), Widen(line));
-    }
+    inline void Log(const std::string& line) { LogLines().Post(0, line); }
+    inline void Warn(const std::string& line) { LogLines().Post(1, line); }
 } // namespace aimmod
