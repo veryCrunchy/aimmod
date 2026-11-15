@@ -1145,15 +1145,16 @@ namespace aimmod
                     if (run > 0 && up > 0) break;
                 }
         // CS: AimModCore scales the local player's speed by the weapon in hand; the bots copy the unscaled one.
-        try
+        // Read by the mailbox's worker: no file is opened on the game thread.
+        if (!m_options.stateDir.empty())
         {
-            const std::filesystem::path csmove = std::filesystem::path(m_options.stateDir) / L"cs-movement.tsv";
-            std::ifstream in(csmove, std::ios::binary);
-            std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-            const auto nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
-            if (const auto unscaled = bridge::csmove::RunSpeed(text, nowMs)) run = *unscaled, from = "the local player (unscaled by the weapon in hand)";
+            if (!m_moveFiles) m_moveFiles = std::make_unique<FileMailbox>(std::filesystem::path(m_options.stateDir) / L"cs-movement.tsv", std::filesystem::path{}, 10, 250);
+            if (const auto text = m_moveFiles->Read())
+            {
+                const auto nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+                if (const auto unscaled = bridge::csmove::RunSpeed(*text, nowMs)) run = *unscaled, from = "the local player (unscaled by the weapon in hand)";
+            }
         }
-        catch (const std::exception&) {}
         const bool readable = run > 0;
         // Neither readable: the avatars' own profile (Avatars.cs: MaxSpeed 1100, StepUpHeight 75).
         if (run <= 0) run = 1100;
@@ -1370,11 +1371,11 @@ namespace aimmod
     {
         m_viewWanted.reset();
         if (m_options.stateDir.empty()) return;
-        const std::filesystem::path file = std::filesystem::path(m_options.stateDir) / L"spectate-view.tsv";
-        WIN32_FILE_ATTRIBUTE_DATA info{};
-        if (!GetFileAttributesExW(file.c_str(), GetFileExInfoStandard, &info) || info.nFileSizeLow > 4096 || info.nFileSizeHigh != 0) return;
-        std::ifstream in(file, std::ios::binary);
-        std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        // Read by the mailbox's worker: no file is opened on the game thread.
+        if (!m_viewFiles) m_viewFiles = std::make_unique<FileMailbox>(std::filesystem::path(m_options.stateDir) / L"spectate-view.tsv", std::filesystem::path{}, 10, 100);
+        const auto read = m_viewFiles->Read();
+        if (!read || read->empty() || read->size() > 4096) return;
+        const std::string& text = *read;
         FILETIME ft{};
         GetSystemTimeAsFileTime(&ft);
         const std::uint64_t ticks = (static_cast<std::uint64_t>(ft.dwHighDateTime) << 32) | ft.dwLowDateTime;

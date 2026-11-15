@@ -14,13 +14,16 @@
 #include <aimmod/Supervisor.hpp>
 #include <aimmod/Water.hpp>
 
+#include <aimmod/AsyncLines.hpp>
 #include <aimmod/Perf.hpp>
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -1160,6 +1163,25 @@ int main(int argc, char** argv)
     perf::Budget reset;
     reset.Observe(3, 0, true); reset.Observe(1, 1, true);
     CHECK(!reset.Observe(3, 2, true), "cheap work clears consecutive strikes");
+
+    {
+        // Log lines: a blocked sink (a console window the player clicked in) never holds the caller.
+        std::mutex gate, seenLock;
+        std::vector<std::string> seen;
+        AsyncLines lines([&](int, const std::string& line) { std::lock_guard hold(gate); std::lock_guard lock(seenLock); seen.push_back(line); }, 4);
+        lines.Post(0, "direct");
+        CHECK(seen.size() == 1, "lines are written directly before the worker starts");
+        lines.Start();
+        std::unique_lock blocked(gate);
+        const auto begin = std::chrono::steady_clock::now();
+        for (int i = 0; i < 50; ++i) lines.Post(0, "queued " + std::to_string(i));
+        CHECK(std::chrono::steady_clock::now() - begin < std::chrono::seconds(1), "posting does not wait for a blocked sink");
+        blocked.unlock();
+        lines.Stop();
+        CHECK(seen.size() >= 5 && seen.size() < 51 && seen.back().find("dropped") != std::string::npos, "a full queue drops lines and says how many");
+        lines.Post(0, "after");
+        CHECK(seen.back() == "after", "lines are written directly after the worker stops");
+    }
 
     if (argc == 3 && std::strcmp(argv[1], "--write-samples") == 0)
     {

@@ -47,6 +47,7 @@ public:
         ModVersion = STR("0.1.0");
         ModDescription = STR("Read-only challenge observer for AimMod");
         ModAuthors = STR("AimMod");
+        aimmod::LogLines().Start();
     }
 
     ~AimModCore() override
@@ -54,6 +55,7 @@ public:
         if (m_observer) m_observer->Shutdown();
         m_service.Stop();
         m_output.Stop();
+        aimmod::LogLines().Stop();
     }
 
     auto on_unreal_init() -> void override

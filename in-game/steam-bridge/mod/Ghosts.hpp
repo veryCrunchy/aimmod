@@ -126,7 +126,7 @@ namespace aimmod
         game::Getter m_updateClientLocAndRot, m_overrideInvulnerable, m_startCrouching, m_startUncrouch, m_getTeam, m_loadCharacterProfile;
         game::Getter m_setMovementMode, m_updateVisibility, m_death, m_respawn, m_setTeam, m_setHealth;
         std::optional<bridge::avatarstate::File> m_avatarState;
-        std::unique_ptr<FileMailbox> m_orderFiles, m_stateFiles;
+        std::unique_ptr<FileMailbox> m_orderFiles, m_stateFiles, m_viewFiles, m_moveFiles;
         std::shared_ptr<const std::string> m_orderText, m_stateText;
         double m_nextStateRead = 0;
         double m_nextHelperPark = 0;
