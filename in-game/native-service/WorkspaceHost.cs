@@ -206,13 +206,15 @@ sealed class WorkspaceHost : IAsyncDisposable
         app.MapGet(prefix + "/run-details.css", () => Results.Stream(typeof(WorkspaceHost).Assembly.GetManifestResourceStream("AimMod.RunDetailsStyle")!, "text/css"));
         app.MapGet(prefix + "/run-details/{id}", (string id, int? shotPage) => {
             if (id.Length is 0 or > 512 || shotPage is < 0 or > 100000) return Results.BadRequest();
-            if (historyPath is null) return Results.NotFound();
             try {
-                var inspection = RunInspection.Read(historyPath, id, shotPage ?? 0);
+                // A run the in-game recorder saved is analysed from its replay; other runs from the desktop history.
+                var inspection = NativeInspection.Read(replays, id, shotPage ?? 0);
+                if (inspection is null && historyPath is null) return Results.NotFound();
+                inspection ??= RunInspection.Read(historyPath!, id, shotPage ?? 0);
                 // Completed runs and their replays share an id: native:<replayId> and replays/<replayId>.amreplay.
                 if (inspection.Run is not null) inspection = inspection with { ReplayId = ReplayFor(replays, inspection.Run.Id) };
                 return inspection.Run is null ? Results.NotFound() : Results.Content(System.Text.Json.JsonSerializer.Serialize(inspection), "application/json", Encoding.UTF8);
-            } catch (IOException) { return Results.StatusCode(503); }
+            } catch (Exception e) when (e is IOException or InvalidDataException) { return Results.StatusCode(503); }
         });
         app.MapGet(prefix + "/logo.png", () => Results.Stream(typeof(WorkspaceHost).Assembly.GetManifestResourceStream("AimMod.Logo")!, "image/png"));
         // Mode card icons, embedded from ui/art/modes/png; only the generated names resolve.
