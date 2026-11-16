@@ -1,0 +1,13 @@
+.insight-panel{margin-bottom:16px}
+.insight-bar{position:relative;height:28px;margin:16px 0;background:#18231f;border:1px solid #1f2b27}
+.insight-range{position:absolute;top:9px;height:8px;background:#27e4a1}
+.insight-marker{position:absolute;top:5px;height:18px;width:2px;background:#93a69c}
+.insight-marker.best{top:0;height:12px;background:#f5b94a}
+.insight-marker.latest{top:16px;height:12px;background:#eef5f1}
+.insight-labels{display:flex;flex-wrap:wrap}
+.insight-labels>div{margin-right:24px;margin-bottom:8px}
+.insight-tiles{display:flex;flex-wrap:wrap;margin:0 -8px}
+.insight-tile{width:256px;margin:8px;padding:16px}
+.insight-tile h3{font-size:14px;margin:0 0 8px}
+.insight-tile p{font-size:12px;line-height:18px}
+.insight-low{color:#93a69c;background:#121a17}

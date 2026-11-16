@@ -200,6 +200,8 @@ sealed class WorkspaceHost : IAsyncDisposable
             try { var detail = await hub.BenchmarkPage(id, token); return detail is null ? Results.NotFound() : Results.Json(detail); }
             catch (Exception ex) when (HubUnavailable(ex, token)) { return Results.StatusCode(503); }
         });
+        app.MapGet(prefix + "/insights.js", () => Results.Stream(typeof(WorkspaceHost).Assembly.GetManifestResourceStream("AimMod.InsightsScript")!, "application/javascript"));
+        app.MapGet(prefix + "/insights.css", () => Results.Stream(typeof(WorkspaceHost).Assembly.GetManifestResourceStream("AimMod.InsightsStyle")!, "text/css"));
         app.MapGet(prefix + "/statistics.js", () => Results.Stream(typeof(WorkspaceHost).Assembly.GetManifestResourceStream("AimMod.StatisticsScript")!, "application/javascript"));
         app.MapGet(prefix + "/statistics.css", () => Results.Stream(typeof(WorkspaceHost).Assembly.GetManifestResourceStream("AimMod.StatisticsStyle")!, "text/css"));
         app.MapGet(prefix + "/run-details.js", () => Results.Stream(typeof(WorkspaceHost).Assembly.GetManifestResourceStream("AimMod.RunDetailsScript")!, "application/javascript"));

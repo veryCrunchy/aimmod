@@ -17,6 +17,7 @@ static class WorkspaceData
             .Concat(views.Where(r => r.Page == "Coaching" && r.Heading == selected));
         return JsonSerializer.Serialize(new {
             revision = hub.Revision, selectedScenario = selected, scenarioFiltered = hub.SelectedScenario.Length > 0,
+            insights = ScoreInsights.Build(runs, selected),
             statistics = StatsAnalysis.Build(runs, selected,measurements:measurements),
             totalRuns = runs.Length, hours = runs.Sum(r => r.Duration) / 3600,
             scenarios = runs.GroupBy(r => r.Scenario, StringComparer.OrdinalIgnoreCase).OrderBy(g => g.Key).Select(g => new { name = g.Key, count = g.Count(), best = g.Max(r => r.Score) }),
