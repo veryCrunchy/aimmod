@@ -6,7 +6,10 @@ namespace AimMod.InGame;
 
 record Run(string Id, string Scenario, double Score, double? Accuracy, double Duration,
     double Kills, double Damage, string Timestamp, double? Smoothness, double? Jitter,
-    double? Efficiency, double? Correction, bool Replay);
+    double? Efficiency, double? Correction, bool Replay)
+{
+    public double? RecordedDamage { get; init; }
+}
 
 // Windows' SQLite library, opened strictly read-only. Never migrate the existing
 // desktop database or load its replay blobs merely to display a history page.
@@ -66,7 +69,7 @@ static class History
                 runs.Add(new(id, scenario, score,
                     double.IsFinite(accuracy) && accuracy is >= 0 and <= 100 ? accuracy : null,
                     duration, sqlite3_column_double(stmt, 5), sqlite3_column_double(stmt, 6),
-                    Text(stmt, 7), smooth, jitter, efficiency, correction, sqlite3_column_double(stmt, 9) != 0));
+                    Text(stmt, 7), smooth, jitter, efficiency, correction, sqlite3_column_double(stmt, 9) != 0) { RecordedDamage = IsNumber(stmt,6) ? sqlite3_column_double(stmt,6) : null });
             }
             if (result != 101) Check(result, db);
             return runs;

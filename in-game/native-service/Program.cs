@@ -13,7 +13,7 @@ if (args.Contains("--self-test-overlays")) { await OverlayScenesChecks.Run(); re
 if (args.Contains("--self-test-analysis")) { AimMod.InGame.Analysis.AnalysisChecks.Run(); return; }
 if (args.Contains("--self-test-multiplayer")) { AimMod.InGame.Multiplayer.MultiplayerChecks.Run(); return; }
 if (args.Contains("--discord-test")) { Environment.ExitCode = await DiscordDiagnostics.Run(args); return; }
-if (args.Contains("--self-test")) { RuntimeStateChecks.Run(); Checks.Run(); PracticePipelineChecks.Run(); PracticeDrillChecks.Run(); HistoryCompletenessChecks.Run(); CsvHistoryChecks.Run(); await HubChecks.Run(); await HubLiveChecks.Run(); HubPaginationChecks.Run(); await HubLeaderboardChecks.Run(); Coaching.SelfTest(); CoachingFeedbackChecks.Run(); StatsChecks.Run(); WarmupChecks.Run(); RunInspectionChecks.Run(); NativeInspectionChecks.Run(); NativeSettingsChecks.Run(); LiveOverlayChecks.Run(); LiveOverlayFeedChecks.Run(); OverlaySettingsChecks.Run(); await ObsOverlayChecks.Run(); await OverlayScenesChecks.Run(); BenchmarkChecks.Run(); ReplayLibraryChecks.Run(); await WorkspaceChecks.Run(); ReplayChecks.Run(); ReplayKeyboardChecks.Run(); await NativeReplayPlaybackChecks.Run(); await HardeningChecks.Run(); CoreFormatChecks.Run(); ScenarioLoaderChecks.Run(); AimMod.InGame.Analysis.AnalysisChecks.Run(); await DiscordPresenceChecks.Run(); AimMod.InGame.Multiplayer.MultiplayerChecks.Run(); await LifecycleChecks.Run(); return; }
+if (args.Contains("--self-test")) { RuntimeStateChecks.Run(); Checks.Run(); NativeMechanicsChecks.Run(); PracticePipelineChecks.Run(); PracticeDrillChecks.Run(); HistoryCompletenessChecks.Run(); CsvHistoryChecks.Run(); await HubChecks.Run(); await HubLiveChecks.Run(); HubPaginationChecks.Run(); await HubLeaderboardChecks.Run(); Coaching.SelfTest(); CoachingFeedbackChecks.Run(); StatsChecks.Run(); WarmupChecks.Run(); RunInspectionChecks.Run(); NativeInspectionChecks.Run(); NativeSettingsChecks.Run(); LiveOverlayChecks.Run(); LiveOverlayFeedChecks.Run(); OverlaySettingsChecks.Run(); await ObsOverlayChecks.Run(); await OverlayScenesChecks.Run(); BenchmarkChecks.Run(); ReplayLibraryChecks.Run(); await WorkspaceChecks.Run(); ReplayChecks.Run(); ReplayKeyboardChecks.Run(); await NativeReplayPlaybackChecks.Run(); await HardeningChecks.Run(); CoreFormatChecks.Run(); ScenarioLoaderChecks.Run(); AimMod.InGame.Analysis.AnalysisChecks.Run(); await DiscordPresenceChecks.Run(); AimMod.InGame.Multiplayer.MultiplayerChecks.Run(); await LifecycleChecks.Run(); return; }
 if (args.Length == 5 && args[0] == "--compare-spawns") { Environment.ExitCode = ReplayCompare.Spawns(args[1], args[2], args[3], args[4]); return; }
 if (args.Length == 4 && args[0] == "--compare-replays") { Environment.ExitCode = ReplayCompare.Run(args[1], args[2], args[3]); return; }
 // Developer diagnostic: --analyze-replays [--output <folder>] [--id <replay id>] [--flicks] prints the practice analysis of the local replays (console only).
@@ -108,6 +108,7 @@ await using var workspace = new WorkspaceHost(hub, output, database, settings, c
     hubSharing, () => new { linked = hub.Linked, live = sharesWithHub ? hubLive?.StatusInfo ?? new { state = "starting" } : new { state = "preview" }, uploads = sharesWithHub ? hubUploads.StatusInfo : new { state = "preview" } },
     gameFolder: statsWin64 is null ? null : Path.GetFullPath(Path.Combine(statsWin64, "..", "..")));
 await workspace.Start(cancellation.Token);
+using var mechanics = new MechanicsPipeline(output, new ReplayCatalog(output), () => { var state=workspace.ReadLive(); return state.Active || !state.Available; });
 using var inputLease = new System.Threading.Timer(_ =>
 {
     if (cancellation.IsCancellationRequested) return;
@@ -136,7 +137,7 @@ try
             await hub.Tick(cancellation.Token);
             var journal = Path.Combine(output, "completed.tsv");
             var files = string.Join('|', new[] { database, database + "-wal", journal, Path.Combine(output, "imported-history.json") }.Select(p => File.Exists(p) ? $"{new FileInfo(p).Length}:{File.GetLastWriteTimeUtc(p).Ticks}" : "missing"));
-            var next = hub.Revision + "|" + files + "|" + DateTime.Today.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+            var next = mechanics.Revision + "|" + hub.Revision + "|" + files + "|" + DateTime.Today.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
             if (next != fingerprint)
             {
                 if (files != localFingerprint)
@@ -149,7 +150,9 @@ try
                     catch (IOException) { measurements = new Dictionary<string,HistoricalMeasurement>(); Console.Error.WriteLine("Historical measurements temporarily unavailable."); }
                     localFingerprint = files;
                 }
-                var runs = HubHistory.Merge(localRuns.Concat(csvHistory.Runs), hub.Runs, hub.ExternalId);
+                var combinedMeasurements = measurements.ToDictionary(p=>p.Key,p=>p.Value, StringComparer.Ordinal);
+                var enrichedRuns = mechanics.Join(localRuns, combinedMeasurements);
+                var runs = HubHistory.Merge(enrichedRuns.Concat(csvHistory.Runs), hub.Runs, hub.ExternalId);
                 hub.MaxHistoryPage = Math.Max(0, (runs.Count(hub.MatchesHistory) - 1) / 50);
                 var selectedRun = runs.FirstOrDefault(r => hub.SelectedScenario.Length == 0 || r.Scenario.Equals(hub.SelectedScenario, StringComparison.OrdinalIgnoreCase));
                 var nextDetails = selectedRun?.Id + "|" + files;
@@ -159,7 +162,7 @@ try
                 discord.UpdateHistory(runs);
                 hubLive.UpdateHistory(runs);
                 hubRunIds = hub.Runs.Select(r => r.Id).ToHashSet(StringComparer.Ordinal);
-                workspace.Update(WorkspaceData.Build(runs, hub, details,measurements));
+                workspace.Update(WorkspaceData.Build(runs, hub, details,combinedMeasurements));
                 var content = Views.Encode(Views.Build(runs, hub.HistoryPage, hub.SelectedScenario).Concat(hub.Rows()));
                 AtomicFile.WriteText(Path.Combine(output, "views.tsv"), content);
                 var scenario = hub.SelectedScenario.Length > 0 ? hub.SelectedScenario : runs.FirstOrDefault()?.Scenario;

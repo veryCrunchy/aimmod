@@ -12,7 +12,7 @@ static class NativeRuns
         var score=Number(3); var duration=Number(5); var accuracy=Number(4);
         if (score is null || duration is null or <=0 || !DateTimeOffset.TryParse(c[8], CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out _)) return null;
         if (accuracy is <0 or >100) accuracy=null;
-        return new("native:"+c[1], c[2], score.Value, accuracy, duration.Value, Number(6)??0, Number(7)??0, c[8], null,null,null,null,false);
+        return new("native:"+c[1], c[2], score.Value, accuracy, duration.Value, Number(6)??0, Number(7)??0, c[8], null,null,null,null,false) { RecordedDamage=Number(7) };
     }
     public static IReadOnlyList<Run> Read(string path)
     {
