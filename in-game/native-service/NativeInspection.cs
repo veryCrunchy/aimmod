@@ -7,8 +7,8 @@ namespace AimMod.InGame;
 static class NativeInspection
 {
     internal const double Window = 5;
-    const int MaxShots = 5000, Kept = 6;
-    internal sealed record Built(InspectedRun Run, RunDetails Details, AnalysisWindow[] Windows, InspectedShot[] Shots);
+    const int Kept = 6;
+    internal sealed record Built(InspectedRun Run, RunDetails Details, AnalysisWindow[] Windows, InspectedShot[] Shots, ResponseSummary? Response, ResponseEpisode[] Episodes);
     static readonly object gate = new();
     static readonly List<(string Id, long Size, long Stamp, Built Value)> cache = new();
 
@@ -37,7 +37,7 @@ static class NativeInspection
         }
         var pages = Math.Max(1, (int)Math.Ceiling(built.Shots.Length / 100.0));
         shotPage = Math.Clamp(shotPage, 0, pages - 1);
-        return new(built.Run, built.Details, null, [], 0, built.Windows, built.Windows.Length, built.Shots.Skip(shotPage * 100).Take(100).ToArray(),
+        return new(built.Run, built.Details, built.Response, built.Episodes, (int)(built.Response?.Episodes ?? 0), built.Windows, built.Windows.Length, built.Shots.Skip(shotPage * 100).Take(100).ToArray(),
             built.Shots.Length, shotPage, pages, built.Shots.Length > 0 ? built.Shots[0].TimestampMs : null, []) { ReplayId = replayId };
     }
 
@@ -118,32 +118,12 @@ static class NativeInspection
             }
         }
 
-        // Every click: where the crosshair was against the nearest target, and whether it landed.
-        var list = new List<InspectedShot>();
-        try
-        {
-            var input = ReplayAnalysis.Build(replay);
-            var path = ViewPath.Resample(input.View, input.Duration);
-            var hitTimes = input.Hits.Select(h => h.T).Order().ToArray(); int next = 0;
-            foreach (var press in input.FirePressed.Order())
-            {
-                if (list.Count >= MaxShots || path.Count == 0) break;
-                while (next < hitTimes.Length && hitTimes[next] < press - .005) next++;
-                var hit = next < hitTimes.Length && hitTimes[next] <= press + .15;
-                if (hit) next++;
-                var i = Math.Clamp((int)Math.Round(press * ViewPath.Rate), 0, Math.Min(path.Count, input.Targets.Count) - 1);
-                var targets = new List<ShotTarget>();
-                if (input.Targets[i].Length > 0)
-                {
-                    var target = input.Targets[i][0];
-                    targets.Add(new("Target " + target.Id.ToString("0", System.Globalization.CultureInfo.InvariantCulture), null,
-                        Angles.Wrap(path.Yaw[i] - target.Yaw), path.Pitch[i] - target.Pitch, true));
-                }
-                list.Add(new(list.Count, hit ? "hit" : "miss", press * 1000, null, null, targets));
-            }
-        }
-        catch (Exception e) when (e is ArgumentException or InvalidOperationException or IndexOutOfRangeException or InvalidDataException) { list.Clear(); }
+        var response = NativeTargetResponses.Build(replay);
+        summary = summary with { AverageFireToHitMs = response.FireToHitMs, P90FireToHitMs = response.FireToHitP90Ms,
+            CorrectiveShotRatio = response.CorrectiveRatio };
+        windows.AddRange(response.Windows);
+        windows.Sort((a, b) => a.StartMs.CompareTo(b.StartMs));
 
-        return new(new(id, replay.Scenario, finalScore, accuracyTotal, duration, replay.RecordedAt), new(id, summary, timeline), windows.ToArray(), list.ToArray());
+        return new(new(id, replay.Scenario, finalScore, accuracyTotal, duration, replay.RecordedAt), new(id, summary, timeline), windows.ToArray(), response.Shots, response.Summary, response.Episodes);
     }
 }

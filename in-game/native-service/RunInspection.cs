@@ -3,15 +3,15 @@ using System.Runtime.InteropServices;
 namespace AimMod.InGame;
 
 record InspectedRun(string Id,string Scenario,double? Score,double? Accuracy,double? Duration,string Timestamp);
-record ResponseSummary(double? Episodes,double? PathChanges,double? TargetSwitches,double? CoveragePercent,
+partial record ResponseSummary(double? Episodes,double? PathChanges,double? TargetSwitches,double? CoveragePercent,
     double? ReactionMs,double? ReactionP90Ms,double? PreSlowdownReactionMs,double? RecoveryMs,double? RecoveryP90Ms,
     double? PathChangeReactionMs,double? TargetSwitchReactionMs,double? TriggerDegrees,double? PeakYawDegrees,double? StableRatio);
-record ResponseEpisode(string Kind,double StartMs,double EndMs,string Target,double? TriggerDegrees,double? PeakYawDegrees,
+partial record ResponseEpisode(string Kind,double StartMs,double EndMs,string Target,double? TriggerDegrees,double? PeakYawDegrees,
     double? ReactionMs,double? PreSlowdownReactionMs,double? RecoveryMs,bool Stable);
-record AnalysisWindow(string Kind,string Label,string Phase,double StartMs,double EndMs,double? Fired,double? Hits,double? Accuracy,
+partial record AnalysisWindow(string Kind,string Label,string Phase,double StartMs,double EndMs,double? Fired,double? Hits,double? Accuracy,
     string Target,double? TargetShare,double? Distance,double? YawErrorDegrees,double? PitchErrorDegrees,double? ScorePerMinute,double? KillsPerSecond);
 record ShotTarget(string Label,double? Distance,double? YawErrorDegrees,double? PitchErrorDegrees,bool Nearest);
-record InspectedShot(int Sequence,string Kind,double TimestampMs,double? Count,double? Total,List<ShotTarget> Targets);
+partial record InspectedShot(int Sequence,string Kind,double TimestampMs,double? Count,double? Total,List<ShotTarget> Targets);
 record InspectionResult(InspectedRun? Run,RunDetails Details,ResponseSummary? Response,ResponseEpisode[] Episodes,int EpisodeCount,
     AnalysisWindow[] Windows,int WindowCount,InspectedShot[] Shots,int ShotCount,int ShotPage,int ShotPages,double? FirstShotTimestampMs,string[] UnavailableTables)
 {
